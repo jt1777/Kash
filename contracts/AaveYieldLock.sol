@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.28;
 
+import './YToken.sol';
+import '@openzeppelin/contracts/token/ERC20/IERC20.sol';
+
+
 interface IPool {
     function supply(address asset, uint256 amount, address onBehalfOf, uint16 referralCode) external payable;
     function withdraw(address asset, uint256 amount, address to) external returns (uint256);
@@ -13,13 +17,6 @@ interface IChainlinkPriceFeed {
     function decimals() external view returns (uint8);
 }
 
-interface IERC20 {
-    function approve(address spender, uint256 amount) external returns (bool);
-    function transfer(address to, uint256 amount) external returns (bool);
-    function transferFrom(address from, address to, uint256 amount) external returns (bool);
-    function balanceOf(address account) external view returns (uint256);
-}
-
 interface IPriceFeed {
     function latestAnswer() external view returns (int256);
 }
@@ -28,6 +25,29 @@ interface IPriceFeed {
 interface IMockGMX {
     function depositCollateralAndOpenPosition(uint256 amount, bool isLong, address onBehalfOf) external;
     function depositCollateralAndOpenPositionWithSize(uint256 amount, uint256 positionSize, bool isLong, address onBehalfOf) external;
+}
+
+// Event for YToken issuance
+event YTokenIssued(address indexed user, uint256 amount, uint256 batchCycle);
+
+// Event for YToken redemption and withdrawal
+event YTokenRedeemed(address indexed user, uint256 yTokenAmount, uint256 ethWithdrawn, uint256 batchCycle);
+
+// Extend IPool to get user account data for debt balance
+interface IPoolExtended {
+    function getUserAccountData(address user) external view returns (
+        uint256 totalCollateralETH,
+        uint256 totalDebtETH,
+        uint256 availableBorrowsETH,
+        uint256 currentLiquidationThreshold,
+        uint256 ltv,
+        uint256 healthFactor
+    );
+}
+
+// Interface for GMX funding (adjust based on real GMX contract)
+interface IGMX {
+    function getPositionFunding(address account, address indexToken, bool isLong) external view returns (int256 fundingAmount);
 }
 
 /**
@@ -44,6 +64,9 @@ contract AaveYieldLock {
     address public priceFeedAddress;
     address public usdtAddress;
     address public gmxAddress;
+    
+    // Moved YToken declaration inside the contract
+    YToken public yToken;
     
     // Mapping to track balances of individual depositors before transfer to Aave
     mapping(address => uint) public balancesBeforeTransfer;
@@ -64,7 +87,7 @@ contract AaveYieldLock {
     uint public depositsPerDay = 1; // Number of bulk deposits to Aave per day (default: 1)
     uint256 public usdtBorrowPercentage = 40; // Percentage of ETH value to borrow as USDT (default: 40%)
 
-    // Mapping to track individual user deposits to Aave (if not already present)
+    // Mapping to track individual user deposits to Aave
     mapping(address => uint256) public userDepositedToAave; // Tracks per user ETH deposited to Aave
     uint256 public totalEthDepositedToAave; // Total ETH deposited to Aave across all users
 
@@ -77,11 +100,35 @@ contract AaveYieldLock {
     uint256 public totalUsdValueShorted; // Total USD value of ETH shorted on GMX, in 18 decimals
     mapping(address => uint256) public userUsdValueShorted; // USD value of ETH shorted per user, in 18 decimals
 
+    // Mapping for pending withdrawals/redemptions
+    mapping(address => uint256) public pendingRedemptions;
+    uint256 public totalPendingRedemptionBalance;
+
+    // Array to track users with pending redemptions (for iteration)
+    address[] public usersWithPendingRedemptions;
+    // Mapping to track if a user is already in the array (to avoid duplicates)
+    mapping(address => bool) public isUserInRedemptionList;
+
+    // Track daily metrics for aToken balance, USDT debt, and GMX funding
+    mapping(uint256 => uint256) public dailyATokenBalance; // ETH aToken balance at end of day
+    mapping(uint256 => uint256) public dailyUsdtDebtBalance; // USDT debt balance at end of day
+    mapping(uint256 => int256) public dailyGmxFunding; // GMX funding earned/owed at end of day
+    mapping(uint256 => int256) public dailyNetFeesEarned; // Net fees (yield - interest + funding) per day
+    
+    // Mapping to track cumulative net fees earned per user
+    mapping(address => int256) public userCumulativeFeesEarned;
+
     event Deposit(address indexed user, uint256 amount, uint256 timestamp);
     event BulkDepositToAave(uint256 amount, uint256 timestamp);
     event USDTBorrowed(uint256 usdtAmount, uint256 timestamp);
     event ConfigurationUpdated(uint256 depositsPerDay, uint256 cutoffHourHKT, uint256 cutoffMinuteHKT, uint256 borrowPercentage);
     event USDTTransferredToGMX(uint256 amount);
+    event RedemptionRequested(address indexed user, uint256 amount, uint256 timestamp);
+    event DailyMetricsRecorded(uint256 timestamp, uint256 aTokenBalance, uint256 usdtDebt, int256 gmxFunding, int256 netFees);
+    event BulkRedemptionFromAave(uint256 amount, uint256 timestamp);
+    event BulkRedemptionProcessed(uint256 totalAmount);
+    event NoActionNeeded(uint256 timestamp);
+    event EthDistributedToUser(address indexed user, uint256 amount);
 
     constructor(
         address _aavePoolAddress,
@@ -95,6 +142,8 @@ contract AaveYieldLock {
         priceFeedAddress = _priceFeedAddress;
         gmxAddress = _gmxAddress;
         balancesBeforeTransfer[msg.sender] = msg.value;
+        yToken = new YToken();
+        yToken.transferOwnership(msg.sender); // Ensure owner can control minting/burning if needed
         
         emit Deposit(msg.sender, msg.value, block.timestamp);
     }
@@ -241,4 +290,204 @@ contract AaveYieldLock {
 
     // Function to allow receiving ETH directly for testing
     receive() external payable {}
+
+    function getUserDepositPercentage(address user, uint256 batchCycle) public view returns (uint256) {
+        uint256 userContribution = userBatchContributions[user][batchCycle];
+        uint256 totalForBatch = totalBatchContributions[batchCycle];
+        if (totalForBatch == 0) {
+            return 0;
+        }
+        return (userContribution * 100) / totalForBatch;
+    }
+
+    // Function to issue YToken during batch deposit (uncommented and adjusted)
+    function issueYToken(address user, uint256 batchCycle, uint256 userEthDeposit, uint256 totalEthDeposit) internal {
+        if (totalEthDeposit == 0) return;
+        // Calculate YToken amount based on user's deposit USD value
+        uint256 ethPrice = getLatestEthPrice();
+        uint256 userUsdValue = (userEthDeposit * ethPrice) / 1e18;
+        uint256 yTokenAmount = userUsdValue; // YToken pegged at $1, so amount = USD value
+        yToken.mint(user, yTokenAmount);
+        emit YTokenIssued(user, yTokenAmount, batchCycle);
+    }
+
+    // Function for users to redeem YToken and withdraw their share - commented out
+    function redeemYToken(uint256 yTokenAmount, uint256 batchCycle) external {
+        require(yToken.balanceOf(msg.sender) >= yTokenAmount, 'Insufficient YToken balance');
+        uint256 totalYTokenSupply = yToken.totalSupply();
+        require(totalYTokenSupply > 0, 'No YToken in circulation');
+        
+        // Calculate user's share of total assets based on YToken proportion
+        uint256 totalEthInAave = totalAmountInAave; // Simplified, adjust for actual Aave balance if needed
+        uint256 userEthShare = (yTokenAmount * totalEthInAave) / totalYTokenSupply;
+        
+        // Burn the redeemed YToken
+        yToken.burn(msg.sender, yTokenAmount);
+        
+        // TODO: Handle repayment of borrowed USDT and closing short position if applicable
+        // For now, assume direct ETH withdrawal from Aave (simplified)
+        require(address(this).balance >= userEthShare, 'Insufficient ETH balance in contract');
+        payable(msg.sender).transfer(userEthShare);
+        
+        emit YTokenRedeemed(msg.sender, yTokenAmount, userEthShare, batchCycle);
+    }
+
+    // Function for users to request redemption of their ETH share
+    function requestRedemption(uint256 amount) external {
+        require(amount > 0, "Redemption amount must be greater than 0");
+        require(balancesBeforeTransfer[msg.sender] >= amount, "Insufficient balance to redeem");
+        balancesBeforeTransfer[msg.sender] -= amount;
+        pendingRedemptions[msg.sender] += amount;
+        totalPendingRedemptionBalance += amount;
+        
+        // Add user to the list if not already present
+        if (!isUserInRedemptionList[msg.sender]) {
+            usersWithPendingRedemptions.push(msg.sender);
+            isUserInRedemptionList[msg.sender] = true;
+        }
+        
+        emit RedemptionRequested(msg.sender, amount, block.timestamp);
+    }
+
+    // Function to record daily metrics slightly before midnight (callable by anyone or bot)
+    function recordDailyMetrics(uint256 dayOrTimestamp) external {
+        uint256 prevDayOrTimestamp = dayOrTimestamp - 1 days; // Simplified, adjust if using different keying
+        
+        // Record aToken balance for ETH deposits and calculate yield
+        uint256 currentATokenBalance = IPool(aavePoolAddress).getATokenBalance(address(0), address(this));
+        dailyATokenBalance[dayOrTimestamp] = currentATokenBalance;
+        uint256 yieldEarned = currentATokenBalance > dailyATokenBalance[prevDayOrTimestamp] 
+            ? currentATokenBalance - dailyATokenBalance[prevDayOrTimestamp] 
+            : 0;
+        
+        // Record USDT debt balance and calculate interest cost
+        ( , uint256 totalDebtETH, , , , ) = IPoolExtended(aavePoolAddress).getUserAccountData(address(this));
+        dailyUsdtDebtBalance[dayOrTimestamp] = totalDebtETH; // Adjust for USDT decimals if needed
+        uint256 interestCost = totalDebtETH > dailyUsdtDebtBalance[prevDayOrTimestamp] 
+            ? totalDebtETH - dailyUsdtDebtBalance[prevDayOrTimestamp] 
+            : 0;
+        
+        // Record GMX funding for ETH short
+        int256 currentFunding = IGMX(gmxAddress).getPositionFunding(address(this), address(0), false);
+        dailyGmxFunding[dayOrTimestamp] = currentFunding;
+        int256 fundingChange = currentFunding - dailyGmxFunding[prevDayOrTimestamp];
+        
+        // Calculate net fees earned (yield - interest + funding)
+        // Note: Adjust for decimals and units as needed (e.g., convert all to USD or ETH equivalent)
+        int256 netFees = int256(yieldEarned) - int256(interestCost) + fundingChange;
+        dailyNetFeesEarned[dayOrTimestamp] = netFees;
+        
+        emit DailyMetricsRecorded(dayOrTimestamp, currentATokenBalance, totalDebtETH, currentFunding, netFees);
+    }
+
+    // Function to process daily actions at midnight: determine net deposits or redemptions
+    function processDailyActions() external {
+        require(isWithinDepositWindow(), "Not within deposit window");
+        
+        // Calculate net flow: positive for deposits, negative for redemptions
+        int256 netFlow = int256(pendingDepositBalance) - int256(totalPendingRedemptionBalance);
+        
+        if (netFlow > 0) {
+            // Net deposits: Run existing deposit logic
+            uint256 totalPendingDeposit = uint256(netFlow);
+            require(totalPendingDeposit > 0, "No pending deposits to transfer");
+            IPool(aavePoolAddress).supply{value: totalPendingDeposit}(address(0), totalPendingDeposit, address(this), 0);
+            pendingDepositBalance = 0;
+            totalEthDepositedToAave += totalPendingDeposit;
+            emit BulkDepositToAave(totalPendingDeposit, block.timestamp);
+            
+            // Borrow USDT based on deposited ETH value
+            uint256 ethPrice = getLatestEthPrice();
+            uint256 ethValueInUsd = (totalPendingDeposit * ethPrice) / 1e18;
+            uint256 usdtToBorrow = (ethValueInUsd * usdtBorrowPercentage * 1e6) / (100 * 1e18); // USDT has 6 decimals
+            if (usdtToBorrow > 0) {
+                IPool(aavePoolAddress).borrow(usdtAddress, usdtToBorrow, 2, 0, address(this));
+                totalBorrowedUSDT += usdtToBorrow;
+                emit USDTBorrowed(usdtToBorrow, block.timestamp);
+                
+                IERC20(usdtAddress).approve(gmxAddress, usdtToBorrow);
+                IMockGMX(gmxAddress).depositCollateralAndOpenPositionWithSize(usdtToBorrow, totalPendingDeposit, false, address(this));
+                totalUsdValueShorted += ethValueInUsd;
+                emit USDTTransferredToGMX(usdtToBorrow);
+            }
+        } else if (netFlow < 0) {
+            // Net redemptions: Withdraw ETH from Aave, repay USDT debt, close GMX short
+            uint256 totalToRedeem = uint256(-netFlow);
+            uint256 withdrawnAmount = IPool(aavePoolAddress).withdraw(address(0), totalToRedeem, address(this));
+            totalEthDepositedToAave -= withdrawnAmount;
+            emit BulkRedemptionFromAave(withdrawnAmount, block.timestamp);
+            
+            // Calculate proportional USDT debt to repay based on redeemed ETH
+            uint256 ethPrice = getLatestEthPrice();
+            uint256 redeemedValueInUsd = (withdrawnAmount * ethPrice) / 1e18;
+            uint256 usdtToRepay = (redeemedValueInUsd * usdtBorrowPercentage * 1e6) / (100 * 1e18);
+            if (usdtToRepay > 0 && totalBorrowedUSDT >= usdtToRepay) {
+                // Repay USDT debt (placeholder, extend IPool interface for repay)
+                // IPool(aavePoolAddress).repay(usdtAddress, usdtToRepay, 2, address(this));
+                totalBorrowedUSDT -= usdtToRepay;
+                // Close proportional short position on GMX (placeholder, extend IMockGMX)
+                // IMockGMX(gmxAddress).closePositionPartially(withdrawnAmount, false, address(this));
+                totalUsdValueShorted -= redeemedValueInUsd;
+            }
+            
+            // Distribute withdrawn ETH to users based on pending redemptions
+            distributeRedemptionEth(withdrawnAmount);
+            totalPendingRedemptionBalance = 0;
+            emit BulkRedemptionProcessed(withdrawnAmount);
+        } else {
+            // Net flow is zero: No action needed
+            emit NoActionNeeded(block.timestamp);
+        }
+    }
+
+    // Internal function to distribute ETH to users with pending redemptions
+    function distributeRedemptionEth(uint256 totalWithdrawnAmount) internal {
+        if (totalWithdrawnAmount == 0 || usersWithPendingRedemptions.length == 0) return;
+        
+        uint256 totalPending = totalPendingRedemptionBalance;
+        if (totalPending == 0) {
+            delete usersWithPendingRedemptions;
+            return;
+        }
+        
+        uint256 remainingEth = totalWithdrawnAmount;
+        for (uint256 i = 0; i < usersWithPendingRedemptions.length; i++) {
+            address user = usersWithPendingRedemptions[i];
+            uint256 userRedemptionAmount = pendingRedemptions[user];
+            if (userRedemptionAmount > 0) {
+                uint256 userEthShare = (userRedemptionAmount * totalWithdrawnAmount) / totalPending;
+                if (userEthShare > remainingEth) userEthShare = remainingEth;
+                payable(user).transfer(userEthShare);
+                remainingEth -= userEthShare;
+                pendingRedemptions[user] = 0;
+                isUserInRedemptionList[user] = false;
+                emit EthDistributedToUser(user, userEthShare);
+            }
+        }
+        delete usersWithPendingRedemptions;
+    }
+
+    // Mapping to track cumulative net fees earned per user
+    mapping(address => int256) public userCumulativeFeesEarned;
+
+    // Function to distribute daily net fees to YToken holders (call after recording metrics)
+    function distributeDailyFees(uint256 dayOrTimestamp) external {
+        int256 netFees = dailyNetFeesEarned[dayOrTimestamp];
+        if (netFees == 0) return;
+        
+        uint256 totalYTokenSupply = yToken.totalSupply();
+        if (totalYTokenSupply == 0) return;
+        
+        // Iterate over users with YToken balances (simplified, real implementation needs user list or events)
+        // For each user, calculate their share of net fees based on YToken holdings
+        // Pseudo-code: for each user with YToken balance
+        // uint256 userYTokenBalance = yToken.balanceOf(user);
+        // int256 userFeeShare = (userYTokenBalance * netFees) / totalYTokenSupply;
+        // userCumulativeFeesEarned[user] += userFeeShare;
+        
+        // For now, assume manual distribution or event emission for off-chain calculation
+        emit DailyFeesDistributed(dayOrTimestamp, netFees, totalYTokenSupply);
+    }
+
+    event DailyFeesDistributed(uint256 timestamp, int256 netFees, uint256 totalYTokenSupply);
 } 

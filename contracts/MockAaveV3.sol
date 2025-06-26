@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.28;
 
-interface IERC20 {
-    function transfer(address to, uint256 value) external returns (bool);
-    function transferFrom(address from, address to, uint256 value) external returns (bool);
-    function approve(address spender, uint256 value) external returns (bool);
-    function balanceOf(address account) external view returns (uint256);
+import '@openzeppelin/contracts/token/ERC20/IERC20.sol';
+
+// Custom interface extending IERC20 to include mint for mock purposes
+interface IERC20Mintable is IERC20 {
     function mint(address to, uint256 value) external;
 }
 
@@ -33,7 +32,7 @@ contract MockAaveV3 {
     }
 
     // Simulate supplying assets to Aave (for ETH, asset is address(0))
-    function supply(address asset, uint256 amount, address onBehalfOf, uint16 referralCode) external payable {
+    function supply(address asset, uint256 amount, address onBehalfOf) external payable {
         require(asset == address(0), "Mock only supports ETH supply");
         require(msg.value == amount, "Incorrect ETH amount sent");
         suppliedAmounts[onBehalfOf] += amount;
@@ -51,15 +50,15 @@ contract MockAaveV3 {
     }
 
     // Simulate borrowing USDT against supplied ETH collateral
-    function borrow(address asset, uint256 amount, uint256 interestRateMode, uint16 referralCode, address onBehalfOf) external {
-        require(asset == usdtAddress, "Mock only supports USDT borrow");
+    function borrow(address asset, uint256 amount, address onBehalfOf) external {
+        require(asset == usdtAddress, 'Mock only supports USDT borrow');
         uint256 collateralValueInUsd = (suppliedAmounts[onBehalfOf] * ethPriceInUsd) / 10**18; // ETH amount * price per ETH
         uint256 maxBorrowInUsd = (collateralValueInUsd * LTV_RATIO) / 100; // Max borrow based on LTV
         uint256 requestedBorrowInUsd = amount / 10**(6); // Assuming USDT has 6 decimals, convert to USD value (1 USDT = $1)
-        require(requestedBorrowInUsd <= maxBorrowInUsd, "Borrow amount exceeds LTV limit");
+        require(requestedBorrowInUsd <= maxBorrowInUsd, 'Borrow amount exceeds LTV limit');
         borrowedAmounts[onBehalfOf] += amount;
         // Mint USDT to the borrower (simulating Aave providing the borrowed asset)
-        IERC20(usdtAddress).mint(onBehalfOf, amount);
+        IERC20Mintable(usdtAddress).mint(onBehalfOf, amount);
     }
 
     // Get the aToken balance for a user (for ETH, returns supplied amount as mock aToken balance)
