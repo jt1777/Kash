@@ -4,7 +4,7 @@ pragma solidity ^0.8.28;
 import './YToken.sol';
 import '@openzeppelin/contracts/token/ERC20/IERC20.sol';
 
-
+// interface with mock Aave contract
 interface IPool {
     function supply(address asset, uint256 amount, address onBehalfOf, uint16 referralCode) external payable;
     function withdraw(address asset, uint256 amount, address to) external returns (uint256);
@@ -12,13 +12,10 @@ interface IPool {
     function borrow(address asset, uint256 amount, uint256 interestRateMode, uint16 referralCode, address onBehalfOf) external;
 }
 
+// for eth price feed
 interface IChainlinkPriceFeed {
     function latestRoundData() external view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound);
     function decimals() external view returns (uint8);
-}
-
-interface IPriceFeed {
-    function latestAnswer() external view returns (int256);
 }
 
 // Interface for MockGMX to interact with the mock GMX DEX contract
@@ -27,14 +24,11 @@ interface IMockGMX {
     function depositCollateralAndOpenPositionWithSize(uint256 amount, uint256 positionSize, bool isLong, address onBehalfOf) external;
 }
 
-// Event for YToken issuance
-event YTokenIssued(address indexed user, uint256 amount, uint256 batchCycle);
-
 // Event for YToken redemption and withdrawal
 event YTokenRedeemed(address indexed user, uint256 yTokenAmount, uint256 ethWithdrawn, uint256 batchCycle);
 
 // Event for user sending ETH to mint YTokens
-event YTokenMinted(address indexed user, uint256 ethAmount, uint256 yTokenAmount, uint256 timestamp);
+event YTokenMinted(address indexed user, uint256 ethAmount, uint256 yTokenAmount, uint256 timestamp, uint256 batchCycle);
 
 // Event for smart contract depositing ETH to Aave
 event BulkDepositToAave(uint256 amount, uint256 timestamp);
@@ -57,10 +51,7 @@ event DailyMetricsRecorded(uint256 timestamp, uint256 aTokenBalance, uint256 usd
 // Event for bulk redemption from Aave
 event BulkRedemptionFromAave(uint256 amount, uint256 timestamp);
 
-// Event for bulk redemption processed
-event BulkRedemptionProcessed(uint256 totalAmount);
-
-// Event for no action needed
+// Event for no action needed, to be used for logging purposes
 event NoActionNeeded(uint256 timestamp);
 
 // Event for ETH distributed to user
@@ -71,6 +62,12 @@ event DailyFeesDistributed(uint256 timestamp, int256 netFees, uint256 totalBatch
 
 // Event for fees claimed
 event FeesClaimed(address indexed user, uint256 dayOrTimestamp, int256 feeShare);
+
+// Event for redemption request queued
+event RedemptionRequestQueued(address indexed user, uint256 yTokenAmount, uint256 batchCycle, uint256 timestamp);
+
+// Event for bulk redemption processed from Aave, GMX, and USDT repayment
+event BulkRedemptionProcessed(uint256 totalEthWithdrawn, uint256 usdtRepaid, uint256 ethShortCovered, uint256 timestamp);
 
 // Extend IPool to get user account data for debt balance
 interface IPoolExtended {
@@ -154,6 +151,12 @@ contract AaveYieldLock {
     // Mapping to track if a user has claimed fees for a specific day
     mapping(address => mapping(uint256 => bool)) public hasClaimed;
 
+    // Add state variables for tracking pending redemptions
+    uint256 public pendingRedemptionBalance; // Total ETH value requested for redemption
+    mapping(address => uint256) public pendingRedemptions; // Tracks per-user pending redemption in YToken amount
+    mapping(address => uint256) public redemptionBatchCycle; // Tracks the batch cycle for user's redemption request
+    mapping(uint256 => uint256) public totalRedemptionRequestsPerBatch; // Tracks total YToken amount per batch cycle for redemption
+
     constructor(
         address _aavePoolAddress,
         address _usdtAddress,
@@ -169,7 +172,7 @@ contract AaveYieldLock {
         yToken = new YToken();
         yToken.transferOwnership(msg.sender); // Ensure owner can control minting/burning if needed
         
-        emit YTokenMinted(msg.sender, msg.value, 0, block.timestamp);
+        emit YTokenMinted(msg.sender, msg.value, 0, block.timestamp, 0);
     }
 
     // Modifier to restrict functions to contract owner
@@ -206,8 +209,7 @@ contract AaveYieldLock {
         uint256 usdValue = (msg.value * ethPrice) / 1e18; // Assuming ETH price is in 18 decimals
         yToken.mint(msg.sender, usdValue); // YToken pegged at $1, so 1 YToken = 1 USD
         
-        emit YTokenMinted(msg.sender, msg.value, usdValue, block.timestamp);
-        emit YTokenIssued(msg.sender, usdValue, batchTime);
+        emit YTokenMinted(msg.sender, msg.value, usdValue, block.timestamp, batchTime);
     }
 
     // Function to check if current time is within the deposit window for bulk transfer to Aave
@@ -303,9 +305,12 @@ contract AaveYieldLock {
 
     // Function to get the latest ETH price in USD from Chainlink oracle
     function getLatestEthPrice() public view returns (uint256) {
-        int256 price = IPriceFeed(priceFeedAddress).latestAnswer();
+        (, int256 price, , , ) = IChainlinkPriceFeed(priceFeedAddress).latestRoundData();
         require(price > 0, "Invalid price from oracle");
-        return uint256(price); // Price is typically in 8 or 18 decimals, depending on the feed
+        uint8 priceDecimals = IChainlinkPriceFeed(priceFeedAddress).decimals();
+        // Convert price to 18 decimals for consistency with ETH calculations
+        uint256 adjustedPrice = uint256(price) * (10 ** (18 - priceDecimals));
+        return adjustedPrice; // Price adjusted to 18 decimals
     }
 
     // Function to allow receiving ETH directly for testing
@@ -320,69 +325,110 @@ contract AaveYieldLock {
         return (userContribution * 100) / totalForBatch;
     }
 
-    // Function for users to redeem YToken and withdraw their share plus net fees earned (only redemption method)
-    function redeemYToken(uint256 yTokenAmount, uint256 batchCycle) external {
+    // Function for users to request redemption of YTokens (queues the request instead of immediate processing)
+    function requestRedemption(uint256 yTokenAmount, uint256 batchCycle) external {
         require(yToken.balanceOf(msg.sender) >= yTokenAmount, "Insufficient YToken balance");
         uint256 totalYTokenSupply = yToken.totalSupply();
         require(totalYTokenSupply > 0, "No YToken in circulation");
         
-        // Get the current ETH price in USD (assumed 18 decimals)
+        // Burn YTokens immediately to prevent double-spending
+        yToken.burn(msg.sender, yTokenAmount);
+        
+        // Queue the redemption request
+        pendingRedemptions[msg.sender] += yTokenAmount;
+        redemptionBatchCycle[msg.sender] = batchCycle;
+        totalRedemptionRequestsPerBatch[batchCycle] += yTokenAmount;
+        
+        // Estimate ETH value for pending redemption balance (for reference, will be recalculated during processing)
         uint256 ethPrice = getLatestEthPrice();
-        require(ethPrice > 0, "Invalid ETH price from oracle");
+        uint256 ethValue = (yTokenAmount * 1e18) / ethPrice; // Rough estimate, YToken pegged at $1
+        pendingRedemptionBalance += ethValue;
         
-        // Get user's net fees earned (assumed in USD value, same unit as YToken peg)
-        int256 netFeesEarned = userCumulativeFeesEarned[msg.sender];
+        emit RedemptionRequestQueued(msg.sender, yTokenAmount, batchCycle, block.timestamp);
+    }
+
+    // Helper function to get total YToken supply (for proportion calculations)
+    function getTotalYTokenSupply() public view returns (uint256) {
+        return yToken.totalSupply();
+    }
+
+    // Function to process bulk redemptions from Aave, cover ETH short on GMX, and repay USDT to Aave
+    function bulkRedemptionFromAave(uint256 batchCycle) external {
+        require(isWithinDepositWindow(), "Not within processing window"); // Reuse deposit window or define a separate one
+        uint256 totalYTokenToRedeem = totalRedemptionRequestsPerBatch[batchCycle];
+        require(totalYTokenToRedeem > 0, "No pending redemptions for this batch cycle");
         
-        // Calculate total USD value to redeem: YTokens (pegged at $1) + net fees earned
-        // Adjust for potential negative fees
-        int256 totalUsdValue;
-        if (netFeesEarned >= 0) {
-            totalUsdValue = int256(yTokenAmount) + netFeesEarned;
-        } else {
-            totalUsdValue = int256(yTokenAmount) - (-netFeesEarned);
+        // Calculate total USD value to redeem (YToken pegged at $1, plus fees if applicable)
+        // For simplicity, initially just use YToken amount as USD value
+        uint256 totalUsdValue = totalYTokenToRedeem; // Adjust if fees are calculated per batch
+        
+        // Get current ETH price to convert USD to ETH
+        uint256 ethPrice = getLatestEthPrice();
+        uint256 totalEthToWithdraw = (totalUsdValue * 1e18) / ethPrice;
+        
+        // Calculate corresponding USD value for short position and USDT debt to adjust
+        uint256 totalUsdShorted = totalUsdValueShorted; // Total USD value of ETH shorted
+        uint256 proportion = (totalUsdValue * 1e18) / (getTotalYTokenSupply() > 0 ? getTotalYTokenSupply() : 1); // Proportion of total supply being redeemed
+        uint256 usdShortedToCover = (totalUsdShorted * proportion) / 1e18;
+        uint256 ethShortToCover = (usdShortedToCover * 1e18) / ethPrice; // ETH amount to cover short
+        uint256 usdtToRepay = (usdShortedToCover * usdtBorrowPercentage * 1e6) / (100 * 1e18); // USDT to repay based on borrow percentage
+        
+        // Step 1: Cover ETH short position on GMX (placeholder logic, adjust based on actual GMX interface)
+        if (ethShortToCover > 0) {
+            // IMockGMX(gmxAddress).closePositionPartially(ethShortToCover, false, address(this));
+            totalUsdValueShorted -= usdShortedToCover;
         }
-        require(totalUsdValue > 0, "Total value to redeem must be greater than 0");
         
-        // Convert USD value to ETH amount (adjust for ETH price decimals, typically 18)
-        uint256 ethToWithdraw = uint256(totalUsdValue) * 1e18 / ethPrice;
+        // Step 2: Repay USDT debt to Aave (placeholder logic, adjust based on actual Aave interface)
+        if (usdtToRepay > 0 && totalBorrowedUSDT >= usdtToRepay) {
+            // IERC20(usdtAddress).approve(aavePoolAddress, usdtToRepay);
+            // IPool(aavePoolAddress).repay(usdtAddress, usdtToRepay, 2, address(this));
+            totalBorrowedUSDT -= usdtToRepay;
+        }
         
-        // Ensure contract has enough ETH; if not, withdraw from Aave
-        if (address(this).balance < ethToWithdraw) {
-            uint256 shortfall = ethToWithdraw - address(this).balance;
-            // Withdraw necessary ETH from Aave
+        // Step 3: Withdraw ETH from Aave to cover the redemption
+        if (address(this).balance < totalEthToWithdraw) {
+            uint256 shortfall = totalEthToWithdraw - address(this).balance;
             uint256 withdrawnAmount = IPool(aavePoolAddress).withdraw(address(0), shortfall, address(this));
             totalEthDepositedToAave -= withdrawnAmount;
             emit BulkRedemptionFromAave(withdrawnAmount, block.timestamp);
-            
-            // Adjust short position and repay USDT if necessary
-            uint256 redeemedValueInUsd = (shortfall * ethPrice) / 1e18;
-            uint256 usdtToRepay = (redeemedValueInUsd * usdtBorrowPercentage * 1e6) / (100 * 1e18);
-            
-            // Placeholder for closing short position on GMX
-            // IMockGMX(gmxAddress).closePositionPartially(shortfall, false, address(this));
-            totalUsdValueShorted -= redeemedValueInUsd;
-            
-            // Placeholder for repaying USDT debt on Aave
-            if (usdtToRepay > 0 && totalBorrowedUSDT >= usdtToRepay) {
-                // IPool(aavePoolAddress).repay(usdtAddress, usdtToRepay, 2, address(this));
-                totalBorrowedUSDT -= usdtToRepay;
+        }
+        
+        // Update pending redemption balance (rough estimate, adjust if fees included)
+        pendingRedemptionBalance = (pendingRedemptionBalance > totalEthToWithdraw) ? (pendingRedemptionBalance - totalEthToWithdraw) : 0;
+        totalRedemptionRequestsPerBatch[batchCycle] = 0; // Reset for this batch
+        
+        emit BulkRedemptionProcessed(totalEthToWithdraw, usdtToRepay, ethShortToCover, block.timestamp);
+    }
+
+    // Function to distribute redeemed ETH to users after bulk redemption (call after bulkRedemptionFromAave)
+    function distributeRedeemedEth(uint256 batchCycle) external {
+        require(isWithinDepositWindow(), "Not within processing window");
+        // This function would iterate through users with pending redemptions for the batchCycle
+        // For simplicity, assume it's called after bulkRedemptionFromAave and ETH is in contract
+        // In a real implementation, you'd track which users redeemed for this batch
+        
+        // Placeholder: Distribute based on pendingRedemptions mapping
+        // This is a simplified version; a real implementation might need a list of users for the batch
+        for (address user = address(0); user != address(0); user = address(0)) { // Replace with actual user iteration logic
+            uint256 userYTokenAmount = pendingRedemptions[user];
+            if (userYTokenAmount > 0 && redemptionBatchCycle[user] == batchCycle) {
+                uint256 ethPrice = getLatestEthPrice();
+                int256 netFeesEarned = userCumulativeFeesEarned[user];
+                int256 totalUsdValue = int256(userYTokenAmount) + (netFeesEarned >= 0 ? netFeesEarned : -netFeesEarned);
+                if (totalUsdValue <= 0) continue;
+                
+                uint256 ethToDistribute = uint256(totalUsdValue) * 1e18 / ethPrice;
+                if (address(this).balance >= ethToDistribute) {
+                    payable(user).transfer(ethToDistribute);
+                    pendingRedemptions[user] = 0;
+                    if (userYTokenAmount == yToken.balanceOf(user)) {
+                        userCumulativeFeesEarned[user] = 0;
+                    }
+                    emit EthDistributedToUser(user, ethToDistribute);
+                }
             }
         }
-        
-        require(address(this).balance >= ethToWithdraw, "Insufficient ETH balance in contract after withdrawal");
-        
-        // Burn the redeemed YToken
-        yToken.burn(msg.sender, yTokenAmount);
-        
-        // Reset or adjust user's cumulative fees earned if fully redeemed
-        if (yTokenAmount == yToken.balanceOf(msg.sender)) {
-            userCumulativeFeesEarned[msg.sender] = 0;
-        }
-        
-        // Transfer ETH to user
-        payable(msg.sender).transfer(ethToWithdraw);
-        
-        emit YTokenRedeemed(msg.sender, yTokenAmount, ethToWithdraw, batchCycle);
     }
 
     // Function to record daily metrics slightly before midnight (callable by anyone or bot)
