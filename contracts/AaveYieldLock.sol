@@ -49,7 +49,7 @@ event RedemptionRequested(address indexed user, uint256 amount, uint256 timestam
 event DailyMetricsRecorded(uint256 timestamp, uint256 aTokenBalance, uint256 usdtDebt, int256 gmxFunding, int256 netFees);
 
 // Event for bulk redemption from Aave
-event BulkRedemptionFromAave(uint256 amount, uint256 timestamp);
+event BulkRedeemedFromAave(uint256 amount, uint256 timestamp);
 
 // Event for no action needed, to be used for logging purposes
 event NoActionNeeded(uint256 timestamp);
@@ -88,11 +88,8 @@ interface IGMX {
 
 /**
  * @title AaveYieldLock
- * @dev A contract that locks user funds until a daily bulk transfer to Aave V3 at 12:00 AM HKT.
- * Deposits after 4:00 PM HKT are eligible for the next day's cycle. aTokens are held by the contract,
- * and user shares are tracked internally. Users cannot withdraw aTokens directly.
- * After bulk deposit, borrows 40% of ETH value in USDT.
- * Includes configurable parameters for testing and design purposes.
+ * @dev 
+
  */
 contract AaveYieldLock {
     address payable public owner;
@@ -101,7 +98,6 @@ contract AaveYieldLock {
     address public usdtAddress;
     address public gmxAddress;
     
-    // Moved YToken declaration inside the contract
     YToken public yToken;
     
     // Keep mappings and variables related to ETH operations for the smart contract
@@ -245,8 +241,19 @@ contract AaveYieldLock {
         return currentDayStart + (3 * SECONDS_PER_DAY); // Next possible batch
     }
 
+    // Function to check if current time is around midnight (12:00:00 AM) for processing on Day 2
+    function isMidnightProcessingTime() public view returns (bool) {
+        uint256 TIME_OFFSET = 30 * 60; // 30 minutes offset instead of HKT 8 hours
+        uint256 SECONDS_PER_DAY = 86400;
+        uint256 currentTimeAdjusted = (block.timestamp + TIME_OFFSET) % SECONDS_PER_DAY;
+        // Midnight is 00:00, allow a small window around it (e.g., 00:00:00 to 00:05:00 for flexibility)
+        uint256 midnightStart = 0;
+        uint256 midnightEnd = 5 * 60; // 5 minutes after midnight
+        return currentTimeAdjusted >= midnightStart && currentTimeAdjusted <= midnightEnd;
+    }
+
     // Function for bulk deposit to Aave by the smart contract, callable by a bot, with immediate USDT borrow
-    function bulkDepositToAave() external {
+    function bulkDepositToAave() public {
         require(isWithinDepositWindow(), "Not within deposit window");
         uint256 totalPending = pendingDepositBalance;
         require(totalPending > 0, "No pending ETH to deposit");
@@ -353,8 +360,8 @@ contract AaveYieldLock {
     }
 
     // Function to process bulk redemptions from Aave, cover ETH short on GMX, and repay USDT to Aave
-    function bulkRedemptionFromAave(uint256 batchCycle) external {
-        require(isWithinDepositWindow(), "Not within processing window"); // Reuse deposit window or define a separate one
+    function bulkRedemptionFromAave(uint256 batchCycle) public {
+        require(isMidnightProcessingTime(), "Not within processing window"); // Use midnight check instead of deposit window
         uint256 totalYTokenToRedeem = totalRedemptionRequestsPerBatch[batchCycle];
         require(totalYTokenToRedeem > 0, "No pending redemptions for this batch cycle");
         
@@ -391,7 +398,7 @@ contract AaveYieldLock {
             uint256 shortfall = totalEthToWithdraw - address(this).balance;
             uint256 withdrawnAmount = IPool(aavePoolAddress).withdraw(address(0), shortfall, address(this));
             totalEthDepositedToAave -= withdrawnAmount;
-            emit BulkRedemptionFromAave(withdrawnAmount, block.timestamp);
+            emit BulkRedeemedFromAave(withdrawnAmount, block.timestamp);
         }
         
         // Update pending redemption balance (rough estimate, adjust if fees included)
@@ -462,34 +469,32 @@ contract AaveYieldLock {
         emit DailyMetricsRecorded(dayOrTimestamp, currentATokenBalance, totalDebtETH, currentFunding, netFees);
     }
 
-    // Function to process daily actions at midnight: handle deposits (ETH operations for contract)
-    function processDailyActions() external {
-        require(isWithinDepositWindow(), "Not within deposit window");
+    // Function to calculate net pending balance for a batch cycle (ETH deposits minus ETH equivalent of redemptions)
+    function calculateNetPendingBalance(uint256 batchCycle) public view returns (int256) {
+        uint256 totalDeposits = totalBatchContributions[batchCycle]; // ETH to be deposited for this batch
+        uint256 totalRedemptions = totalRedemptionRequestsPerBatch[batchCycle]; // YToken amount (USD pegged)
         
-        // Only handle deposits to Aave, no direct ETH redemptions for users
-        if (pendingDepositBalance > 0) {
-            uint256 totalPendingDeposit = pendingDepositBalance;
-            IPool(aavePoolAddress).supply{value: totalPendingDeposit}(address(0), totalPendingDeposit, address(this), 0);
-            pendingDepositBalance = 0;
-            totalEthDepositedToAave += totalPendingDeposit;
-            emit BulkDepositToAave(totalPendingDeposit, block.timestamp);
-            
-            // Borrow USDT based on deposited ETH value
-            uint256 ethPrice = getLatestEthPrice();
-            uint256 ethValueInUsd = (totalPendingDeposit * ethPrice) / 1e18;
-            uint256 usdtToBorrow = (ethValueInUsd * usdtBorrowPercentage * 1e6) / (100 * 1e18); // USDT has 6 decimals
-            if (usdtToBorrow > 0) {
-                IPool(aavePoolAddress).borrow(usdtAddress, usdtToBorrow, 2, 0, address(this));
-                totalBorrowedUSDT += usdtToBorrow;
-                emit USDTBorrowed(usdtToBorrow, block.timestamp);
-                
-                IERC20(usdtAddress).approve(gmxAddress, usdtToBorrow);
-                IMockGMX(gmxAddress).depositCollateralAndOpenPositionWithSize(usdtToBorrow, totalPendingDeposit, false, address(this));
-                totalUsdValueShorted += ethValueInUsd;
-                emit USDTTransferredToGMX(usdtToBorrow);
-            }
+        // Convert redemption YToken amount to ETH equivalent using current ETH price
+        uint256 ethPrice = getLatestEthPrice(); // Price in 18 decimals (USD per ETH)
+        uint256 redemptionEthEquivalent = (totalRedemptions * 1e18) / ethPrice; // Convert USD to ETH
+        
+        // Calculate net balance in ETH terms
+        int256 netBalance = int256(totalDeposits) - int256(redemptionEthEquivalent);
+        return netBalance;
+    }
+
+    // Function to process daily actions at midnight: handle deposits or redemptions based on net balance
+    function processDailyActions(uint256 batchCycle) external {
+        require(isMidnightProcessingTime(), "Not within processing window");
+        
+        // Calculate net pending balance for the batch cycle (deposits minus redemptions in ETH terms)
+        int256 netBalance = calculateNetPendingBalance(batchCycle);
+        
+        if (netBalance > 0) {
+            bulkDepositToAave();
+        } else if (netBalance < 0) {
+            bulkRedemptionFromAave(batchCycle);
         } else {
-            // No action needed if no pending ETH to deposit
             emit NoActionNeeded(block.timestamp);
         }
     }
@@ -537,4 +542,4 @@ contract AaveYieldLock {
         // Return the cumulative total of ETH deposited by the user
         return userTotalEthDeposited[user];
     }
-} 
+}
