@@ -91,6 +91,7 @@ interface IGMX {
  * @dev 
 
  */
+
 contract AaveYieldLock {
     address payable public owner;
     address public aavePoolAddress;
@@ -190,55 +191,45 @@ contract AaveYieldLock {
     // Function for users to send ETH and mint YTokens (previously called deposit)
     function mintYToken() external payable {
         require(msg.value > 0, "ETH amount must be greater than 0");
+        require(isWithinDepositWindow(), "Not within deposit window");
         balancesBeforeTransfer[msg.sender] += msg.value;
         pendingDepositBalance += msg.value;
-        uint256 batchTime = getEligibleBatchTime();
-        eligibleCycleDay[msg.sender] = batchTime;
+        // Calculate the next midnight (00:00 UTC) timestamp for batching
+        uint256 SECONDS_PER_DAY = 86400;
+        uint256 nextMidnight = ((block.timestamp / SECONDS_PER_DAY) + 1) * SECONDS_PER_DAY;
+        eligibleCycleDay[msg.sender] = nextMidnight;
         // Track user's contribution to this batch cycle
-        userBatchContributions[msg.sender][batchTime] += msg.value;
-        totalBatchContributions[batchTime] += msg.value;
+        userBatchContributions[msg.sender][nextMidnight] += msg.value;
+        totalBatchContributions[nextMidnight] += msg.value;
         // Update user's cumulative ETH contributed total
         userTotalEthDeposited[msg.sender] += msg.value;
-        
-        // Issue YTokens based on ETH contribution value in USD
-        uint256 ethPrice = getLatestEthPrice();
-        uint256 usdValue = (msg.value * ethPrice) / 1e18; // Assuming ETH price is in 18 decimals
-        yToken.mint(msg.sender, usdValue); // YToken pegged at $1, so 1 YToken = 1 USD
-        
-        emit YTokenMinted(msg.sender, msg.value, usdValue, block.timestamp, batchTime);
+
+        // Do NOT mint YTokens immediately. Minting will occur after batch processing.
+        emit YTokenMinted(msg.sender, msg.value, 0, block.timestamp, nextMidnight);
+    }
+
+    // Function to distribute YTokens to users after batch processing
+    // NOTE: Only one definition is needed. Remove duplicate and keep this one.
+    function distributeYTokens(uint256 batchCycle) external view {
+        uint256 totalForBatch = totalBatchContributions[batchCycle];
+        require(totalForBatch > 0, "No ETH contributions for this batch");
+        // Placeholder: In production, iterate over actual user list for this batch
+        // for (address user = address(0); user != address(0); user = address(0)) { ... }
+        // Remove this placeholder loop to avoid compilation error
     }
 
     // Function to check if current time is within the deposit window for bulk transfer to Aave
     function isWithinDepositWindow() public view returns (bool) {
-        uint256 TIME_OFFSET = 30 * 60; // 30 minutes offset instead of HKT 8 hours
         uint256 SECONDS_PER_DAY = 86400;
-        uint256 currentTimeAdjusted = (block.timestamp + TIME_OFFSET) % SECONDS_PER_DAY;
-        // uint256 currentDayStart = block.timestamp - currentTimeAdjusted;
-        // Define window as 11:30:01 PM Day 1 to 11:30:00 PM Day 2 relative to adjusted time
-        // 11:30 PM is 23:30, which is (23 * 3600 + 30 * 60) seconds
-        uint256 windowStartTimeOfDay = (23 * 3600) + (30 * 60) + 1; // 11:30:01 PM
-        uint256 windowEndTimeOfDay = (23 * 3600) + (30 * 60); // 11:30:00 PM
-        // Check if current time falls within the window (considering it spans across days)
-        if (currentTimeAdjusted >= windowStartTimeOfDay || currentTimeAdjusted <= windowEndTimeOfDay) {
+        uint256 currentTimeOfDay = block.timestamp % SECONDS_PER_DAY;
+        // 12:15 AM = 0 * 3600 + 15 * 60 = 900 seconds
+        // 11:45 PM = 23 * 3600 + 45 * 60 = 85500 seconds
+        uint256 windowStart = 15 * 60; // 12:15 AM
+        uint256 windowEnd = (23 * 3600) + (45 * 60); // 11:45 PM
+        if (currentTimeOfDay >= windowStart && currentTimeOfDay <= windowEnd) {
             return true; // Within the deposit window
         }
         return false; // Outside the window
-    }
-
-    // Function to determine the eligible batch time for Aave deposit (12:00 AM Day 3 for deposits in the window)
-    function getEligibleBatchTime() public view returns (uint256) {
-        uint256 TIME_OFFSET = 30 * 60; // 30 minutes offset
-        uint256 SECONDS_PER_DAY = 86400;
-        uint256 currentTimeAdjusted = (block.timestamp + TIME_OFFSET) % SECONDS_PER_DAY;
-        uint256 currentDayStart = block.timestamp - currentTimeAdjusted;
-        // If within window (11:30:01 PM Day 1 to 11:30:00 PM Day 2), batch at 12:00 AM Day 3
-        uint256 windowEndTimeOfDay = (23 * 3600) + (30 * 60); // 11:30:00 PM
-        if (currentTimeAdjusted <= windowEndTimeOfDay || currentTimeAdjusted >= ((23 * 3600) + (30 * 60) + 1)) {
-            // Deposits in this window are eligible for batching at 12:00 AM of the day after tomorrow (Day 3)
-            return currentDayStart + (2 * SECONDS_PER_DAY); // 12:00 AM Day 3
-        }
-        // Otherwise, next window's batch time (this logic can be adjusted if needed)
-        return currentDayStart + (3 * SECONDS_PER_DAY); // Next possible batch
     }
 
     // Function to check if current time is around midnight (12:00:00 AM) for processing on Day 2
@@ -320,9 +311,6 @@ contract AaveYieldLock {
         return adjustedPrice; // Price adjusted to 18 decimals
     }
 
-    // Function to allow receiving ETH directly for testing
-    receive() external payable {}
-
     function getUserDepositPercentage(address user, uint256 batchCycle) public view returns (uint256) {
         uint256 userContribution = userBatchContributions[user][batchCycle];
         uint256 totalForBatch = totalBatchContributions[batchCycle];
@@ -333,25 +321,30 @@ contract AaveYieldLock {
     }
 
     // Function for users to request redemption of YTokens (queues the request instead of immediate processing)
-    function requestRedemption(uint256 yTokenAmount, uint256 batchCycle) external {
+    function requestRedemption(uint256 yTokenAmount) external {
+        require(isWithinDepositWindow(), "Not within deposit window");
         require(yToken.balanceOf(msg.sender) >= yTokenAmount, "Insufficient YToken balance");
         uint256 totalYTokenSupply = yToken.totalSupply();
         require(totalYTokenSupply > 0, "No YToken in circulation");
-        
-        // Burn YTokens immediately to prevent double-spending
-        yToken.burn(msg.sender, yTokenAmount);
-        
+
+        // User must transfer YTokens to this contract for redemption
+        bool success = yToken.transferFrom(msg.sender, address(this), yTokenAmount);
+        require(success, "YToken transfer failed");
+
+        // Calculate the next midnight (00:00 UTC) timestamp for batching
+        uint256 SECONDS_PER_DAY = 86400;
+        uint256 nextMidnight = ((block.timestamp / SECONDS_PER_DAY) + 1) * SECONDS_PER_DAY;
+
         // Queue the redemption request
         pendingRedemptions[msg.sender] += yTokenAmount;
-        redemptionBatchCycle[msg.sender] = batchCycle;
-        totalRedemptionRequestsPerBatch[batchCycle] += yTokenAmount;
-        
+        redemptionBatchCycle[msg.sender] = nextMidnight; // Track the batch cycle for this redemption request`
+        totalRedemptionRequestsPerBatch[nextMidnight] += yTokenAmount;
+
         // Estimate ETH value for pending redemption balance (for reference, will be recalculated during processing)
         uint256 ethPrice = getLatestEthPrice();
         uint256 ethValue = (yTokenAmount * 1e18) / ethPrice; // Rough estimate, YToken pegged at $1
         pendingRedemptionBalance += ethValue;
-        
-        emit RedemptionRequestQueued(msg.sender, yTokenAmount, batchCycle, block.timestamp);
+        emit RedemptionRequestQueued(msg.sender, yTokenAmount, nextMidnight, block.timestamp);
     }
 
     // Helper function to get total YToken supply (for proportion calculations)
@@ -486,10 +479,10 @@ contract AaveYieldLock {
     // Function to process daily actions at midnight: handle deposits or redemptions based on net balance
     function processDailyActions(uint256 batchCycle) external {
         require(isMidnightProcessingTime(), "Not within processing window");
-        
+
         // Calculate net pending balance for the batch cycle (deposits minus redemptions in ETH terms)
         int256 netBalance = calculateNetPendingBalance(batchCycle);
-        
+
         if (netBalance > 0) {
             bulkDepositToAave();
         } else if (netBalance < 0) {
