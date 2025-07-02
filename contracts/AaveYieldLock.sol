@@ -127,6 +127,11 @@ contract AaveYieldLock {
     // New mapping to track cumulative ETH deposited by each user across all batch cycles
     mapping(address => uint256) public userTotalEthDeposited; // Running total of ETH deposited by user
 
+    // Track users who contributed to each batch (for distribution)
+    mapping(uint256 => address[]) public batchContributors;
+    // Track users who requested redemption in each batch
+    mapping(uint256 => address[]) public batchRedeemers;
+
     // Track daily metrics for aToken balance, USDT debt, and GMX funding
     mapping(uint256 => uint256) public dailyATokenBalance; // ETH aToken balance at end of day
     mapping(uint256 => uint256) public dailyUsdtDebtBalance; // USDT debt balance at end of day
@@ -199,6 +204,9 @@ contract AaveYieldLock {
         uint256 nextMidnight = ((block.timestamp / SECONDS_PER_DAY) + 1) * SECONDS_PER_DAY;
         eligibleCycleDay[msg.sender] = nextMidnight;
         // Track user's contribution to this batch cycle
+        if (userBatchContributions[msg.sender][nextMidnight] == 0) {
+        batchContributors[nextMidnight].push(msg.sender);
+        }
         userBatchContributions[msg.sender][nextMidnight] += msg.value;
         totalBatchContributions[nextMidnight] += msg.value;
         // Update user's cumulative ETH contributed total
@@ -213,10 +221,16 @@ contract AaveYieldLock {
     function distributeYTokens(uint256 batchCycle) external view {
         uint256 totalForBatch = totalBatchContributions[batchCycle];
         require(totalForBatch > 0, "No ETH contributions for this batch");
-        // Placeholder: In production, iterate over actual user list for this batch
-        // for (address user = address(0); user != address(0); user = address(0)) { ... }
-        // Remove this placeholder loop to avoid compilation error
+        address[] memory contributors = batchContributors[batchCycle];
+        for (uint256 i = 0; i < contributors.length; i++) {
+            address user = contributors[i];
+            uint256 userContribution = userBatchContributions[user][batchCycle];
+            // Implement YToken distribution logic here (e.g., mint YTokens based on userContribution)
+            // Example: yToken.mint(user, ...);
+            // emit YTokenMinted(user, userContribution, yTokenAmount, block.timestamp, batchCycle);
+        }
     }
+    
 
     // Function to check if current time is within the deposit window for bulk transfer to Aave
     function isWithinDepositWindow() public view returns (bool) {
@@ -336,8 +350,11 @@ contract AaveYieldLock {
         uint256 nextMidnight = ((block.timestamp / SECONDS_PER_DAY) + 1) * SECONDS_PER_DAY;
 
         // Queue the redemption request
+        if (pendingRedemptions[msg.sender] == 0) {
+        batchRedeemers[nextMidnight].push(msg.sender);
+        }
         pendingRedemptions[msg.sender] += yTokenAmount;
-        redemptionBatchCycle[msg.sender] = nextMidnight; // Track the batch cycle for this redemption request`
+        redemptionBatchCycle[msg.sender] = nextMidnight;
         totalRedemptionRequestsPerBatch[nextMidnight] += yTokenAmount;
 
         // Estimate ETH value for pending redemption balance (for reference, will be recalculated during processing)
@@ -407,27 +424,26 @@ contract AaveYieldLock {
         // This function would iterate through users with pending redemptions for the batchCycle
         // For simplicity, assume it's called after bulkRedemptionFromAave and ETH is in contract
         // In a real implementation, you'd track which users redeemed for this batch
-        
         // Placeholder: Distribute based on pendingRedemptions mapping
-        // This is a simplified version; a real implementation might need a list of users for the batch
-        for (address user = address(0); user != address(0); user = address(0)) { // Replace with actual user iteration logic
-            uint256 userYTokenAmount = pendingRedemptions[user];
-            if (userYTokenAmount > 0 && redemptionBatchCycle[user] == batchCycle) {
-                uint256 ethPrice = getLatestEthPrice();
-                int256 netFeesEarned = userCumulativeFeesEarned[user];
-                int256 totalUsdValue = int256(userYTokenAmount) + (netFeesEarned >= 0 ? netFeesEarned : -netFeesEarned);
-                if (totalUsdValue <= 0) continue;
-                
-                uint256 ethToDistribute = uint256(totalUsdValue) * 1e18 / ethPrice;
-                if (address(this).balance >= ethToDistribute) {
-                    payable(user).transfer(ethToDistribute);
-                    pendingRedemptions[user] = 0;
-                    if (userYTokenAmount == yToken.balanceOf(user)) {
-                        userCumulativeFeesEarned[user] = 0;
-                    }
-                    emit EthDistributedToUser(user, ethToDistribute);
-                }
+        address[] memory redeemers = batchRedeemers[batchCycle];
+        for (uint256 i = 0; i < redeemers.length; i++) {
+        address user = redeemers[i];
+        uint256 userYTokenAmount = pendingRedemptions[user];
+        if (userYTokenAmount > 0 && redemptionBatchCycle[user] == batchCycle) {
+        uint256 ethPrice = getLatestEthPrice();
+        int256 netFeesEarned = userCumulativeFeesEarned[user];
+        int256 totalUsdValue = int256(userYTokenAmount) + (netFeesEarned >= 0 ? netFeesEarned : -netFeesEarned);
+        if (totalUsdValue <= 0) continue;
+        uint256 ethToDistribute = uint256(totalUsdValue) * 1e18 / ethPrice;
+        if (address(this).balance >= ethToDistribute) {
+            payable(user).transfer(ethToDistribute);
+            pendingRedemptions[user] = 0;
+            if (userYTokenAmount == yToken.balanceOf(user)) {
+                userCumulativeFeesEarned[user] = 0;
             }
+            emit EthDistributedToUser(user, ethToDistribute);
+        }
+        }
         }
     }
 
@@ -485,8 +501,10 @@ contract AaveYieldLock {
 
         if (netBalance > 0) {
             bulkDepositToAave();
+            this.distributeYTokens(batchCycle);
         } else if (netBalance < 0) {
             bulkRedemptionFromAave(batchCycle);
+            this.distributeRedeemedEth(batchCycle);
         } else {
             emit NoActionNeeded(block.timestamp);
         }
