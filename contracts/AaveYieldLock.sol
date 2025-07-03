@@ -217,18 +217,19 @@ contract AaveYieldLock {
         emit YTokenMinted(msg.sender, msg.value, 0, block.timestamp, nextMidnight);
     }
 
-    // Function to distribute YTokens to users after batch processing
+    // Function to distribute YTokens to users after batch processing, this is the end of the MINTING process
     // NOTE: Only one definition is needed. Remove duplicate and keep this one.
-    function distributeYTokens(uint256 batchCycle) external view {
+    function distributeYTokens(uint256 batchCycle) external {
         uint256 totalForBatch = totalBatchContributions[batchCycle];
         require(totalForBatch > 0, "No ETH contributions for this batch");
         address[] memory contributors = batchContributors[batchCycle];
         for (uint256 i = 0; i < contributors.length; i++) {
             address user = contributors[i];
             uint256 userContribution = userBatchContributions[user][batchCycle];
-            // Implement YToken distribution logic here (e.g., mint YTokens based on userContribution)
-            // Example: yToken.mint(user, ...);
-            // emit YTokenMinted(user, userContribution, yTokenAmount, block.timestamp, batchCycle);
+            uint256 ethPrice = getLatestEthPrice();
+            uint256 yTokenAmount = (userContribution * ethPrice) / 1e18;
+            yToken.mint(user, yTokenAmount);
+            emit YTokenMinted(user, userContribution, yTokenAmount, block.timestamp, batchCycle);
         }
     }
     
@@ -259,34 +260,44 @@ contract AaveYieldLock {
     }
 
     // Function for bulk deposit to Aave by the smart contract, callable by a bot, with immediate USDT borrow
-    function bulkDepositToAave() public {
-        require(isWithinTransactionWindow(), "Not within deposit window");
-        uint256 totalPending = pendingDepositBalance;
-        require(totalPending > 0, "No pending ETH to deposit");
-        
-        // Deposit ETH to Aave and receive aTokens
-        IPool(aavePoolAddress).supply{value: totalPending}(address(0), totalPending, address(this), 0);
-        pendingDepositBalance = 0;
-        totalEthDepositedToAave += totalPending;
-        emit BulkDepositToAave(totalPending, block.timestamp);
-        
+    // DEPRECATED: Use the new bulkDepositToAave(uint256 batchCycle) for net deposits
+    function bulkDepositToAave() public pure {
+        revert("Use bulkDepositToAave(uint256 batchCycle)");
+    }
+    /**
+     * @dev For the smart contract to deposit the net amount of ETH (deposits minus redemptions) for the given batchCycle.
+     *      Only deposits if the net amount is positive. Uses calculateNetPendingBalance.
+     *      Updates state and emits events as before.
+     */
+    function bulkDepositToAave(uint256 batchCycle) public {
+        int256 netBalance = calculateNetPendingBalance(batchCycle);
+        require(netBalance > 0, "No net deposits for this batch cycle");
+        uint256 netDepositAmount = uint256(netBalance);
+        require(netDepositAmount > 0 && netDepositAmount <= pendingDepositBalance, "Invalid net deposit amount");
+
+        // Deposit net ETH to Aave and receive aTokens
+        IPool(aavePoolAddress).supply{value: netDepositAmount}(address(0), netDepositAmount, address(this), 0);
+        pendingDepositBalance -= netDepositAmount;
+        totalEthDepositedToAave += netDepositAmount;
+        emit BulkDepositToAave(netDepositAmount, block.timestamp);
+
         // Borrow USDT based on the deposited ETH value
         uint256 ethPrice = getLatestEthPrice();
-        uint256 ethValueInUsd = (totalPending * ethPrice) / 1e18;
+        uint256 ethValueInUsd = (netDepositAmount * ethPrice) / 1e18;
         uint256 usdtToBorrow = (ethValueInUsd * usdtBorrowPercentage * 1e6) / (100 * 1e18); // USDT has 6 decimals
         if (usdtToBorrow > 0) {
             IPool(aavePoolAddress).borrow(usdtAddress, usdtToBorrow, 2, 0, address(this));
             totalBorrowedUSDT += usdtToBorrow;
             emit USDTBorrowed(usdtToBorrow, block.timestamp);
-            
+
             // Approve GMX contract to spend USDT
             IERC20(usdtAddress).approve(gmxAddress, usdtToBorrow);
-            
+
             // Transfer USDT to GMX and open a short position for the exact amount of ETH deposited
-            IMockGMX(gmxAddress).depositCollateralAndOpenPositionWithSize(usdtToBorrow, totalPending, false, address(this));
+            IMockGMX(gmxAddress).depositCollateralAndOpenPositionWithSize(usdtToBorrow, netDepositAmount, false, address(this));
             // Track the total USD value of the shorted ETH amount
             totalUsdValueShorted += ethValueInUsd; // Store total USD value in 18 decimals
-            
+
             emit USDTTransferredToGMX(usdtToBorrow);
         }
     }
@@ -326,7 +337,8 @@ contract AaveYieldLock {
         return adjustedPrice; // Price adjusted to 18 decimals
     }
 
-    function getUserDepositPercentage(address user, uint256 batchCycle) public view returns (uint256) {
+    // this function may not be needed, could possibly be DELETED
+        function getUserDepositPercentage(address user, uint256 batchCycle) public view returns (uint256) {
         uint256 userContribution = userBatchContributions[user][batchCycle];
         uint256 totalForBatch = totalBatchContributions[batchCycle];
         if (totalForBatch == 0) {
@@ -365,28 +377,25 @@ contract AaveYieldLock {
         emit RedemptionRequestQueued(msg.sender, yTokenAmount, nextMidnight, block.timestamp);
     }
 
-    // Helper function to get total YToken supply (for proportion calculations)
-    function getTotalYTokenSupply() public view returns (uint256) {
-        return yToken.totalSupply();
-    }
-
-    // Function to process bulk redemptions from Aave, cover ETH short on GMX, and repay USDT to Aave
+    // Function to process bulk redemptions from Aave: Cover ETH short on GMX, and repay USDT loan to Aave, withdraw Eth.  This is called by the smart contract, not the user.
     function bulkRedemptionFromAave(uint256 batchCycle) public {
-        require(isMidnightProcessingTime(), "Not within processing window"); // Use midnight check instead of deposit window
-        uint256 totalYTokenToRedeem = totalRedemptionRequestsPerBatch[batchCycle];
-        require(totalYTokenToRedeem > 0, "No pending redemptions for this batch cycle");
-        
-        // Calculate total USD value to redeem (YToken pegged at $1, plus fees if applicable)
-        // For simplicity, initially just use YToken amount as USD value
-        uint256 totalUsdValue = totalYTokenToRedeem; // Adjust if fees are calculated per batch
-        
+        int256 netBalance = calculateNetPendingBalance(batchCycle);
+        require(netBalance < 0, "No net redemptions for this batch cycle");
+
+        // Use the absolute value of netBalance (in ETH) for redemption
+        uint256 totalEthToWithdraw = uint256(-netBalance);
+
+        // Calculate the net YToken amount to redeem (in USD terms, since YToken is pegged to $1)
+        uint256 totalDeposits = totalBatchContributions[batchCycle];
+        uint256 totalRedemptions = totalRedemptionRequestsPerBatch[batchCycle];
+        uint256 netYTokenToRedeem = totalRedemptions > totalDeposits ? totalRedemptions - totalDeposits : 0;
+
         // Get current ETH price to convert USD to ETH
         uint256 ethPrice = getLatestEthPrice();
-        uint256 totalEthToWithdraw = (totalUsdValue * 1e18) / ethPrice;
-        
+
         // Calculate corresponding USD value for short position and USDT debt to adjust
         uint256 totalUsdShorted = totalUsdValueShorted; // Total USD value of ETH shorted
-        uint256 proportion = (totalUsdValue * 1e18) / (getTotalYTokenSupply() > 0 ? getTotalYTokenSupply() : 1); // Proportion of total supply being redeemed
+        uint256 proportion = (netYTokenToRedeem * 1e18) / (getTotalYTokenSupply() > 0 ? getTotalYTokenSupply() : 1); // Proportion of total supply being redeemed
         uint256 usdShortedToCover = (totalUsdShorted * proportion) / 1e18;
         uint256 ethShortToCover = (usdShortedToCover * 1e18) / ethPrice; // ETH amount to cover short
         uint256 usdtToRepay = (usdShortedToCover * usdtBorrowPercentage * 1e6) / (100 * 1e18); // USDT to repay based on borrow percentage
@@ -448,7 +457,7 @@ contract AaveYieldLock {
         }
     }
 
-    // Function to record daily metrics slightly before midnight (callable by anyone or bot)
+    // Function to record daily metrics slightly before midnight (callable by bot)
     function recordDailyMetrics(uint256 dayOrTimestamp) external {
         uint256 prevDayOrTimestamp = dayOrTimestamp - 1 days; // Simplified, adjust if using different keying
         
@@ -479,20 +488,6 @@ contract AaveYieldLock {
         emit DailyMetricsRecorded(dayOrTimestamp, currentATokenBalance, totalDebtETH, currentFunding, netFees);
     }
 
-    // Function to calculate net pending balance for a batch cycle (ETH deposits minus ETH equivalent of redemptions)
-    function calculateNetPendingBalance(uint256 batchCycle) public view returns (int256) {
-        uint256 totalDeposits = totalBatchContributions[batchCycle]; // ETH to be deposited for this batch
-        uint256 totalRedemptions = totalRedemptionRequestsPerBatch[batchCycle]; // YToken amount (USD pegged)
-        
-        // Convert redemption YToken amount to ETH equivalent using current ETH price
-        uint256 ethPrice = getLatestEthPrice(); // Price in 18 decimals (USD per ETH)
-        uint256 redemptionEthEquivalent = (totalRedemptions * 1e18) / ethPrice; // Convert USD to ETH
-        
-        // Calculate net balance in ETH terms
-        int256 netBalance = int256(totalDeposits) - int256(redemptionEthEquivalent);
-        return netBalance;
-    }
-
     // Function to process daily actions at midnight: handle deposits or redemptions based on net balance
     function processDailyActions(uint256 batchCycle) external {
         require(isMidnightProcessingTime(), "Not within processing window");
@@ -501,7 +496,7 @@ contract AaveYieldLock {
         int256 netBalance = calculateNetPendingBalance(batchCycle);
 
         if (netBalance > 0) {
-            bulkDepositToAave();
+            bulkDepositToAave(batchCycle);
             this.distributeYTokens(batchCycle);
         } else if (netBalance < 0) {
             bulkRedemptionFromAave(batchCycle);
@@ -530,6 +525,36 @@ contract AaveYieldLock {
         }
     }
     
+    
+    
+
+    // HELPER FUNCTIONS
+
+    // Helper Function to calculate net pending balance for a batch cycle (ETH deposits minus ETH equivalent of redemptions)
+    function calculateNetPendingBalance(uint256 batchCycle) public view returns (int256) {
+        uint256 totalDeposits = totalBatchContributions[batchCycle]; // ETH to be deposited for this batch
+        uint256 totalRedemptions = totalRedemptionRequestsPerBatch[batchCycle]; // YToken amount (USD pegged)
+        
+        // Convert redemption YToken amount to ETH equivalent using current ETH price
+        uint256 ethPrice = getLatestEthPrice(); // Price in 18 decimals (USD per ETH)
+        uint256 redemptionEthEquivalent = (totalRedemptions * 1e18) / ethPrice; // Convert USD to ETH
+        
+        // Calculate net balance in ETH terms
+        int256 netBalance = int256(totalDeposits) - int256(redemptionEthEquivalent);
+        return netBalance;
+    }
+
+    // Helper function to get total YToken supply (for proportion calculations)
+    function getTotalYTokenSupply() public view returns (uint256) {
+        return yToken.totalSupply();
+    }
+
+    // Function to get a user's total ETH contributions to the contract across all batch cycles
+    function getUserTotalContributions(address user) external view returns (uint256 total) {
+        // Return the cumulative total of ETH deposited by the user
+        return userTotalEthDeposited[user];
+    }
+
     // Function for users to claim their share of fees for a specific day based on batch contributions
     function claimFees(uint256 dayOrTimestamp) external {
         FeeSnapshot memory snapshot = historicalFeeSnapshots[dayOrTimestamp];
@@ -548,10 +573,5 @@ contract AaveYieldLock {
         // For now, just update the cumulative tracking
         emit FeesClaimed(msg.sender, dayOrTimestamp, userFeeShare);
     }
-    
-    // Function to get a user's total ETH contributions to the contract across all batch cycles
-    function getUserTotalContributions(address user) external view returns (uint256 total) {
-        // Return the cumulative total of ETH deposited by the user
-        return userTotalEthDeposited[user];
-    }
+
 }
