@@ -88,8 +88,9 @@ interface IGMX {
 
 /**
  * @title AaveYieldLock
- * @dev 
-
+ * @dev this is a smart contract that allows users to deposit ETH and mint YTokens.
+ * YTokens are short for Yield Tokens.  The yield comes from funding earned by 
+ * shorting Eth on GMX, a perpetual DEX.  The smart contract sends Eth to Aave, then borrows USDT.  Part of the USDT is used to swap for more Eth, and part is sent to GMX to be used as collateral to short the full Eth exposure.  Net fees earned from these transactions are paid out to the users as yield.
  */
 
 contract AaveYieldLock {
@@ -196,7 +197,7 @@ contract AaveYieldLock {
     // Function for users to send ETH and mint YTokens (previously called deposit)
     function mintYToken() external payable {
         require(msg.value > 0, "ETH amount must be greater than 0");
-        require(isWithinDepositWindow(), "Not within deposit window");
+        require(isWithinTransactionWindow(), "Not within deposit window");
         balancesBeforeTransfer[msg.sender] += msg.value;
         pendingDepositBalance += msg.value;
         // Calculate the next midnight (00:00 UTC) timestamp for batching
@@ -233,7 +234,7 @@ contract AaveYieldLock {
     
 
     // Function to check if current time is within the deposit window for bulk transfer to Aave
-    function isWithinDepositWindow() public view returns (bool) {
+    function isWithinTransactionWindow() public view returns (bool) {
         uint256 SECONDS_PER_DAY = 86400;
         uint256 currentTimeOfDay = block.timestamp % SECONDS_PER_DAY;
         // 12:15 AM = 0 * 3600 + 15 * 60 = 900 seconds
@@ -259,7 +260,7 @@ contract AaveYieldLock {
 
     // Function for bulk deposit to Aave by the smart contract, callable by a bot, with immediate USDT borrow
     function bulkDepositToAave() public {
-        require(isWithinDepositWindow(), "Not within deposit window");
+        require(isWithinTransactionWindow(), "Not within deposit window");
         uint256 totalPending = pendingDepositBalance;
         require(totalPending > 0, "No pending ETH to deposit");
         
@@ -305,12 +306,12 @@ contract AaveYieldLock {
         return usdtAmount;
     }
 
-    // Function to get the balance of any address before transfer to Aave
+    // Function to get the balance of any address before transfer to Aave - maybe can delete, not sure if needed
     function getBalanceBeforeTransfer(address _address) public view returns (uint) {
         return balancesBeforeTransfer[_address];
     }
 
-    // Function to get the contract's total aToken balance from Aave (for ETH)
+    // Function to get the contract's total aToken balance from Aave (for ETH that was deposited)
     function getContractAaveBalance() public view returns (uint) {
         return IPool(aavePoolAddress).getATokenBalance(address(0), address(this));
     }
@@ -336,7 +337,7 @@ contract AaveYieldLock {
 
     // Function for users to request redemption of YTokens (queues the request instead of immediate processing)
     function requestRedemption(uint256 yTokenAmount) external {
-        require(isWithinDepositWindow(), "Not within deposit window");
+        require(isWithinTransactionWindow(), "Not within deposit window");
         require(yToken.balanceOf(msg.sender) >= yTokenAmount, "Insufficient YToken balance");
         uint256 totalYTokenSupply = yToken.totalSupply();
         require(totalYTokenSupply > 0, "No YToken in circulation");
@@ -420,7 +421,7 @@ contract AaveYieldLock {
 
     // Function to distribute redeemed ETH to users after bulk redemption (call after bulkRedemptionFromAave)
     function distributeRedeemedEth(uint256 batchCycle) external {
-        require(isWithinDepositWindow(), "Not within processing window");
+        require(isWithinTransactionWindow(), "Not within processing window");
         // This function would iterate through users with pending redemptions for the batchCycle
         // For simplicity, assume it's called after bulkRedemptionFromAave and ETH is in contract
         // In a real implementation, you'd track which users redeemed for this batch
