@@ -10,6 +10,7 @@ interface IPool {
     function withdraw(address asset, uint256 amount, address to) external returns (uint256);
     function getATokenBalance(address asset, address user) external view returns (uint256);
     function borrow(address asset, uint256 amount, uint256 interestRateMode, uint16 referralCode, address onBehalfOf) external;
+    function repay(address asset, uint256 amount, uint256 rateMode, address onBehalfOf) external returns (uint256);
 }
 
 // for eth price feed
@@ -22,6 +23,7 @@ interface IChainlinkPriceFeed {
 interface IMockGMX {
     function depositCollateralAndOpenPosition(uint256 amount, bool isLong, address onBehalfOf) external;
     function depositCollateralAndOpenPositionWithSize(uint256 amount, uint256 positionSize, bool isLong, address onBehalfOf) external;
+    function closePosition(address onBehalfOf) external;
 }
 
 // Event for YToken redemption and withdrawal
@@ -260,6 +262,23 @@ contract AaveYieldLock {
         emit RedemptionRequestQueued(msg.sender, yTokenAmount, nextMidnight, block.timestamp);
     }
 
+    // Function for users to claim their cumulative fees in ETH
+    function claimUserFees() external {
+        int256 feesEarned = userCumulativeFeesEarned[msg.sender];
+        require(feesEarned > 0, "No fees to claim");
+        
+        uint256 ethToDistribute = uint256(feesEarned);
+        require(address(this).balance >= ethToDistribute, "Insufficient contract balance to pay fees");
+        
+        // Reset the user's cumulative fees to zero after claiming
+        userCumulativeFeesEarned[msg.sender] = 0;
+        
+        // Transfer the ETH equivalent of the fees to the user
+        payable(msg.sender).transfer(ethToDistribute);
+        
+        emit EthDistributedToUser(msg.sender, ethToDistribute);
+    }
+
     // BOT FUNCTIONS *******************************
     // Function to record daily metrics slightly before midnight
     function recordDailyMetrics(uint256 dayOrTimestamp) external {
@@ -301,13 +320,15 @@ contract AaveYieldLock {
 
         if (netBalance > 0) {
             bulkDepositToAave(batchCycle);
-            this.distributeYTokens(batchCycle);
         } else if (netBalance < 0) {
             bulkRedemptionFromAave(batchCycle);
-            this.distributeRedeemedEth(batchCycle);
         } else {
             emit NoActionNeeded(block.timestamp);
         }
+        
+        // Always call both distribution functions to ensure users receive their tokens and ETH
+        this.distributeYTokens(batchCycle);
+        this.distributeRedeemedEth(batchCycle);
     }
 
     // SMART CONTRACT FUNCTIONS *******************************
@@ -386,16 +407,16 @@ contract AaveYieldLock {
         uint256 ethShortToCover = (usdShortedToCover * 1e18) / ethPrice; // ETH amount to cover short
         uint256 usdtToRepay = (usdShortedToCover * usdtBorrowPercentage * 1e6) / (100 * 1e18); // USDT to repay based on borrow percentage
         
-        // Step 1: Cover ETH short position on GMX (placeholder logic, adjust based on actual GMX interface)
+        // Step 1: Cover ETH short position on GMX
         if (ethShortToCover > 0) {
-            // IMockGMX(gmxAddress).closePositionPartially(ethShortToCover, false, address(this));
+            IMockGMX(gmxAddress).closePosition(address(this));
             totalUsdValueShorted -= usdShortedToCover;
         }
         
-        // Step 2: Repay USDT debt to Aave (placeholder logic, adjust based on actual Aave interface)
+        // Step 2: Repay USDT debt to Aave
         if (usdtToRepay > 0 && totalBorrowedUSDT >= usdtToRepay) {
-            // IERC20(usdtAddress).approve(aavePoolAddress, usdtToRepay);
-            // IPool(aavePoolAddress).repay(usdtAddress, usdtToRepay, 2, address(this));
+            IERC20(usdtAddress).approve(aavePoolAddress, usdtToRepay);
+            IPool(aavePoolAddress).repay(usdtAddress, usdtToRepay, 2, address(this));
             totalBorrowedUSDT -= usdtToRepay;
         }
         
@@ -417,29 +438,28 @@ contract AaveYieldLock {
     // Function to distribute redeemed ETH to users after bulk redemption (call after bulkRedemptionFromAave).  This is the end of the REDEMPTION process.
     function distributeRedeemedEth(uint256 batchCycle) external {
         require(isWithinTransactionWindow(), "Not within processing window");
-        // This function would iterate through users with pending redemptions for the batchCycle
-        // For simplicity, assume it's called after bulkRedemptionFromAave and ETH is in contract
-        // In a real implementation, you'd track which users redeemed for this batch
-        // Placeholder: Distribute based on pendingRedemptions mapping
+        // Iterate through users who requested redemption for this batch cycle
         address[] memory redeemers = batchRedeemers[batchCycle];
-        for (uint256 i = 0; i < redeemers.length; i++) {
-        address user = redeemers[i];
-        uint256 userYTokenAmount = pendingRedemptions[user];
-        if (userYTokenAmount > 0 && redemptionBatchCycle[user] == batchCycle) {
+        // commented out the below, not sure if needed
+        //uint256 totalYTokensRedeemed = totalRedemptionRequestsPerBatch[batchCycle];
         uint256 ethPrice = getLatestEthPrice();
-        int256 netFeesEarned = userCumulativeFeesEarned[user];
-        int256 totalUsdValue = int256(userYTokenAmount) + (netFeesEarned >= 0 ? netFeesEarned : -netFeesEarned);
-        if (totalUsdValue <= 0) continue;
-        uint256 ethToDistribute = uint256(totalUsdValue) * 1e18 / ethPrice;
-        if (address(this).balance >= ethToDistribute) {
-            payable(user).transfer(ethToDistribute);
-            pendingRedemptions[user] = 0;
-            if (userYTokenAmount == yToken.balanceOf(user)) {
-                userCumulativeFeesEarned[user] = 0;
+        
+        for (uint256 i = 0; i < redeemers.length; i++) {
+            address user = redeemers[i];
+            uint256 userYTokenAmount = pendingRedemptions[user];
+            if (userYTokenAmount > 0 && redemptionBatchCycle[user] == batchCycle) {
+                // Calculate ETH to distribute based on YToken amount (pegged to USD)
+                uint256 ethToDistribute = (userYTokenAmount * 1e18) / ethPrice;
+                // Ensure contract has enough ETH to distribute
+                if (address(this).balance >= ethToDistribute) {
+                    payable(user).transfer(ethToDistribute);
+                    pendingRedemptions[user] = 0;
+                    emit EthDistributedToUser(user, ethToDistribute);
+                } else {
+                    // If insufficient balance, log or handle partial distribution if needed
+                    emit NoActionNeeded(block.timestamp); // Placeholder for logging insufficient balance
+                }
             }
-            emit EthDistributedToUser(user, ethToDistribute);
-        }
-        }
         }
     }
 
