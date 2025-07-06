@@ -24,6 +24,7 @@ interface IMockGMX {
     function depositCollateralAndOpenPosition(uint256 amount, bool isLong, address onBehalfOf) external;
     function depositCollateralAndOpenPositionWithSize(uint256 amount, uint256 positionSize, bool isLong, address onBehalfOf) external;
     function closePosition(address onBehalfOf) external;
+    function swap(address tokenIn, address tokenOut, uint256 amountIn, uint256 minAmountOut, address recipient) external returns (uint256 amountOut);
 }
 
 // Event for YToken redemption and withdrawal
@@ -116,7 +117,7 @@ contract AaveYieldLock {
 
     // Configuration variables for design and testing
     uint public transactionsPerDay = 1; // Number of bulk deposits to Aave per day (default: 1)
-    uint256 public usdtBorrowPercentage = 40; // Percentage of ETH value to borrow as USDT (default: 40%)
+    uint256 public usdtBorrowPercentage = 70; // Percentage of ETH value to borrow as USDT (default: 70%)
 
     // Mapping to track individual user deposits to Aave
     mapping(address => uint256) public userDepositedToAave; // Tracks per user ETH deposited to Aave
@@ -338,7 +339,6 @@ contract AaveYieldLock {
      */
     function bulkDepositToAave(uint256 batchCycle) public {
         int256 netBalance = calculateNetPendingBalance(batchCycle);
-        require(netBalance > 0, "No net deposits for this batch cycle");
         uint256 netDepositAmount = uint256(netBalance);
         require(netDepositAmount > 0 && netDepositAmount <= pendingDepositBalance, "Invalid net deposit amount");
 
@@ -360,12 +360,15 @@ contract AaveYieldLock {
             // Approve GMX contract to spend USDT
             IERC20(usdtAddress).approve(gmxAddress, usdtToBorrow);
 
-            // Transfer USDT to GMX and open a short position for the exact amount of ETH deposited
-            IMockGMX(gmxAddress).depositCollateralAndOpenPositionWithSize(usdtToBorrow, netDepositAmount, false, address(this));
-            // Track the total USD value of the shorted ETH amount
-            totalUsdValueShorted += ethValueInUsd; // Store total USD value in 18 decimals
-
+            // Swap USDT to ETH via GMX
+            uint256 ethReceived = IMockGMX(gmxAddress).swap(usdtAddress, address(0), usdtToBorrow, 0, address(this));
             emit USDTTransferredToGMX(usdtToBorrow);
+
+            // Use received ETH as collateral to open a short ETH position
+            uint256 shortSize = (netDepositAmount * (100 + usdtBorrowPercentage)) / 100;
+            IMockGMX(gmxAddress).depositCollateralAndOpenPositionWithSize(ethReceived, shortSize, false, address(this));
+            // Track the total USD value of the shorted ETH amount
+            totalUsdValueShorted += (shortSize * ethPrice) / 1e18; // Store total USD value in 18 decimals
         }
     }
 
@@ -384,33 +387,30 @@ contract AaveYieldLock {
         }
     }
 
-    // Function to process bulk redemptions from Aave: Cover ETH short on GMX, and repay USDT loan to Aave, withdraw Eth.  This is called by the smart contract, not the user.
+    // Function to process bulk redemptions from Aave: Cover ETH short on GMX, swap Eth collateral to USDT and then repay USDT loan to Aave, then withdraw Eth.  This is called by the smart contract, not the user.
     function bulkRedemptionFromAave(uint256 batchCycle) public {
         int256 netBalance = calculateNetPendingBalance(batchCycle);
-        require(netBalance < 0, "No net redemptions for this batch cycle");
-
-        // Use the absolute value of netBalance (in ETH) for redemption
         uint256 totalEthToWithdraw = uint256(-netBalance);
-
-        // Calculate the net YToken amount to redeem (in USD terms, since YToken is pegged to $1)
-        uint256 totalDeposits = totalBatchContributions[batchCycle];
-        uint256 totalRedemptions = totalRedemptionRequestsPerBatch[batchCycle];
-        uint256 netYTokenToRedeem = totalRedemptions > totalDeposits ? totalRedemptions - totalDeposits : 0;
+        require(totalEthToWithdraw > 0 && totalEthToWithdraw <= totalEthDepositedToAave, "Invalid redemption amount");
 
         // Get current ETH price to convert USD to ETH
         uint256 ethPrice = getLatestEthPrice();
 
-        // Calculate corresponding USD value for short position and USDT debt to adjust
-        uint256 totalUsdShorted = totalUsdValueShorted; // Total USD value of ETH shorted
-        uint256 proportion = (netYTokenToRedeem * 1e18) / (getTotalYTokenSupply() > 0 ? getTotalYTokenSupply() : 1); // Proportion of total supply being redeemed
-        uint256 usdShortedToCover = (totalUsdShorted * proportion) / 1e18;
-        uint256 ethShortToCover = (usdShortedToCover * 1e18) / ethPrice; // ETH amount to cover short
+        // Simplified calculation: ETH to cover is based directly on totalEthToWithdraw * (1 + usdtBorrowPercentage/100)
+        uint256 ethShortToCover = (totalEthToWithdraw * (100 + usdtBorrowPercentage)) / 100;
+        uint256 usdShortedToCover = (ethShortToCover * ethPrice) / 1e18;
         uint256 usdtToRepay = (usdShortedToCover * usdtBorrowPercentage * 1e6) / (100 * 1e18); // USDT to repay based on borrow percentage
         
         // Step 1: Cover ETH short position on GMX
         if (ethShortToCover > 0) {
             IMockGMX(gmxAddress).closePosition(address(this));
             totalUsdValueShorted -= usdShortedToCover;
+        }
+        
+        // Step 1.5: Swap ETH collateral back to USDT via GMX
+        uint256 ethBalance = address(this).balance;
+        if (ethBalance > 0 && usdtToRepay > 0) {
+            IMockGMX(gmxAddress).swap(address(0), usdtAddress, ethBalance, 0, address(this));
         }
         
         // Step 2: Repay USDT debt to Aave
@@ -604,5 +604,13 @@ contract AaveYieldLock {
             return 0;
         }
         return (userContribution * 100) / totalForBatch;
+    }
+
+    // Function to perform a token swap via GMX
+    function swapViaGMX(address tokenIn, address tokenOut, uint256 amountIn, uint256 minAmountOut) external returns (uint256) {
+        require(amountIn > 0, "Swap amount must be greater than 0");
+        IERC20(tokenIn).approve(gmxAddress, amountIn);
+        uint256 amountOut = IMockGMX(gmxAddress).swap(tokenIn, tokenOut, amountIn, minAmountOut, address(this));
+        return amountOut;
     }
 }

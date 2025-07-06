@@ -129,4 +129,24 @@ contract MockGMX {
         require(_leverage > 0, "Leverage must be greater than 0");
         defaultLeverage = _leverage;
     }
+
+    // Function to simulate a token swap for testing purposes
+    function swap(address tokenIn, address tokenOut, uint256 amountIn, uint256 minAmountOut, address recipient) external returns (uint256) {
+        require(amountIn > 0, "Swap amount must be greater than 0");
+        // Transfer input tokens from sender to this contract
+        bool success = IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn);
+        require(success, "Token transfer failed");
+        
+        // For simplicity, assume a 1:1 conversion rate adjusted by token decimals or price
+        // In a real scenario, this would use an oracle or price feed
+        uint256 amountOut = amountIn; // Placeholder: adjust based on mock price if needed
+        // Ensure output is at least minAmountOut
+        require(amountOut >= minAmountOut, "Insufficient output amount");
+        
+        // Transfer output tokens to recipient
+        success = IERC20(tokenOut).transfer(recipient, amountOut);
+        require(success, "Output token transfer failed");
+        
+        return amountOut;
+    }
 } 
