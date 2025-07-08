@@ -263,58 +263,17 @@ contract AaveYieldLock {
         emit RedemptionRequestQueued(msg.sender, yTokenAmount, nextMidnight, block.timestamp);
     }
 
-    // Function for users to claim their cumulative fees in ETH
-    function claimUserFees() external {
-        int256 feesEarned = userCumulativeFeesEarned[msg.sender];
-        require(feesEarned > 0, "No fees to claim");
-        
-        uint256 ethToDistribute = uint256(feesEarned);
-        require(address(this).balance >= ethToDistribute, "Insufficient contract balance to pay fees");
-        
-        // Reset the user's cumulative fees to zero after claiming
-        userCumulativeFeesEarned[msg.sender] = 0;
-        
-        // Transfer the ETH equivalent of the fees to the user
-        payable(msg.sender).transfer(ethToDistribute);
-        
-        emit EthDistributedToUser(msg.sender, ethToDistribute);
-    }
-
     // BOT FUNCTIONS *******************************
-    // Function to record daily metrics slightly before midnight
-    function recordDailyMetrics(uint256 dayOrTimestamp) external {
-        uint256 prevDayOrTimestamp = dayOrTimestamp - 1 days; // Simplified, adjust if using different keying
-        
-        // Record aToken balance for ETH deposits and calculate yield
-        uint256 currentATokenBalance = IPool(aavePoolAddress).getATokenBalance(address(0), address(this));
-        dailyATokenBalance[dayOrTimestamp] = currentATokenBalance;
-        uint256 yieldEarned = currentATokenBalance > dailyATokenBalance[prevDayOrTimestamp] 
-            ? currentATokenBalance - dailyATokenBalance[prevDayOrTimestamp] 
-            : 0;
-        
-        // Record USDT debt balance and calculate interest cost
-        ( , uint256 totalDebtETH, , , , ) = IPoolExtended(aavePoolAddress).getUserAccountData(address(this));
-        dailyUsdtDebtBalance[dayOrTimestamp] = totalDebtETH; // Adjust for USDT decimals if needed
-        uint256 interestCost = totalDebtETH > dailyUsdtDebtBalance[prevDayOrTimestamp] 
-            ? totalDebtETH - dailyUsdtDebtBalance[prevDayOrTimestamp] 
-            : 0;
-        
-        // Record GMX funding for ETH short
-        int256 currentFunding = IGMX(gmxAddress).getPositionFunding(address(this), address(0), false);
-        dailyGmxFunding[dayOrTimestamp] = currentFunding;
-        int256 fundingChange = currentFunding - dailyGmxFunding[prevDayOrTimestamp];
-        
-        // Calculate net fees earned (yield - interest + funding)
-        // Note: Adjust for decimals and units as needed (e.g., convert all to USD or ETH equivalent)
-        int256 netFees = int256(yieldEarned) - int256(interestCost) + fundingChange;
-        dailyNetFeesEarned[dayOrTimestamp] = netFees;
-        
-        emit DailyMetricsRecorded(dayOrTimestamp, currentATokenBalance, totalDebtETH, currentFunding, netFees);
-    }
 
     // Function to process daily actions at midnight: handle deposits or redemptions based on net balance
     function processDailyActions(uint256 batchCycle) external {
         require(isMidnightProcessingTime(), "Not within processing window");
+
+        // Record daily metrics and calculate fees at the end of the day
+        // Using a timestamp or day identifier for metrics recording
+        uint256 dayOrTimestamp = block.timestamp / 1 days;
+        recordDailyMetrics(dayOrTimestamp);
+        calculateDailyContractFees(dayOrTimestamp);
 
         // Calculate net pending balance for the batch cycle (deposits minus redemptions in ETH terms)
         int256 netBalance = calculateNetPendingBalance(batchCycle);
@@ -330,6 +289,7 @@ contract AaveYieldLock {
         // Always call both distribution functions to ensure users receive their tokens and ETH
         this.distributeYTokens(batchCycle);
         this.distributeRedeemedEth(batchCycle);
+        
     }
 
     // SMART CONTRACT FUNCTIONS *******************************
@@ -440,8 +400,6 @@ contract AaveYieldLock {
         require(isWithinTransactionWindow(), "Not within processing window");
         // Iterate through users who requested redemption for this batch cycle
         address[] memory redeemers = batchRedeemers[batchCycle];
-        // commented out the below, not sure if needed
-        //uint256 totalYTokensRedeemed = totalRedemptionRequestsPerBatch[batchCycle];
         uint256 ethPrice = getLatestEthPrice();
         
         for (uint256 i = 0; i < redeemers.length; i++) {
@@ -452,6 +410,10 @@ contract AaveYieldLock {
                 uint256 ethToDistribute = (userYTokenAmount * 1e18) / ethPrice;
                 // Ensure contract has enough ETH to distribute
                 if (address(this).balance >= ethToDistribute) {
+                    // Automatically claim fees for the user to handle any negative fees
+                    if (userCumulativeFeesEarned[user] > 0) {
+                        distributeUserFees(user);
+                    }
                     payable(user).transfer(ethToDistribute);
                     pendingRedemptions[user] = 0;
                     emit EthDistributedToUser(user, ethToDistribute);
@@ -461,6 +423,23 @@ contract AaveYieldLock {
                 }
             }
         }
+    }
+
+    // Function for the contract to send fees to the user automatically after redemption
+    function distributeUserFees(address user) public {
+        int256 feesEarned = userCumulativeFeesEarned[user];
+        require(feesEarned > 0, "No fees to claim");
+        
+        uint256 ethToDistribute = uint256(feesEarned);
+        require(address(this).balance >= ethToDistribute, "Insufficient contract balance to pay fees");
+        
+        // Reset the user's cumulative fees to zero after claiming
+        userCumulativeFeesEarned[user] = 0;
+        
+        // Transfer the ETH equivalent of the fees to the user
+        payable(user).transfer(ethToDistribute);
+        
+        emit EthDistributedToUser(user, ethToDistribute);
     }
 
     // Function to get a user's total ETH contributions to the contract across all batch cycles
@@ -484,7 +463,7 @@ contract AaveYieldLock {
     }
 
     // Function to calculate daily contract fees for the Smart Contract (store snapshot for later claims)
-    function calculateDailyContractFees(uint256 dayOrTimestamp) external {
+    function calculateDailyContractFees(uint256 dayOrTimestamp) public {
         int256 netFees = dailyNetFeesEarned[dayOrTimestamp];
         if (netFees == 0) return;
         
@@ -546,6 +525,37 @@ contract AaveYieldLock {
         uint256 midnightStart = 0;
         uint256 midnightEnd = 5 * 60; // 5 minutes after midnight
         return currentTimeAdjusted >= midnightStart && currentTimeAdjusted <= midnightEnd;
+    }
+
+    // Function to record daily metrics slightly before midnight
+    function recordDailyMetrics(uint256 dayOrTimestamp) public {
+        uint256 prevDayOrTimestamp = dayOrTimestamp - 1 days; // Simplified, adjust if using different keying
+        
+        // Record aToken balance for ETH deposits and calculate yield
+        uint256 currentATokenBalance = IPool(aavePoolAddress).getATokenBalance(address(0), address(this));
+        dailyATokenBalance[dayOrTimestamp] = currentATokenBalance;
+        uint256 yieldEarned = currentATokenBalance > dailyATokenBalance[prevDayOrTimestamp] 
+            ? currentATokenBalance - dailyATokenBalance[prevDayOrTimestamp] 
+            : 0;
+        
+        // Record USDT debt balance and calculate interest cost
+        ( , uint256 totalDebtETH, , , , ) = IPoolExtended(aavePoolAddress).getUserAccountData(address(this));
+        dailyUsdtDebtBalance[dayOrTimestamp] = totalDebtETH; // Adjust for USDT decimals if needed
+        uint256 interestCost = totalDebtETH > dailyUsdtDebtBalance[prevDayOrTimestamp] 
+            ? totalDebtETH - dailyUsdtDebtBalance[prevDayOrTimestamp] 
+            : 0;
+        
+        // Record GMX funding for ETH short
+        int256 currentFunding = IGMX(gmxAddress).getPositionFunding(address(this), address(0), false);
+        dailyGmxFunding[dayOrTimestamp] = currentFunding;
+        int256 fundingChange = currentFunding - dailyGmxFunding[prevDayOrTimestamp];
+        
+        // Calculate net fees earned (yield - interest + funding)
+        // Note: Adjust for decimals and units as needed (e.g., convert all to USD or ETH equivalent)
+        int256 netFees = int256(yieldEarned) - int256(interestCost) + fundingChange;
+        dailyNetFeesEarned[dayOrTimestamp] = netFees;
+        
+        emit DailyMetricsRecorded(dayOrTimestamp, currentATokenBalance, totalDebtETH, currentFunding, netFees);
     }
 
     // Helper Function to calculate net pending balance for a batch cycle (ETH deposits minus ETH equivalent of redemptions)
