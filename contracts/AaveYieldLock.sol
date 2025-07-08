@@ -104,6 +104,11 @@ contract AaveYieldLock {
     
     YToken public yToken;
     
+    // Array to track all unique depositors
+    address[] public allDepositors;
+    // Mapping to check if an address is already in allDepositors to avoid duplicates
+    mapping(address => bool) public isDepositor;
+    
     // Keep mappings and variables related to ETH operations for the smart contract
     mapping(address => uint) public eligibleCycleDay;
     uint public totalATokenBalance;
@@ -118,6 +123,7 @@ contract AaveYieldLock {
     // Configuration variables for design and testing
     uint public transactionsPerDay = 1; // Number of bulk deposits to Aave per day (default: 1)
     uint256 public usdtBorrowPercentage = 70; // Percentage of ETH value to borrow as USDT (default: 70%)
+    uint256 public depositorsPerFeeBatch = 50; // Number of depositors to process per batch for fee distribution (configurable)
 
     // Mapping to track individual user deposits to Aave
     mapping(address => uint256) public userDepositedToAave; // Tracks per user ETH deposited to Aave
@@ -191,7 +197,7 @@ contract AaveYieldLock {
     }
 
     // Function to update configuration parameters (only callable by owner)
-    function updateConfiguration(uint _transactionsPerDay, uint _cutoffHourHKT, uint _cutoffMinuteHKT, uint _borrowPercentage, uint _startHourHKT, uint _startMinuteHKT, uint _endHourHKT, uint _endMinuteHKT) external onlyOwner {
+    function updateConfiguration(uint _transactionsPerDay, uint _cutoffHourHKT, uint _cutoffMinuteHKT, uint _borrowPercentage, uint _startHourHKT, uint _startMinuteHKT, uint _endHourHKT, uint _endMinuteHKT, uint _depositorsPerFeeBatch) external onlyOwner {
         require(_transactionsPerDay > 0, "Transactions per day must be greater than 0");
         require(_cutoffHourHKT < 24, "Cutoff hour must be between 0 and 23");
         require(_cutoffMinuteHKT < 60, "Cutoff minute must be between 0 and 59");
@@ -200,8 +206,10 @@ contract AaveYieldLock {
         require(_endHourHKT < 24, "End hour must be between 0 and 23");
         require(_endMinuteHKT < 60, "End minute must be between 0 and 59");
         require(_borrowPercentage == 40, "Borrow percentage must be exactly 40");
+        require(_depositorsPerFeeBatch > 0, "Depositors per fee batch must be greater than 0");
         transactionsPerDay = _transactionsPerDay;
         usdtBorrowPercentage = _borrowPercentage;
+        depositorsPerFeeBatch = _depositorsPerFeeBatch;
         // Store start and end times for transaction window (default set to start at 00:15 and end at 23:45)
         startHourHKT = _startHourHKT;
         startMinuteHKT = _startMinuteHKT;
@@ -211,6 +219,7 @@ contract AaveYieldLock {
     }
 
     // USER FUNCTIONS *******************************
+    
     // Function for users to send ETH and mint YTokens (previously called deposit)
     function mintYToken() external payable {
         require(msg.value > 0, "ETH amount must be greater than 0");
@@ -222,7 +231,12 @@ contract AaveYieldLock {
         eligibleCycleDay[msg.sender] = nextMidnight;
         // Track user's contribution to this batch cycle
         if (userBatchContributions[msg.sender][nextMidnight] == 0) {
-        batchContributors[nextMidnight].push(msg.sender);
+            batchContributors[nextMidnight].push(msg.sender);
+            // Add to allDepositors if not already added
+            if (!isDepositor[msg.sender]) {
+                allDepositors.push(msg.sender);
+                isDepositor[msg.sender] = true;
+            }
         }
         userBatchContributions[msg.sender][nextMidnight] += msg.value;
         totalBatchContributions[nextMidnight] += msg.value;
@@ -265,7 +279,7 @@ contract AaveYieldLock {
 
     // BOT FUNCTIONS *******************************
 
-    // Function to process daily actions at midnight: handle deposits or redemptions based on net balance
+    // Function to process daily actions at midnight: handle deposits or redemptions based on net balance, record daily metrics, calculate fees, and distribute fees to depositors.
     function processDailyActions(uint256 batchCycle) external {
         require(isMidnightProcessingTime(), "Not within processing window");
 
@@ -289,7 +303,48 @@ contract AaveYieldLock {
         // Always call both distribution functions to ensure users receive their tokens and ETH
         this.distributeYTokens(batchCycle);
         this.distributeRedeemedEth(batchCycle);
+
+        // Calculate daily fees for all depositors in configurable batch sizes
+        uint256 totalDepositors = allDepositors.length;
+        if (totalDepositors > 0) {
+            uint256 startIndex = 0;
+            while (startIndex < totalDepositors) {
+                uint256 endIndex = startIndex + depositorsPerFeeBatch - 1;
+                if (endIndex >= totalDepositors) {
+                    endIndex = totalDepositors - 1;
+                }
+                this.calculateDailyFeesForRange(dayOrTimestamp, startIndex, endIndex);
+                startIndex = endIndex + 1;
+            }
+        }
+    }
+
+    // Function to get the total number of depositors
+    function getDepositorCount() external view returns (uint256) {
+        return allDepositors.length;
+    }
+    
+    // Bot function to calculate daily fees for a batch of depositors
+    function calculateDailyFeesForRange(uint256 dayOrTimestamp, uint256 startIndex, uint256 endIndex) external onlyOwner {
+        FeeSnapshot memory snapshot = historicalFeeSnapshots[dayOrTimestamp];
+        require(snapshot.netFees != 0, "No fees recorded for this day");
+        require(startIndex <= endIndex, "Invalid index range");
+        require(endIndex < allDepositors.length, "End index out of bounds");
         
+        for (uint256 i = startIndex; i <= endIndex; i++) {
+            address user = allDepositors[i];
+            if (!hasClaimed[user][dayOrTimestamp]) {
+                uint256 userProportion = this.getUserShareOfDailyFees(user);
+                int256 userFeeShare = (snapshot.netFees * int256(userProportion)) / int256(1e18);
+                userCumulativeFeesEarned[user] += userFeeShare;
+                hasClaimed[user][dayOrTimestamp] = true;
+                emit DailyUserFees(user, dayOrTimestamp, userFeeShare);
+            }
+        }
+        // If this is the last range for the day, mark as distributed
+        if (endIndex == allDepositors.length - 1) {
+            historicalFeeSnapshots[dayOrTimestamp].isDistributed = true;
+        }
     }
 
     // SMART CONTRACT FUNCTIONS *******************************
@@ -392,10 +447,13 @@ contract AaveYieldLock {
         pendingRedemptionBalance = (pendingRedemptionBalance > totalEthToWithdraw) ? (pendingRedemptionBalance - totalEthToWithdraw) : 0;
         totalRedemptionRequestsPerBatch[batchCycle] = 0; // Reset for this batch
         
+        // Distribute redeemed ETH and associated fees to users
+        this.distributeRedeemedEth(batchCycle);
+        
         emit BulkRedemptionProcessed(totalEthToWithdraw, usdtToRepay, ethShortToCover, block.timestamp);
     }
 
-    // Function to distribute redeemed ETH to users after bulk redemption (call after bulkRedemptionFromAave).  This is the end of the REDEMPTION process.
+    // Function to distribute redeemed ETH to users after bulk redemption (call after bulkRedemptionFromAave).  Includes distribution of user fees.  This is the end of the REDEMPTION process.
     function distributeRedeemedEth(uint256 batchCycle) external {
         require(isWithinTransactionWindow(), "Not within processing window");
         // Iterate through users who requested redemption for this batch cycle
@@ -469,7 +527,6 @@ contract AaveYieldLock {
         
         // Determine the batch cycle timestamp associated with this day
         // For simplicity, assume dayOrTimestamp matches the batch cycle timestamp (e.g., fees on Day 3 are for batch at 12:00 AM Day 3)
-        // In practice, you might need to adjust this based on your timing logic
         uint256 batchCycleTimestamp = dayOrTimestamp;
         uint256 totalBatchContrib = totalBatchContributions[batchCycleTimestamp];
         if (totalBatchContrib == 0) return;
@@ -479,26 +536,6 @@ contract AaveYieldLock {
             historicalFeeSnapshots[dayOrTimestamp] = FeeSnapshot(netFees, totalBatchContrib, batchCycleTimestamp, false);
             emit DailyFeesDistributed(dayOrTimestamp, netFees, totalBatchContrib, batchCycleTimestamp);
         }
-    }
-
-    // Function to calculate users' daily share of fees for a specific day based on their total ETH deposited
-    function calculateDailyUserFees(uint256 dayOrTimestamp) external {
-        FeeSnapshot memory snapshot = historicalFeeSnapshots[dayOrTimestamp];
-        require(snapshot.netFees != 0, "No fees recorded for this day");
-        require(!hasClaimed[msg.sender][dayOrTimestamp], "Fees already claimed for this day");
-        
-        // Calculate user's share based on their total ETH deposited relative to total deposited to Aave
-        if (totalEthDepositedToAave == 0) {
-            return;
-        }
-        uint256 userProportion = this.getUserShareOfDailyFees(msg.sender);
-        int256 userFeeShare = (snapshot.netFees * int256(userProportion)) / int256(1e18);
-        userCumulativeFeesEarned[msg.sender] += userFeeShare;
-        hasClaimed[msg.sender][dayOrTimestamp] = true;
-        
-        // Optionally, if fees are in ETH or another token, transfer them here
-        // For now, just update the cumulative tracking
-        emit DailyUserFees(msg.sender, dayOrTimestamp, userFeeShare);
     }
 
     // HELPER FUNCTIONS *******************************
