@@ -67,7 +67,7 @@ event DailyFeesDistributed(uint256 timestamp, int256 netFees, uint256 totalBatch
 event DailyUserFees(address indexed user, uint256 dayOrTimestamp, int256 feeAmount);
 
 // Event for redemption request queued
-event RedemptionRequestQueued(address indexed user, uint256 yTokenAmount, uint256 batchCycle, uint256 timestamp);
+event RedemptionRequestQueued(address indexed user, uint256 yTokenAmount, uint256 batchCycle, uint256 timestamp, uint256 userTotalBalance, bool isPartialRedemption);
 
 // Event for bulk redemption processed from Aave, GMX, and USDT repayment
 event BulkRedemptionProcessed(uint256 totalEthWithdrawn, uint256 usdtRepaid, uint256 ethShortCovered, uint256 timestamp);
@@ -124,6 +124,8 @@ contract AaveYieldLock {
     uint public transactionsPerDay = 1; // Number of bulk deposits to Aave per day (default: 1)
     uint256 public usdtBorrowPercentage = 70; // Percentage of ETH value to borrow as USDT (default: 70%)
     uint256 public depositorsPerFeeBatch = 50; // Number of depositors to process per batch for fee distribution (configurable)
+    uint256 public processingDelaySeconds = 23 * 3600; // Delay in seconds before processDailyActions can be called again (default: 23 hours)
+    uint256 public lastProcessedTimestamp; // Tracks the last time processDailyActions was successfully called
 
     // Mapping to track individual user deposits to Aave
     mapping(address => uint256) public userDepositedToAave; // Tracks per user ETH deposited to Aave
@@ -163,8 +165,8 @@ contract AaveYieldLock {
 
     // Add state variables for tracking pending redemptions
     uint256 public pendingRedemptionBalance; // Total ETH value requested for redemption
-    mapping(address => uint256) public pendingRedemptions; // Tracks per-user pending redemption in YToken amount
-    mapping(address => uint256) public redemptionBatchCycle; // Tracks the batch cycle for user's redemption request
+    mapping(address => mapping(uint256 => uint256)) public pendingRedemptionsPerBatch; // Tracks per-user pending redemption in YToken amount per batch cycle
+    mapping(address => uint256) public redemptionBatchCycle; // Tracks the batch cycle for user's redemption request (for simplicity, tracks latest batch)
     mapping(uint256 => uint256) public totalRedemptionRequestsPerBatch; // Tracks total YToken amount per batch cycle for redemption
 
     // Add state variables for transaction window times
@@ -197,7 +199,7 @@ contract AaveYieldLock {
     }
 
     // Function to update configuration parameters (only callable by owner)
-    function updateConfiguration(uint _transactionsPerDay, uint _cutoffHourHKT, uint _cutoffMinuteHKT, uint _borrowPercentage, uint _startHourHKT, uint _startMinuteHKT, uint _endHourHKT, uint _endMinuteHKT, uint _depositorsPerFeeBatch) external onlyOwner {
+    function updateConfiguration(uint _transactionsPerDay, uint _cutoffHourHKT, uint _cutoffMinuteHKT, uint _borrowPercentage, uint _startHourHKT, uint _startMinuteHKT, uint _endHourHKT, uint _endMinuteHKT, uint _depositorsPerFeeBatch, uint256 _processingDelaySeconds) external onlyOwner {
         require(_transactionsPerDay > 0, "Transactions per day must be greater than 0");
         require(_cutoffHourHKT < 24, "Cutoff hour must be between 0 and 23");
         require(_cutoffMinuteHKT < 60, "Cutoff minute must be between 0 and 59");
@@ -207,9 +209,11 @@ contract AaveYieldLock {
         require(_endMinuteHKT < 60, "End minute must be between 0 and 59");
         require(_borrowPercentage == 40, "Borrow percentage must be exactly 40");
         require(_depositorsPerFeeBatch > 0, "Depositors per fee batch must be greater than 0");
+        require(_processingDelaySeconds >= 3600, "Processing delay must be at least 1 hour");
         transactionsPerDay = _transactionsPerDay;
         usdtBorrowPercentage = _borrowPercentage;
         depositorsPerFeeBatch = _depositorsPerFeeBatch;
+        processingDelaySeconds = _processingDelaySeconds;
         // Store start and end times for transaction window (default set to start at 00:15 and end at 23:45)
         startHourHKT = _startHourHKT;
         startMinuteHKT = _startMinuteHKT;
@@ -247,6 +251,11 @@ contract AaveYieldLock {
         emit YTokenMinted(msg.sender, msg.value, 0, block.timestamp, nextMidnight);
     }
 
+    // Function for users to check their accumulated fees without redeeming
+    function getAccumulatedFees() external view returns (int256) {
+        return userCumulativeFeesEarned[msg.sender];
+    }
+
     // Function for users to request redemption of YTokens (queues the request instead of immediate processing)
     function requestRedemption(uint256 yTokenAmount) external {
         require(isWithinTransactionWindow(), "Not within deposit window");
@@ -262,19 +271,23 @@ contract AaveYieldLock {
         uint256 SECONDS_PER_DAY = 86400;
         uint256 nextMidnight = ((block.timestamp / SECONDS_PER_DAY) + 1) * SECONDS_PER_DAY;
 
-        // Queue the redemption request
-        if (pendingRedemptions[msg.sender] == 0) {
-        batchRedeemers[nextMidnight].push(msg.sender);
+        // Queue the redemption request for the specific batch cycle
+        if (pendingRedemptionsPerBatch[msg.sender][nextMidnight] == 0) {
+            batchRedeemers[nextMidnight].push(msg.sender);
         }
-        pendingRedemptions[msg.sender] += yTokenAmount;
-        redemptionBatchCycle[msg.sender] = nextMidnight;
+        pendingRedemptionsPerBatch[msg.sender][nextMidnight] += yTokenAmount;
+        redemptionBatchCycle[msg.sender] = nextMidnight; // Track latest batch for reference
         totalRedemptionRequestsPerBatch[nextMidnight] += yTokenAmount;
 
         // Estimate ETH value for pending redemption balance (for reference, will be recalculated during processing)
         uint256 ethPrice = getLatestEthPrice();
         uint256 ethValue = (yTokenAmount * 1e18) / ethPrice; // Rough estimate, YToken pegged at $1
         pendingRedemptionBalance += ethValue;
-        emit RedemptionRequestQueued(msg.sender, yTokenAmount, nextMidnight, block.timestamp);
+
+        // Determine if this is a partial redemption
+        uint256 userTotalBalance = yToken.balanceOf(msg.sender) + yTokenAmount; // Balance before transfer + amount transferred
+        bool isPartial = yTokenAmount < userTotalBalance;
+        emit RedemptionRequestQueued(msg.sender, yTokenAmount, nextMidnight, block.timestamp, userTotalBalance, isPartial);
     }
 
     // BOT FUNCTIONS *******************************
@@ -282,6 +295,7 @@ contract AaveYieldLock {
     // Function to process daily actions at midnight: handle deposits or redemptions based on net balance, record daily metrics, calculate fees, and distribute fees to depositors.
     function processDailyActions(uint256 batchCycle) external {
         require(isMidnightProcessingTime(), "Not within processing window");
+        require(block.timestamp >= lastProcessedTimestamp + processingDelaySeconds, "Daily actions already processed for this window");
 
         // Record daily metrics and calculate fees at the end of the day
         // Using a timestamp or day identifier for metrics recording
@@ -317,6 +331,9 @@ contract AaveYieldLock {
                 startIndex = endIndex + 1;
             }
         }
+
+        // Update the last processed timestamp after successful execution
+        lastProcessedTimestamp = block.timestamp;
     }
 
     // Function to get the total number of depositors
@@ -462,19 +479,40 @@ contract AaveYieldLock {
         
         for (uint256 i = 0; i < redeemers.length; i++) {
             address user = redeemers[i];
-            uint256 userYTokenAmount = pendingRedemptions[user];
-            if (userYTokenAmount > 0 && redemptionBatchCycle[user] == batchCycle) {
+            uint256 userYTokenAmount = pendingRedemptionsPerBatch[user][batchCycle];
+            if (userYTokenAmount > 0) {
                 // Calculate ETH to distribute based on YToken amount (pegged to USD)
                 uint256 ethToDistribute = (userYTokenAmount * 1e18) / ethPrice;
-                // Ensure contract has enough ETH to distribute
-                if (address(this).balance >= ethToDistribute) {
-                    // Automatically claim fees for the user to handle any negative fees
-                    if (userCumulativeFeesEarned[user] > 0) {
-                        distributeUserFees(user);
+                // Adjust ETH distribution based on user fees (positive or negative), prorated for partial redemption
+                int256 feesEarned = userCumulativeFeesEarned[user];
+                uint256 finalEthToDistribute = ethToDistribute;
+                if (feesEarned != 0) {
+                    // Calculate total YToken balance before redemption to determine proportion
+                    uint256 userTotalYTokensBefore = userYTokenAmount + yToken.balanceOf(user);
+                    if (userTotalYTokensBefore > 0) {
+                        // Prorate fees based on redeemed YToken amount vs total holdings
+                        int256 proratedFees = (feesEarned * int256(userYTokenAmount)) / int256(userTotalYTokensBefore);
+                        if (proratedFees > 0) {
+                            // Positive fees: add to the ETH to distribute
+                            finalEthToDistribute += uint256(proratedFees);
+                        } else {
+                            // Negative fees: reduce the ETH to distribute
+                            uint256 feeDeduction = uint256(-proratedFees);
+                            if (feeDeduction <= finalEthToDistribute) {
+                                finalEthToDistribute -= feeDeduction;
+                            } else {
+                                finalEthToDistribute = 0; // Prevent negative distribution
+                            }
+                        }
+                        // Deduct only the prorated portion from cumulative fees
+                        userCumulativeFeesEarned[user] -= proratedFees;
                     }
-                    payable(user).transfer(ethToDistribute);
-                    pendingRedemptions[user] = 0;
-                    emit EthDistributedToUser(user, ethToDistribute);
+                }
+                // Ensure contract has enough ETH to distribute
+                if (address(this).balance >= finalEthToDistribute) {
+                    payable(user).transfer(finalEthToDistribute);
+                    pendingRedemptionsPerBatch[user][batchCycle] = 0;
+                    emit EthDistributedToUser(user, finalEthToDistribute);
                 } else {
                     // If insufficient balance, log or handle partial distribution if needed
                     emit NoActionNeeded(block.timestamp); // Placeholder for logging insufficient balance
