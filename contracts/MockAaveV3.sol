@@ -39,6 +39,11 @@ contract MockAaveV3 {
         usdtAddress = _usdtAddress;
     }
 
+    // Function to set or update the USDT address (for testing flexibility)
+    function setUsdtAddress(address _usdtAddress) external {
+        usdtAddress = _usdtAddress;
+    }
+
     // Simulate supplying assets to Aave (for ETH, asset is address(0))
     function supply(address asset, uint256 amount, address onBehalfOf, uint16 _referralCode) external payable {
         require(asset == address(0), "Mock only supports ETH supply");
