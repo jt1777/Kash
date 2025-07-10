@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.28;
 
-import './YToken.sol';
+import './KashEthToken.sol';
 import '@openzeppelin/contracts/token/ERC20/IERC20.sol';
 
 // interface with mock Aave contract
@@ -27,11 +27,11 @@ interface IMockGMX {
     function swap(address tokenIn, address tokenOut, uint256 amountIn, uint256 minAmountOut, address recipient) external returns (uint256 amountOut);
 }
 
-// Event for YToken redemption and withdrawal
-event YTokenRedeemed(address indexed user, uint256 yTokenAmount, uint256 ethWithdrawn, uint256 batchCycle);
+// Event for KashEth redemption and withdrawal
+event KashEthRedeemed(address indexed user, uint256 kashEthAmount, uint256 ethWithdrawn, uint256 batchCycle);
 
-// Event for user sending ETH to mint YTokens
-event YTokenMinted(address indexed user, uint256 ethAmount, uint256 yTokenAmount, uint256 timestamp, uint256 batchCycle);
+// Event for user sending ETH to mint KashEths
+event KashEthMinted(address indexed user, uint256 ethAmount, uint256 kashEthAmount, uint256 timestamp, uint256 batchCycle);
 
 // Event for smart contract depositing ETH to Aave
 event BulkDepositToAave(uint256 amount, uint256 timestamp);
@@ -67,7 +67,7 @@ event DailyFeesDistributed(uint256 timestamp, int256 netFees, uint256 totalBatch
 event DailyUserFees(address indexed user, uint256 dayOrTimestamp, int256 feeAmount);
 
 // Event for redemption request queued
-event RedemptionRequestQueued(address indexed user, uint256 yTokenAmount, uint256 batchCycle, uint256 timestamp, uint256 userTotalBalance, bool isPartialRedemption);
+event RedemptionRequestQueued(address indexed user, uint256 kashEthAmount, uint256 batchCycle, uint256 timestamp, uint256 userTotalBalance, bool isPartialRedemption);
 
 // Event for bulk redemption processed from Aave, GMX, and USDT repayment
 event BulkRedemptionProcessed(uint256 totalEthWithdrawn, uint256 usdtRepaid, uint256 ethShortCovered, uint256 timestamp);
@@ -90,19 +90,19 @@ interface IGMX {
 }
 
 /**
- * @title AaveYieldLock
- * @dev this is a smart contract that allows users to deposit ETH and mint YTokens.
- * YTokens are short for Yield Tokens.  The yield comes from funding earned by shorting Eth on GMX, a perpetual DEX.  The smart contract sends Eth to Aave, then borrows USDT.  Part of the USDT is used to swap for more Eth, and part is sent to GMX to be used as collateral to short the full Eth exposure.  Net fees earned from these transactions are paid out to the users as yield.
+ * @title KashYield
+ * @dev this is a smart contract that allows users to deposit ETH and mint KashEths.
+ * The yield from KashEths comes from funding earned by shorting Eth on GMX, a perpetual DEX.  The smart contract sends Eth to Aave, then borrows USDT.  The USDT is sent to GMX and is used to swap for more Eth.  The Eth is then used as collateral short the full leveraged Eth exposure.  Net fees earned from these transactions are paid out to the users as yield.
  */
 
-contract AaveYieldLock {
+contract KashYield {
     address payable public owner;
     address public aavePoolAddress;
     address public priceFeedAddress;
     address public usdtAddress;
     address public gmxAddress;
     
-    YToken public yToken;
+    KashEth public kashEth;
     
     // Array to track all unique depositors
     address[] public allDepositors;
@@ -165,9 +165,9 @@ contract AaveYieldLock {
 
     // Add state variables for tracking pending redemptions
     uint256 public pendingRedemptionBalance; // Total ETH value requested for redemption
-    mapping(address => mapping(uint256 => uint256)) public pendingRedemptionsPerBatch; // Tracks per-user pending redemption in YToken amount per batch cycle
+    mapping(address => mapping(uint256 => uint256)) public pendingRedemptionsPerBatch; // Tracks per-user pending redemption in KashEth amount per batch cycle
     mapping(address => uint256) public redemptionBatchCycle; // Tracks the batch cycle for user's redemption request (for simplicity, tracks latest batch)
-    mapping(uint256 => uint256) public totalRedemptionRequestsPerBatch; // Tracks total YToken amount per batch cycle for redemption
+    mapping(uint256 => uint256) public totalRedemptionRequestsPerBatch; // Tracks total KashEth amount per batch cycle for redemption
 
     // Add state variables for transaction window times
     uint public startHourHKT = 0; // Default start hour for transaction window
@@ -186,10 +186,10 @@ contract AaveYieldLock {
         usdtAddress = _usdtAddress;
         priceFeedAddress = _priceFeedAddress;
         gmxAddress = _gmxAddress;
-        yToken = new YToken();
-        yToken.transferOwnership(msg.sender); // Ensure owner can control minting/burning if needed
+        kashEth = new KashEth();
+        kashEth.transferOwnership(msg.sender); // Ensure owner can control minting/burning if needed
         
-        emit YTokenMinted(msg.sender, msg.value, 0, block.timestamp, 0);
+        emit KashEthMinted(msg.sender, msg.value, 0, block.timestamp, 0);
     }
 
     // Modifier to restrict functions to contract owner
@@ -224,8 +224,8 @@ contract AaveYieldLock {
 
     // USER FUNCTIONS *******************************
     
-    // Function for users to send ETH and mint YTokens (previously called deposit)
-    function mintYToken() external payable {
+    // Function for users to send ETH and mint KashEths (previously called deposit)
+    function mintKashEth() external payable {
         require(msg.value > 0, "ETH amount must be greater than 0");
         require(isWithinTransactionWindow(), "Not within deposit window");
         pendingDepositBalance += msg.value;
@@ -247,8 +247,8 @@ contract AaveYieldLock {
         // Update user's cumulative ETH contributed total
         userTotalEthDeposited[msg.sender] += msg.value;
 
-        // Do NOT mint YTokens immediately. Minting will occur after batch processing.
-        emit YTokenMinted(msg.sender, msg.value, 0, block.timestamp, nextMidnight);
+        // Do NOT mint KashEths immediately. Minting will occur after batch processing.
+        emit KashEthMinted(msg.sender, msg.value, 0, block.timestamp, nextMidnight);
     }
 
     // Function for users to check their accumulated fees without redeeming
@@ -256,16 +256,16 @@ contract AaveYieldLock {
         return userCumulativeFeesEarned[msg.sender];
     }
 
-    // Function for users to request redemption of YTokens (queues the request instead of immediate processing)
-    function requestRedemption(uint256 yTokenAmount) external {
+    // Function for users to request redemption of KashEths (queues the request instead of immediate processing)
+    function requestRedemption(uint256 kashEthAmount) external {
         require(isWithinTransactionWindow(), "Not within deposit window");
-        require(yToken.balanceOf(msg.sender) >= yTokenAmount, "Insufficient YToken balance");
-        uint256 totalYTokenSupply = yToken.totalSupply();
-        require(totalYTokenSupply > 0, "No YToken in circulation");
+        require(kashEth.balanceOf(msg.sender) >= kashEthAmount, "Insufficient KashEth balance");
+        uint256 totalKashEthSupply = kashEth.totalSupply();
+        require(totalKashEthSupply > 0, "No KashEth in circulation");
 
-        // User must transfer YTokens to this contract for redemption
-        bool success = yToken.transferFrom(msg.sender, address(this), yTokenAmount);
-        require(success, "YToken transfer failed");
+        // User must transfer KashEths to this contract for redemption
+        bool success = kashEth.transferFrom(msg.sender, address(this), kashEthAmount);
+        require(success, "KashEth transfer failed");
 
         // Calculate the next midnight (00:00 UTC) timestamp for batching
         uint256 SECONDS_PER_DAY = 86400;
@@ -275,19 +275,19 @@ contract AaveYieldLock {
         if (pendingRedemptionsPerBatch[msg.sender][nextMidnight] == 0) {
             batchRedeemers[nextMidnight].push(msg.sender);
         }
-        pendingRedemptionsPerBatch[msg.sender][nextMidnight] += yTokenAmount;
+        pendingRedemptionsPerBatch[msg.sender][nextMidnight] += kashEthAmount;
         redemptionBatchCycle[msg.sender] = nextMidnight; // Track latest batch for reference
-        totalRedemptionRequestsPerBatch[nextMidnight] += yTokenAmount;
+        totalRedemptionRequestsPerBatch[nextMidnight] += kashEthAmount;
 
         // Estimate ETH value for pending redemption balance (for reference, will be recalculated during processing)
         uint256 ethPrice = getLatestEthPrice();
-        uint256 ethValue = (yTokenAmount * 1e18) / ethPrice; // Rough estimate, YToken pegged at $1
+        uint256 ethValue = (kashEthAmount * 1e18) / ethPrice; // Rough estimate, KashEth pegged at $1
         pendingRedemptionBalance += ethValue;
 
         // Determine if this is a partial redemption
-        uint256 userTotalBalance = yToken.balanceOf(msg.sender) + yTokenAmount; // Balance before transfer + amount transferred
-        bool isPartial = yTokenAmount < userTotalBalance;
-        emit RedemptionRequestQueued(msg.sender, yTokenAmount, nextMidnight, block.timestamp, userTotalBalance, isPartial);
+        uint256 userTotalBalance = kashEth.balanceOf(msg.sender) + kashEthAmount; // Balance before transfer + amount transferred
+        bool isPartial = kashEthAmount < userTotalBalance;
+        emit RedemptionRequestQueued(msg.sender, kashEthAmount, nextMidnight, block.timestamp, userTotalBalance, isPartial);
     }
 
     // BOT FUNCTIONS *******************************
@@ -315,7 +315,7 @@ contract AaveYieldLock {
         }
         
         // Always call both distribution functions to ensure users receive their tokens and ETH
-        this.distributeYTokens(batchCycle);
+        this.distributeKashEths(batchCycle);
         this.distributeRedeemedEth(batchCycle);
 
         // Calculate daily fees for all depositors in configurable batch sizes
@@ -404,8 +404,8 @@ contract AaveYieldLock {
         }
     }
 
-    // Function to distribute YTokens to users after batch processing, this is the end of the MINTING process
-    function distributeYTokens(uint256 batchCycle) external {
+    // Function to distribute KashEths to users after batch processing, this is the end of the MINTING process
+    function distributeKashEths(uint256 batchCycle) external {
         uint256 totalForBatch = totalBatchContributions[batchCycle];
         require(totalForBatch > 0, "No ETH contributions for this batch");
         address[] memory contributors = batchContributors[batchCycle];
@@ -413,9 +413,9 @@ contract AaveYieldLock {
             address user = contributors[i];
             uint256 userContribution = userBatchContributions[user][batchCycle];
             uint256 ethPrice = getLatestEthPrice();
-            uint256 yTokenAmount = (userContribution * ethPrice) / 1e18;
-            yToken.mint(user, yTokenAmount);
-            emit YTokenMinted(user, userContribution, yTokenAmount, block.timestamp, batchCycle);
+            uint256 kashEthAmount = (userContribution * ethPrice) / 1e18;
+            kashEth.mint(user, kashEthAmount);
+            emit KashEthMinted(user, userContribution, kashEthAmount, block.timestamp, batchCycle);
         }
     }
 
@@ -479,19 +479,19 @@ contract AaveYieldLock {
         
         for (uint256 i = 0; i < redeemers.length; i++) {
             address user = redeemers[i];
-            uint256 userYTokenAmount = pendingRedemptionsPerBatch[user][batchCycle];
-            if (userYTokenAmount > 0) {
-                // Calculate ETH to distribute based on YToken amount (pegged to USD)
-                uint256 ethToDistribute = (userYTokenAmount * 1e18) / ethPrice;
+            uint256 userKashEthAmount = pendingRedemptionsPerBatch[user][batchCycle];
+            if (userKashEthAmount > 0) {
+                // Calculate ETH to distribute based on KashEth amount (pegged to USD)
+                uint256 ethToDistribute = (userKashEthAmount * 1e18) / ethPrice;
                 // Adjust ETH distribution based on user fees (positive or negative), prorated for partial redemption
                 int256 feesEarned = userCumulativeFeesEarned[user];
                 uint256 finalEthToDistribute = ethToDistribute;
                 if (feesEarned != 0) {
-                    // Calculate total YToken balance before redemption to determine proportion
-                    uint256 userTotalYTokensBefore = userYTokenAmount + yToken.balanceOf(user);
-                    if (userTotalYTokensBefore > 0) {
-                        // Prorate fees based on redeemed YToken amount vs total holdings
-                        int256 proratedFees = (feesEarned * int256(userYTokenAmount)) / int256(userTotalYTokensBefore);
+                    // Calculate total KashEth balance before redemption to determine proportion
+                    uint256 userTotalKashEthsBefore = userKashEthAmount + kashEth.balanceOf(user);
+                    if (userTotalKashEthsBefore > 0) {
+                        // Prorate fees based on redeemed KashEth amount vs total holdings
+                        int256 proratedFees = (feesEarned * int256(userKashEthAmount)) / int256(userTotalKashEthsBefore);
                         if (proratedFees > 0) {
                             // Positive fees: add to the ETH to distribute
                             finalEthToDistribute += uint256(proratedFees);
@@ -636,9 +636,9 @@ contract AaveYieldLock {
     // Helper Function to calculate net pending balance for a batch cycle (ETH deposits minus ETH equivalent of redemptions)
     function calculateNetPendingBalance(uint256 batchCycle) public view returns (int256) {
         uint256 totalDeposits = totalBatchContributions[batchCycle]; // ETH to be deposited for this batch
-        uint256 totalRedemptions = totalRedemptionRequestsPerBatch[batchCycle]; // YToken amount (USD pegged)
+        uint256 totalRedemptions = totalRedemptionRequestsPerBatch[batchCycle]; // KashEth amount (USD pegged)
         
-        // Convert redemption YToken amount to ETH equivalent using current ETH price
+        // Convert redemption KashEth amount to ETH equivalent using current ETH price
         uint256 ethPrice = getLatestEthPrice(); // Price in 18 decimals (USD per ETH)
         uint256 redemptionEthEquivalent = (totalRedemptions * 1e18) / ethPrice; // Convert USD to ETH
         
@@ -647,9 +647,9 @@ contract AaveYieldLock {
         return netBalance;
     }
 
-    // Helper function to get total YToken supply (for proportion calculations)
-    function getTotalYTokenSupply() public view returns (uint256) {
-        return yToken.totalSupply();
+    // Helper function to get total KashEth supply (for proportion calculations)
+    function getTotalKashEthSupply() public view returns (uint256) {
+        return kashEth.totalSupply();
     }
 
     // to determine how much USDT to borrow from Aave

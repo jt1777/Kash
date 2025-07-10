@@ -18,10 +18,18 @@ contract MockUSDT {
     event Transfer(address indexed from, address indexed to, uint256 value);
     event Approval(address indexed owner, address indexed spender, uint256 value);
 
+    address public owner;
+
     constructor(uint256 initialSupply) {
+        owner = msg.sender;
         totalSupply = initialSupply * 10 ** decimals;
         balanceOf[msg.sender] = totalSupply;
         emit Transfer(address(0), msg.sender, totalSupply);
+    }
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Only owner can call this function");
+        _;
     }
 
     function transfer(address to, uint256 value) external returns (bool) {
@@ -51,7 +59,7 @@ contract MockUSDT {
     }
 
     // Minting function for testing purposes (e.g., to simulate borrow)
-    function mint(address to, uint256 value) external {
+    function mint(address to, uint256 value) external onlyOwner {
         require(to != address(0), "Invalid recipient");
         totalSupply += value;
         balanceOf[to] += value;
