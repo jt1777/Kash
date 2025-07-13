@@ -51,6 +51,9 @@ contract MockGMX {
     event CollateralDeposited(address indexed user, uint256 amount);
     event PositionOpened(uint256 indexed positionId, address indexed owner, uint256 collateral, uint256 leverage, bool isLong, uint256 entryPrice);
     event PositionClosed(uint256 indexed positionId, address indexed owner, int256 profitLoss, uint256 collateralReturned);
+    event DebugLog(string message, uint256 value);
+    event ShortPositionOpened(address indexed account, uint256 collateralEth, uint256 sizeEth, bool isLong);
+    event SwapExecuted(address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut);
 
     constructor(address _usdtAddress, address _chainlinkPriceFeedAddress) {
         usdtAddress = _usdtAddress;
@@ -58,34 +61,20 @@ contract MockGMX {
     }
 
     // Function to deposit USDT collateral and open a margin trade with custom position size
-    function depositCollateralAndOpenPositionWithSize(uint256 collateralAmount, uint256 positionSize, bool isLong, address onBehalfOf) external {
-        require(collateralAmount > 0, "Collateral amount must be greater than 0");
-        require(positionSize >= collateralAmount, "Position size must be at least collateral amount");
-        // Transfer USDT from the sender to this contract
-        bool success = IERC20(usdtAddress).transferFrom(msg.sender, address(this), collateralAmount);
-        require(success, "USDT transfer failed");
-        
-        collateralBalances[onBehalfOf] += collateralAmount;
-        totalCollateral += collateralAmount;
-        emit CollateralDeposited(onBehalfOf, collateralAmount);
-        
-        // Simulate opening a margin trade with specified position size
-        // Calculate leverage as positionSize / collateralAmount
-        uint256 leverage = (positionSize * 1e18) / collateralAmount; // Use 18 decimals for precision
-        // Get current ETH price from Chainlink feed as entry price
-        uint256 mockEntryPrice = getLatestEthPrice();
-        positionCounter++;
-        positions[onBehalfOf] = Position({
-            positionId: positionCounter,
-            owner: onBehalfOf,
-            collateralAmount: collateralAmount,
-            leverage: leverage / 1e18, // Store as whole number
-            entryPrice: mockEntryPrice,
-            isLong: isLong,
-            isActive: true
+    function depositCollateralAndOpenPositionWithSize(uint256 amount, uint256 positionSize, bool isLong, address onBehalfOf) external {
+        require(amount > 0, "Collateral amount must be greater than 0");
+        require(positionSize > 0, "Position size must be greater than 0");
+        require(!isLong, "Only short positions are supported");
+        // Simulate opening a short position with specified size
+        shortPositions[onBehalfOf] = ShortPosition({
+            collateralEth: amount,
+            sizeEth: positionSize,
+            isActive: true,
+            isLong: isLong
         });
-        lastFundingUpdate[onBehalfOf] = block.timestamp; // Initialize funding update timestamp
-        emit PositionOpened(positionCounter, onBehalfOf, collateralAmount, leverage / 1e18, isLong, mockEntryPrice);
+        emit ShortPositionOpened(onBehalfOf, amount, positionSize, isLong);
+        emit DebugLog("Short position opened with size", positionSize);
+        emit DebugLog("Collateral provided", amount);
     }
 
     // Maintain the original function for backward compatibility
@@ -138,9 +127,8 @@ contract MockGMX {
         lastFundingUpdate[onBehalfOf] = block.timestamp; // Update timestamp on close
         emit PositionClosed(position.positionId, onBehalfOf, profitLoss, collateralToReturn);
         
-        // Return adjusted collateral to the owner
-        bool success = IERC20(usdtAddress).transfer(onBehalfOf, collateralToReturn);
-        require(success, "USDT return transfer failed");
+        // Return adjusted collateral to the owner in ETH instead of USDT
+        payable(onBehalfOf).transfer(collateralToReturn);
     }
 
     // Function to get collateral balance for a user
@@ -152,6 +140,18 @@ contract MockGMX {
     function getPosition(address user) external view returns (uint256 positionId, uint256 collateralAmount, uint256 leverage, uint256 entryPrice, bool isLong, bool isActive) {
         Position memory pos = positions[user];
         return (pos.positionId, pos.collateralAmount, pos.leverage, pos.entryPrice, pos.isLong, pos.isActive);
+    }
+
+    // Function to get short position details for a user (for testing purposes)
+    struct ShortPosition {
+        uint256 collateralEth; // Collateral in ETH terms
+        uint256 sizeEth; // Size of the position in ETH terms
+        bool isActive; // Whether the position is active
+        bool isLong; // Whether it's a long position
+    }
+    mapping(address => ShortPosition) public shortPositions;
+    function getShortPosition(address user) external view returns (ShortPosition memory) {
+        return shortPositions[user];
     }
 
     // Function to update default leverage for testing
@@ -225,10 +225,24 @@ contract MockGMX {
         require(amountOut >= minAmountOut, "Insufficient output amount");
         
         // Transfer output tokens to recipient
-        success = IERC20(tokenOut).transfer(recipient, amountOut);
-        require(success, "Output token transfer failed");
+        if (tokenOut == address(0)) {
+            // If output is ETH, use payable transfer
+            payable(recipient).transfer(amountOut);
+        } else {
+            // Otherwise, use ERC20 transfer
+            success = IERC20(tokenOut).transfer(recipient, amountOut);
+            require(success, "Output token transfer failed");
+        }
         
+        emit SwapExecuted(tokenIn, tokenOut, amountIn, amountOut);
+        emit DebugLog("Swap amount in", amountIn);
+        emit DebugLog("Swap amount out", amountOut);
         return amountOut;
+    }
+
+    // Allow contract to receive ETH for testing purposes (e.g., swaps)
+    receive() external payable {
+        // No specific logic needed, just accept ETH
     }
 
     // Helper function to get the latest ETH price from Chainlink feed

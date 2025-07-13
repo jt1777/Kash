@@ -35,6 +35,11 @@ contract MockAaveV3 {
     // Mapping to track the last time interest was updated for a user
     mapping(address => uint256) public lastInterestUpdate;
 
+    event DebugLog(string message, uint256 value);
+    event SupplyOperation(address indexed user, address indexed asset, uint256 amount);
+    event BorrowOperation(address indexed user, address indexed asset, uint256 amount);
+    event RepayOperation(address indexed user, address indexed asset, uint256 amount);
+
     constructor(address _usdtAddress) {
         usdtAddress = _usdtAddress;
     }
@@ -50,6 +55,8 @@ contract MockAaveV3 {
         require(msg.value == amount, "Incorrect ETH amount sent");
         suppliedAmounts[onBehalfOf] += amount;
         totalSupplied += amount;
+        emit SupplyOperation(onBehalfOf, asset, amount);
+        emit DebugLog("ETH supplied", amount);
         // Reference _referralCode in a no-op to silence unused parameter warning
         if (_referralCode == 0) {
             // No action needed, just a reference to suppress warning
@@ -79,8 +86,10 @@ contract MockAaveV3 {
         require(currentDebtInUsd + requestedBorrowInUsd <= maxBorrowInUsd, "Borrow amount exceeds LTV limit");
         borrowedAmounts[onBehalfOf] += amount;
         totalBorrowed += amount;
-        // Mint USDT to the borrower (simulating Aave providing the borrowed asset)
-        IERC20Mintable(usdtAddress).mint(onBehalfOf, amount);
+        // Transfer pre-minted USDT to the borrower instead of minting (simulating Aave providing the borrowed asset)
+        IERC20(usdtAddress).transfer(onBehalfOf, amount);
+        emit BorrowOperation(onBehalfOf, asset, amount);
+        emit DebugLog("USDT borrowed", amount);
         // Reference _referralCode in a no-op to silence unused parameter warning
         if (_referralCode == 0) {
             // No action needed, just a reference to suppress warning
@@ -97,6 +106,8 @@ contract MockAaveV3 {
         borrowedAmounts[onBehalfOf] -= amount;
         totalBorrowed -= amount;
         IERC20(usdtAddress).transferFrom(msg.sender, address(this), amount);
+        emit RepayOperation(onBehalfOf, asset, amount);
+        emit DebugLog("USDT repaid", amount);
         return amount;
     }
 
@@ -148,6 +159,16 @@ contract MockAaveV3 {
 
     // Get the borrowed amount for a user (for testing purposes)
     function getBorrowedAmount(address user) external view returns (uint256) {
+        return borrowedAmounts[user];
+    }
+
+    // Get the user's ETH balance (supplied amount) for testing purposes
+    function getUserEthBalance(address user) external view returns (uint256) {
+        return suppliedAmounts[user];
+    }
+
+    // Get the user's USDT debt for testing purposes
+    function getUserUsdtDebt(address user) external view returns (uint256) {
         return borrowedAmounts[user];
     }
 

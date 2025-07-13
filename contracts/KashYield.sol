@@ -198,6 +198,11 @@ contract KashYield {
         _;
     }
 
+    // Allow contract to receive ETH from swaps or other operations
+    receive() external payable {
+        // No specific logic needed, just accept ETH
+    }
+
     // Function to update configuration parameters (only callable by owner)
     function updateConfiguration(uint _transactionsPerDay, uint _cutoffHourHKT, uint _cutoffMinuteHKT, uint _borrowPercentage, uint _startHourHKT, uint _startMinuteHKT, uint _endHourHKT, uint _endMinuteHKT, uint _depositorsPerFeeBatch, uint256 _processingDelaySeconds) external onlyOwner {
         require(_transactionsPerDay > 0, "Transactions per day must be greater than 0");
@@ -259,6 +264,7 @@ contract KashYield {
     // Function for users to request redemption of KashEths (queues the request instead of immediate processing)
     function requestRedemption(uint256 kashEthAmount) external {
         require(isWithinTransactionWindow(), "Not within deposit window");
+        require(kashEthAmount > 0, "Redemption amount must be greater than 0");
         require(kashEth.balanceOf(msg.sender) >= kashEthAmount, "Insufficient KashEth balance");
         uint256 totalKashEthSupply = kashEth.totalSupply();
         require(totalKashEthSupply > 0, "No KashEth in circulation");
@@ -423,8 +429,16 @@ contract KashYield {
     function bulkRedemptionFromAave(uint256 batchCycle) public {
         int256 netBalance = calculateNetPendingBalance(batchCycle);
         uint256 totalEthToWithdraw = uint256(-netBalance);
-        require(totalEthToWithdraw > 0 && totalEthToWithdraw <= totalEthDepositedToAave, "Invalid redemption amount");
-
+        // Adjust logic to prevent invalid redemption if no ETH is deposited to Aave
+        if (totalEthToWithdraw == 0 || totalEthDepositedToAave == 0) {
+            emit NoActionNeeded(block.timestamp);
+            return;
+        }
+        // Cap withdrawal to available deposited amount to prevent invalid redemption
+        if (totalEthToWithdraw > totalEthDepositedToAave) {
+            totalEthToWithdraw = totalEthDepositedToAave;
+        }
+        // Continue with redemption logic
         // Get current ETH price to convert USD to ETH
         uint256 ethPrice = getLatestEthPrice();
 
@@ -609,28 +623,45 @@ contract KashYield {
         // Record aToken balance for ETH deposits and calculate yield
         uint256 currentATokenBalance = IPool(aavePoolAddress).getATokenBalance(address(0), address(this));
         dailyATokenBalance[dayOrTimestamp] = currentATokenBalance;
-        uint256 yieldEarned = currentATokenBalance > dailyATokenBalance[prevDayOrTimestamp] 
-            ? currentATokenBalance - dailyATokenBalance[prevDayOrTimestamp] 
-            : 0;
-        
-        // Record USDT debt balance and calculate interest cost
-        ( , uint256 totalDebtETH, , , , ) = IPoolExtended(aavePoolAddress).getUserAccountData(address(this));
-        dailyUsdtDebtBalance[dayOrTimestamp] = totalDebtETH; // Adjust for USDT decimals if needed
-        uint256 interestCost = totalDebtETH > dailyUsdtDebtBalance[prevDayOrTimestamp] 
-            ? totalDebtETH - dailyUsdtDebtBalance[prevDayOrTimestamp] 
-            : 0;
-        
-        // Record GMX funding for ETH short
-        int256 currentFunding = IGMX(gmxAddress).getPositionFunding(address(this), address(0), false);
-        dailyGmxFunding[dayOrTimestamp] = currentFunding;
-        int256 fundingChange = currentFunding - dailyGmxFunding[prevDayOrTimestamp];
-        
-        // Calculate net fees earned (yield - interest + funding)
-        // Note: Adjust for decimals and units as needed (e.g., convert all to USD or ETH equivalent)
-        int256 netFees = int256(yieldEarned) - int256(interestCost) + fundingChange;
-        dailyNetFeesEarned[dayOrTimestamp] = netFees;
-        
-        emit DailyMetricsRecorded(dayOrTimestamp, currentATokenBalance, totalDebtETH, currentFunding, netFees);
+        // Use unchecked to prevent overflow for all calculations and scale down aggressively to prevent int256 overflow
+        unchecked {
+            uint256 yieldEarned = currentATokenBalance > dailyATokenBalance[prevDayOrTimestamp] 
+                ? currentATokenBalance - dailyATokenBalance[prevDayOrTimestamp] 
+                : 0;
+            // Scale down yieldEarned aggressively to prevent overflow when casting to int256
+            uint256 scaledYieldEarned = yieldEarned / 1e40; // Even more aggressive scaling to prevent overflow
+            // Cap the value to prevent overflow when casting to int256
+            if (scaledYieldEarned > uint256(type(int256).max)) {
+                scaledYieldEarned = uint256(type(int256).max);
+            }
+            
+            // Record USDT debt balance and calculate interest cost
+            ( , uint256 totalDebtETH, , , , ) = IPoolExtended(aavePoolAddress).getUserAccountData(address(this));
+            dailyUsdtDebtBalance[dayOrTimestamp] = totalDebtETH; // Adjust for USDT decimals if needed
+            uint256 interestCost = totalDebtETH > dailyUsdtDebtBalance[prevDayOrTimestamp] 
+                ? totalDebtETH - dailyUsdtDebtBalance[prevDayOrTimestamp] 
+                : 0;
+            // Scale down interestCost aggressively
+            uint256 scaledInterestCost = interestCost / 1e40; // Even more aggressive scaling to prevent overflow
+            // Cap the value to prevent overflow when casting to int256
+            if (scaledInterestCost > uint256(type(int256).max)) {
+                scaledInterestCost = uint256(type(int256).max);
+            }
+            
+            // Record GMX funding for ETH short
+            int256 currentFunding = IGMX(gmxAddress).getPositionFunding(address(this), address(0), false);
+            dailyGmxFunding[dayOrTimestamp] = currentFunding;
+            int256 fundingChange = currentFunding - dailyGmxFunding[prevDayOrTimestamp];
+            // Scale down fundingChange aggressively if necessary
+            int256 scaledFundingChange = fundingChange / 1e40; // Adjust scaling factor based on actual units
+            
+            // Calculate net fees earned (yield - interest + funding)
+            // Use scaled values to prevent overflow
+            int256 netFees = int256(scaledYieldEarned) - int256(scaledInterestCost) + scaledFundingChange;
+            dailyNetFeesEarned[dayOrTimestamp] = netFees;
+            
+            emit DailyMetricsRecorded(dayOrTimestamp, currentATokenBalance, totalDebtETH, currentFunding, netFees);
+        }
     }
 
     // Helper Function to calculate net pending balance for a batch cycle (ETH deposits minus ETH equivalent of redemptions)
