@@ -34,6 +34,10 @@ contract MockAaveV3 {
     uint256 public interestRatePerSecond = 3170979; // 10% per year / 31536000 seconds
     // Mapping to track the last time interest was updated for a user
     mapping(address => uint256) public lastInterestUpdate;
+    // Mapping to track when each user first supplied ETH (for yield calculation)
+    mapping(address => uint256) public firstSupplyTimestamp;
+    // Daily yield rate: 0.0001 ETH per day per 1 ETH deposited
+    uint256 public constant DAILY_YIELD_RATE = 100000000000000; // 0.0001 ETH in wei
 
     event DebugLog(string message, uint256 value);
     event SupplyOperation(address indexed user, address indexed asset, uint256 amount);
@@ -53,6 +57,12 @@ contract MockAaveV3 {
     function supply(address asset, uint256 amount, address onBehalfOf, uint16 _referralCode) external payable {
         require(asset == address(0), "Mock only supports ETH supply");
         require(msg.value == amount, "Incorrect ETH amount sent");
+        
+        // Track first supply timestamp for yield calculation
+        if (suppliedAmounts[onBehalfOf] == 0) {
+            firstSupplyTimestamp[onBehalfOf] = block.timestamp;
+        }
+        
         suppliedAmounts[onBehalfOf] += amount;
         totalSupplied += amount;
         emit SupplyOperation(onBehalfOf, asset, amount);
@@ -111,10 +121,21 @@ contract MockAaveV3 {
         return amount;
     }
 
-    // Get the aToken balance for a user (for ETH, returns supplied amount as mock aToken balance)
+    // Get the aToken balance for a user (for ETH, returns supplied amount + accrued yield)
     function getATokenBalance(address asset, address user) external view returns (uint256) {
         require(asset == address(0), "Mock only supports ETH aToken balance");
-        return suppliedAmounts[user];
+        
+        uint256 originalAmount = suppliedAmounts[user];
+        if (originalAmount == 0 || firstSupplyTimestamp[user] == 0) {
+            return originalAmount;
+        }
+        
+        // Calculate yield: 0.0001 ETH per day per 1 ETH deposited
+        uint256 timeElapsed = block.timestamp - firstSupplyTimestamp[user];
+        uint256 daysElapsed = timeElapsed / 86400; // 86400 seconds per day
+        uint256 yieldEarned = (originalAmount * DAILY_YIELD_RATE * daysElapsed) / 1e18;
+        
+        return originalAmount + yieldEarned;
     }
 
     // Get user account data for health monitoring

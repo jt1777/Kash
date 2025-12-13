@@ -37,6 +37,10 @@ contract MockGMX {
     int256 public fundingRatePerDayBps = 10; // 0.1% per day as default, positive for shorts earning funding
     // Mapping to track last funding update timestamp for each position
     mapping(address => uint256) public lastFundingUpdate;
+    // Mapping to store funding amounts for testing purposes
+    mapping(address => int256) public fundingAmounts;
+    // Mapping to track short positions (address => short position details)
+    mapping(address => ShortPosition) public shortPositions;
 
     struct Position {
         uint256 positionId;
@@ -46,6 +50,13 @@ contract MockGMX {
         uint256 entryPrice; // Mock entry price for the asset (e.g., ETH price in USD, 18 decimals)
         bool isLong; // True for long position, false for short
         bool isActive; // Whether the position is active
+    }
+
+    struct ShortPosition {
+        uint256 collateralEth; // Collateral in ETH terms
+        uint256 sizeEth; // Size of the position in ETH terms
+        bool isActive; // Whether the position is active
+        bool isLong; // Whether it's a long position
     }
 
     event CollateralDeposited(address indexed user, uint256 amount);
@@ -72,6 +83,7 @@ contract MockGMX {
             isActive: true,
             isLong: isLong
         });
+        lastFundingUpdate[onBehalfOf] = block.timestamp; // Add this to set funding timestamp
         emit ShortPositionOpened(onBehalfOf, amount, positionSize, isLong);
         emit DebugLog("Short position opened with size", positionSize);
         emit DebugLog("Collateral provided", amount);
@@ -107,6 +119,21 @@ contract MockGMX {
 
     // Function to close a position and return collateral (with P/L calculation)
     function closePosition(address onBehalfOf) external {
+        // First check if there's a short position
+        ShortPosition storage shortPosition = shortPositions[onBehalfOf];
+        if (shortPosition.isActive) {
+            // Close short position
+            uint256 shortCollateralToReturn = shortPosition.collateralEth;
+            shortPosition.isActive = false;
+            lastFundingUpdate[onBehalfOf] = block.timestamp;
+            emit DebugLog("Short position closed", shortCollateralToReturn);
+            
+            // Return collateral in ETH
+            payable(onBehalfOf).transfer(shortCollateralToReturn);
+            return;
+        }
+        
+        // Fall back to regular position logic
         Position storage position = positions[onBehalfOf];
         require(position.isActive, "No active position for this address");
         require(position.owner == onBehalfOf, "Invalid position owner");
@@ -139,17 +166,10 @@ contract MockGMX {
     // Function to get position details for a user
     function getPosition(address user) external view returns (uint256 positionId, uint256 collateralAmount, uint256 leverage, uint256 entryPrice, bool isLong, bool isActive) {
         Position memory pos = positions[user];
-        return (pos.positionId, pos.collateralAmount, pos.leverage, pos.entryPrice, pos.isLong, pos.isActive);
+         return (pos.positionId, pos.collateralAmount, pos.leverage, pos.entryPrice, pos.isLong, pos.isActive);
     }
 
     // Function to get short position details for a user (for testing purposes)
-    struct ShortPosition {
-        uint256 collateralEth; // Collateral in ETH terms
-        uint256 sizeEth; // Size of the position in ETH terms
-        bool isActive; // Whether the position is active
-        bool isLong; // Whether it's a long position
-    }
-    mapping(address => ShortPosition) public shortPositions;
     function getShortPosition(address user) external view returns (ShortPosition memory) {
         return shortPositions[user];
     }
@@ -161,30 +181,35 @@ contract MockGMX {
     }
 
     // Function to simulate funding fees for positions (as per IGMX interface in KashYield.sol)
-    function getPositionFunding(address account, address indexToken, bool isLong) external view returns (int256 fundingAmount) {
+    function getPositionFunding(address account, address indexToken, bool isLong) external returns (int256 fundingAmount) {
         require(indexToken == address(0), "Mock only supports ETH positions");
-        Position memory position = positions[account];
-        require(position.isActive, "No active position for this account");
-        require(position.isLong == isLong, "Position type mismatch");
+        
+        if (fundingAmounts[account] != 0) {
+            int256 amount = fundingAmounts[account];
+            fundingAmounts[account] = 0; // Reset to prevent reuse
+            emit DebugLog("Funding amount returned", uint256(amount));
+            return amount;
+        }
+        
+        ShortPosition memory position = shortPositions[account];
+        if (!position.isActive || position.isLong != isLong) {
+            emit DebugLog("No funding: inactive or type mismatch", 0);
+            return 0; // No funding if no active position or type mismatch
+        }
         
         // Calculate time elapsed since last funding update
         uint256 timeElapsed = block.timestamp - lastFundingUpdate[account];
         uint256 daysElapsed = timeElapsed / 1 days;
         if (daysElapsed == 0) {
+            emit DebugLog("No funding: daysElapsed = 0", 0);
             return 0; // No funding if less than a day has passed
         }
         
-        // Calculate funding based on position size (collateral * leverage) and funding rate
-        uint256 positionSizeUsdt = position.collateralAmount * position.leverage; // Position size in USDT terms
-        // Convert USDT position size to ETH terms using current ETH price
-        uint256 ethPrice = getLatestEthPrice(); // ETH price in USD, 18 decimals
-        uint256 positionSizeEth = (positionSizeUsdt * 10**12 * 10**18) / ethPrice; // Convert USDT (6 decimals) to USD (18 decimals) then to ETH (18 decimals)
-        // Funding rate is in basis points per day; 1 bps = 0.01%
-        // For shorts, positive fundingRatePerDayBps means user earns funding
-        // For longs, user pays funding (negative)
+        // Use short position size for funding calculation
         int256 ratePerDay = isLong ? -fundingRatePerDayBps : fundingRatePerDayBps;
-        int256 totalFunding = (int256(positionSizeEth) * ratePerDay * int256(daysElapsed)) / 10000; // 10000 to convert bps to fraction
-        return totalFunding; // Funding in ETH terms (18 decimals)
+        int256 totalFunding = (int256(position.sizeEth) * ratePerDay * int256(daysElapsed)) / 10000; // Funding in ETH terms
+        emit DebugLog("Default funding calculated", uint256(totalFunding));
+        return totalFunding;
     }
 
     // Function to update funding rate for testing purposes
@@ -195,6 +220,12 @@ contract MockGMX {
     // Function to manually update funding timestamp for testing
     function updateFundingTimestamp(address account, uint256 timestamp) external {
         lastFundingUpdate[account] = timestamp;
+    }
+
+    // Function to set funding amount directly for testing purposes
+    function setFundingAmount(address account, int256 amount) external {
+        // Store the funding amount to be returned by getPositionFunding
+        fundingAmounts[account] = amount;
     }
 
     // Function to simulate a token swap for testing purposes using Chainlink price feed
