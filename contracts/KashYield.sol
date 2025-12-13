@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.28;
 
-import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
+import "./KashToken.sol";
 
 // Interface with Aave V3 Pool (Arbitrum)
 interface IPool {
@@ -23,19 +22,6 @@ event BatchProcessed(uint256 indexed batchCycle, uint256 totalMintValueUSD, uint
 event TokensClaimed(address indexed user, address indexed token, uint256 amount, bool isMint);
 event NAVUpdateExecuted(uint256 newNAV, uint256 timestamp);
 event ProtocolInteraction(string action, address indexed asset, uint256 amount);
-
-// Kash Token Contract (assumed simple ERC20 with mint/burn controlled by owner)
-contract Kash is ERC20, Ownable {
-    constructor() ERC20("Kash", "KASH") Ownable(msg.sender) {}
-
-    function mint(address to, uint256 amount) external onlyOwner {
-        _mint(to, amount);
-    }
-
-    function burn(address from, uint256 amount) external onlyOwner {
-        _burn(from, amount);
-    }
-}
 
 /**
  * @title KashYield
@@ -411,6 +397,33 @@ contract KashYield {
         feeBps = newFee;
     }
 
+    function setAavePool(address _aavePool) external onlyOwner {
+        require(_aavePool != address(0), "Invalid address");
+        aavePoolAddress = _aavePool;
+    }
+
+    function setTokenAddresses(
+        address _weth,
+        address _wbtc,
+        address _usdt,
+        address _usdc
+    ) external onlyOwner {
+        require(_weth != address(0) && _wbtc != address(0) && _usdt != address(0) && _usdc != address(0), "Invalid address");
+        wethAddress = _weth;
+        wbtcAddress = _wbtc;
+        usdtAddress = _usdt;
+        usdcAddress = _usdc;
+    }
+
+    function setOracle(address token, address oracle) external onlyOwner {
+        require(oracle != address(0), "Invalid oracle address");
+        tokenOracles[token] = oracle;
+    }
+
+    function setTokenDecimals(address token, uint8 decimals) external onlyOwner {
+        tokenDecimals[token] = decimals;
+    }
+
     function pause() external onlyOwner {
         paused = true;
     }
@@ -523,5 +536,10 @@ contract KashYield {
 
     function getCurrentBatchCycle() external view returns (uint256) {
         return block.timestamp / 86400;
+    }
+
+    // Test helper function - should be removed or restricted in production
+    function testMintKash(address to, uint256 amount) external onlyOwner {
+        kashToken.mint(to, amount);
     }
 }
