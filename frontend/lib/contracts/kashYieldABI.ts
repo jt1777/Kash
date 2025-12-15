@@ -1,0 +1,152 @@
+export const kashYieldABI = [
+  // Read functions
+  {
+    inputs: [],
+    name: "currentNAV",
+    outputs: [{ name: "", type: "uint256" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "getNAV",
+    outputs: [{ name: "", type: "uint256" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "isUserWindow",
+    outputs: [{ name: "", type: "bool" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "isProcessingWindow",
+    outputs: [{ name: "", type: "bool" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "feeBps",
+    outputs: [{ name: "", type: "uint256" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "paused",
+    outputs: [{ name: "", type: "bool" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [
+      { name: "user", type: "address" },
+      { name: "batchCycle", type: "uint256" },
+    ],
+    name: "getPendingMintRequest",
+    outputs: [
+      {
+        components: [
+          { name: "user", type: "address" },
+          { name: "tokenIn", type: "address" },
+          { name: "amountIn", type: "uint256" },
+          { name: "amountInUSD", type: "uint256" },
+          { name: "batchCycle", type: "uint256" },
+        ],
+        name: "",
+        type: "tuple",
+      },
+    ],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [
+      { name: "user", type: "address" },
+      { name: "batchCycle", type: "uint256" },
+    ],
+    name: "getPendingRedeemRequest",
+    outputs: [
+      {
+        components: [
+          { name: "user", type: "address" },
+          { name: "kashAmount", type: "uint256" },
+          { name: "tokenOut", type: "address" },
+          { name: "batchCycle", type: "uint256" },
+        ],
+        name: "",
+        type: "tuple",
+      },
+    ],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [{ name: "batchCycle", type: "uint256" }],
+    name: "getBatchInfo",
+    outputs: [
+      { name: "totalMintUSD", type: "uint256" },
+      { name: "totalRedeemUSD", type: "uint256" },
+      { name: "processed", type: "bool" },
+      { name: "mintUsersCount", type: "uint256" },
+      { name: "redeemUsersCount", type: "uint256" },
+    ],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "getCurrentBatchCycle",
+    outputs: [{ name: "", type: "uint256" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  // Write functions
+  {
+    inputs: [
+      { name: "tokenIn", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    name: "requestMint",
+    outputs: [],
+    stateMutability: "payable",
+    type: "function",
+  },
+  {
+    inputs: [
+      { name: "kashAmount", type: "uint256" },
+      { name: "tokenOut", type: "address" },
+    ],
+    name: "requestRedeem",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  // Events
+  {
+    anonymous: false,
+    inputs: [
+      { indexed: true, name: "user", type: "address" },
+      { indexed: true, name: "tokenIn", type: "address" },
+      { indexed: false, name: "amountIn", type: "uint256" },
+      { indexed: false, name: "batchCycle", type: "uint256" },
+    ],
+    name: "MintRequested",
+    type: "event",
+  },
+  {
+    anonymous: false,
+    inputs: [
+      { indexed: true, name: "user", type: "address" },
+      { indexed: false, name: "kashAmount", type: "uint256" },
+      { indexed: true, name: "tokenOut", type: "address" },
+      { indexed: false, name: "batchCycle", type: "uint256" },
+    ],
+    name: "RedeemRequested",
+    type: "event",
+  },
+] as const;
