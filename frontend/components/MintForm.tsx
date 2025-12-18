@@ -11,8 +11,8 @@ const TOKENS = [
   { symbol: 'ETH', address: zeroAddress, decimals: 18 },
   { symbol: 'USDC', address: CONTRACTS.tokens.usdc, decimals: 6 },
   { symbol: 'USDT', address: CONTRACTS.tokens.usdt, decimals: 6 },
-  { symbol: 'wETH', address: CONTRACTS.tokens.weth, decimals: 6 },
-  { symbol: 'wBTC', address: CONTRACTS.tokens.wbtc, decimals: 6 },
+  { symbol: 'wETH', address: CONTRACTS.tokens.weth, decimals: 18 }, // Fixed: wETH has 18 decimals, not 6
+  { symbol: 'wBTC', address: CONTRACTS.tokens.wbtc, decimals: 8 }, // Fixed: wBTC has 8 decimals, not 6
 ];
 
 export function MintForm() {
@@ -27,11 +27,20 @@ export function MintForm() {
     args: address && selectedToken.symbol !== 'ETH' ? [address, CONTRACTS.kashYield] : undefined,
   });
 
-  const { writeContract: approve, data: approveHash, isPending: isApprovePending } = useWriteContract();
-  const { writeContract: mint, data: mintHash, isPending: isMintPending } = useWriteContract();
+  const { writeContract: approve, data: approveHash, isPending: isApprovePending, error: approveError } = useWriteContract();
+  const { writeContract: mint, data: mintHash, isPending: isMintPending, error: mintError } = useWriteContract();
 
-  const { isLoading: isApproveConfirming } = useWaitForTransactionReceipt({ hash: approveHash });
-  const { isLoading: isMintConfirming, isSuccess: isMintSuccess } = useWaitForTransactionReceipt({ hash: mintHash });
+  const { isLoading: isApproveConfirming, isError: isApproveError } = useWaitForTransactionReceipt({ hash: approveHash });
+  const { isLoading: isMintConfirming, isSuccess: isMintSuccess, isError: isMintError } = useWaitForTransactionReceipt({ hash: mintHash });
+
+  // Helper to safely render error cause
+  const renderErrorCause = (error: typeof mintError) => {
+    if (!error?.cause) return null;
+    const cause = error.cause;
+    if (cause instanceof Error) return cause.message;
+    if (typeof cause === 'string') return cause;
+    return 'Unknown error';
+  };
 
   const parsedAmount = amount ? 
     (selectedToken.symbol === 'ETH' ? parseEther(amount) : parseUnits(amount, selectedToken.decimals)) 
@@ -56,21 +65,25 @@ export function MintForm() {
   const handleMint = async () => {
     if (!parsedAmount) return;
 
-    if (selectedToken.symbol === 'ETH') {
-      mint({
-        address: CONTRACTS.kashYield,
-        abi: kashYieldABI,
-        functionName: 'requestMint',
-        args: [zeroAddress, BigInt(0)],
-        value: parsedAmount,
-      });
-    } else {
-      mint({
-        address: CONTRACTS.kashYield,
-        abi: kashYieldABI,
-        functionName: 'requestMint',
-        args: [selectedToken.address as `0x${string}`, parsedAmount],
-      });
+    try {
+      if (selectedToken.symbol === 'ETH') {
+        mint({
+          address: CONTRACTS.kashYield,
+          abi: kashYieldABI,
+          functionName: 'requestMint',
+          args: [zeroAddress, BigInt(0)],
+          value: parsedAmount,
+        });
+      } else {
+        mint({
+          address: CONTRACTS.kashYield,
+          abi: kashYieldABI,
+          functionName: 'requestMint',
+          args: [selectedToken.address as `0x${string}`, parsedAmount],
+        });
+      }
+    } catch (error) {
+      console.error('Mint error:', error);
     }
   };
 
@@ -152,6 +165,35 @@ export function MintForm() {
           {isMintPending || isMintConfirming ? 'Processing...' : 'Submit Mint Request'}
         </button>
       </div>
+
+      {/* Error Messages */}
+      {(mintError || isMintError) && (
+        <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+          <p className="text-sm text-red-800 font-medium">Transaction Failed</p>
+          <p className="text-xs text-red-600 mt-1">
+            {mintError?.message || 'Transaction was rejected or failed. Please try again.'}
+          </p>
+          {mintError?.cause !== undefined && mintError.cause !== null && (
+            <p className="text-xs text-red-500 mt-1">
+              {(() => {
+                const cause = mintError.cause;
+                if (cause instanceof Error) return cause.message;
+                if (typeof cause === 'string') return cause;
+                return 'Unknown error';
+              })()}
+            </p>
+          )}
+        </div>
+      )}
+
+      {(approveError || isApproveError) && (
+        <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+          <p className="text-sm text-red-800 font-medium">Approval Failed</p>
+          <p className="text-xs text-red-600 mt-1">
+            {approveError?.message || 'Approval transaction failed. Please try again.'}
+          </p>
+        </div>
+      )}
 
       <p className="text-xs text-gray-500 text-center">
         Fee: 0.03% | Processed at next batch (23:50 UTC)

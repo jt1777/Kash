@@ -1,0 +1,28 @@
+{
+  "name": "kashyield-bot",
+  "version": "1.0.0",
+  "description": "Off-chain bot for KashYield protocol batch processing",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "watch": "tsc --watch",
+    "debug": "ts-node src/scripts/debug.ts",
+    "debug:tx": "ts-node src/scripts/debug.ts",
+    "test:mint": "ts-node src/scripts/testMint.ts",
+    "net-position": "ts-node src/scripts/net-position.ts",
+    "update:oracle": "ts-node src/scripts/updateOracle.ts",
+    "update:all-oracles": "ts-node src/scripts/updateAllOracles.ts",
+    "update:tokens": "ts-node src/scripts/updateTokenAddresses.ts"
+  },
+  "dependencies": {
+    "ethers": "^6.13.0",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  }
+}

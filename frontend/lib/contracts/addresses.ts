@@ -11,10 +11,10 @@ export const CONTRACTS = {
     usdc: "0x15BB91b9e63EA29863678B1dcBcB01dE31bD8Ab5" as `0x${string}`,
   },
   oracles: {
-    ethUsd: "0x1AdF01abD96C11AEE2f20a41a03fAD11b3D8d2b4" as `0x${string}`,
-    btcUsd: "0xBfFE5FE928F9597E2A21Ba8f2cDE7D2D10C09d27" as `0x${string}`,
-    usdcUsd: "0xed45CBB45d34F53bf14C70e6FC2711bDd6454E76" as `0x${string}`,
-    usdtUsd: "0x78a59DD416d0CE4AbfD2e27BFd2f6bFdceC446e3" as `0x${string}`,
+    ethUsd: "0x2d3bBa5e0A9Fd8EAa45Dcf71A2389b7C12005b1f" as `0x${string}`, // Arbitrum Sepolia ETH/USD (real Chainlink)
+    btcUsd: "0xBfFE5FE928F9597E2A21Ba8f2cDE7D2D10C09d27" as `0x${string}`, // MOCK BTC/USD (hardcoded $60k - no real feed on Arbitrum Sepolia)
+    usdcUsd: "0xed45CBB45d34F53bf14C70e6FC2711bDd6454E76" as `0x${string}`, // Arbitrum Sepolia USDC/USD (real Chainlink)
+    usdtUsd: "0x78a59DD416d0CE4AbfD2e27BFd2f6bFdceC446e3" as `0x${string}`, // Arbitrum Sepolia USDT/USD (real Chainlink)
   },
 } as const;
 
