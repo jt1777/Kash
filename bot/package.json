@@ -14,7 +14,12 @@
     "net-position": "ts-node src/scripts/net-position.ts",
     "update:oracle": "ts-node src/scripts/updateOracle.ts",
     "update:all-oracles": "ts-node src/scripts/updateAllOracles.ts",
-    "update:tokens": "ts-node src/scripts/updateTokenAddresses.ts"
+    "update:tokens": "ts-node src/scripts/updateTokenAddresses.ts",
+    "deploy:aave": "ts-node src/scripts/deploy-aave.ts",
+    "check:balance": "ts-node src/scripts/check-eth-balance.ts",
+    "check:tokens": "ts-node src/scripts/check-token-balances.ts",
+    "reset:aave": "ts-node src/scripts/reset-aave.ts",
+    "close:aave": "ts-node src/scripts/close-aave-position.ts"
   },
   "dependencies": {
     "ethers": "^6.13.0",

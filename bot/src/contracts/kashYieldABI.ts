@@ -79,6 +79,16 @@ export const kashYieldABI = [
     type: "function",
   },
   {
+    inputs: [
+      { name: "batchCycle", type: "uint256" },
+      { name: "token", type: "address" },
+    ],
+    name: "batchMintsByToken",
+    outputs: [{ name: "", type: "uint256" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
     inputs: [{ name: "batchCycle", type: "uint256" }],
     name: "batchRedeemUsers",
     outputs: [{ name: "", type: "address[]" }],
@@ -204,6 +214,53 @@ export const kashYieldABI = [
     stateMutability: "view",
     type: "function",
   },
+  {
+    inputs: [
+      { name: "asset", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    name: "depositToAave",
+    outputs: [],
+    stateMutability: "payable",
+    type: "function",
+  },
+  {
+    inputs: [
+      { name: "asset", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    name: "withdrawFromAave",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [
+      { name: "asset", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    name: "borrowFromAave",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [
+      { name: "asset", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    name: "repayToAave",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "aavePoolAddress",
+    outputs: [{ name: "", type: "address" }],
+    stateMutability: "view",
+    type: "function",
+  },
   // Events
   {
     anonymous: false,
@@ -225,6 +282,16 @@ export const kashYieldABI = [
       { indexed: false, name: "batchCycle", type: "uint256" },
     ],
     name: "RedeemRequested",
+    type: "event",
+  },
+  {
+    anonymous: false,
+    inputs: [
+      { indexed: false, name: "action", type: "string" },
+      { indexed: true, name: "asset", type: "address" },
+      { indexed: false, name: "amount", type: "uint256" },
+    ],
+    name: "ProtocolInteraction",
     type: "event",
   },
 ] as const;

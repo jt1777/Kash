@@ -165,34 +165,59 @@ export async function calculateNetPosition(
   );
 
   // Calculate total mint USD value
+  // IMPORTANT: Process ALL events, not just stored requests, because the contract
+  // overwrites previous requests when the same user makes multiple requests in the same batch
   let totalMintUSD = 0n;
   const mintRequests: MintRequest[] = [];
 
-  for (const user of mintUsers) {
-    try {
-      const request = await kashYield.getPendingMintRequest(user, batchCycle);
-      
-      // Only process if request exists and has amount
-      if (request.user !== ethers.ZeroAddress && request.amountIn > 0n) {
-        mintRequests.push({
-          user: request.user,
-          tokenIn: request.tokenIn,
-          amountIn: request.amountIn,
-          amountInUSD: request.amountInUSD,
-          batchCycle: request.batchCycle,
-        });
+  // Query all MintRequested events for this batch cycle to get ALL requests
+  // (including multiple requests from the same user)
+  try {
+    const currentBlock = await provider.getBlockNumber();
+    const allMintEvents = await kashYield.queryFilter(
+      kashYield.filters.MintRequested(),
+      undefined,
+      currentBlock
+    );
+    
+    // Filter events by batch cycle
+    const batchMintEvents = allMintEvents.filter((event) => {
+      if ('args' in event && event.args) {
+        const args = event.args as any;
+        return BigInt(args.batchCycle?.toString() || '0') === batchCycle;
+      }
+      return false;
+    });
 
-        // If amountInUSD is 0, we need to calculate it using the contract's getTokenUSD function
-        // This uses the contract's own oracle addresses, which are correct for the deployed network
-        if (request.amountInUSD === 0n) {
+    console.log(`📊 Processing ${batchMintEvents.length} mint event(s) for batch ${batchCycle}`);
+
+    // Process each event (this captures ALL requests, even from the same user)
+    for (const event of batchMintEvents) {
+      if ('args' in event && event.args) {
+        const args = event.args as any;
+        const user = args.user as string;
+        const tokenIn = args.tokenIn as string;
+        const amountIn = BigInt(args.amountIn?.toString() || '0');
+        const eventBatchCycle = BigInt(args.batchCycle?.toString() || '0');
+
+        if (user && user !== ethers.ZeroAddress && amountIn > 0n) {
+          // Calculate USD value using the contract's getTokenUSD function
           try {
-            const usdValue = await kashYield.getTokenUSD(request.tokenIn, request.amountIn);
+            const usdValue = await kashYield.getTokenUSD(tokenIn, amountIn);
             const usdValueBigInt = BigInt(usdValue.toString());
             totalMintUSD += usdValueBigInt;
-            
+
+            mintRequests.push({
+              user,
+              tokenIn,
+              amountIn,
+              amountInUSD: usdValueBigInt,
+              batchCycle: eventBatchCycle,
+            });
+
             // Log calculation details for ETH
-            if (request.tokenIn === ethers.ZeroAddress) {
-              const ethAmount = ethers.formatEther(request.amountIn);
+            if (tokenIn === ethers.ZeroAddress) {
+              const ethAmount = ethers.formatEther(amountIn);
               const usdAmount = ethers.formatEther(usdValueBigInt);
               const ethPrice = Number(usdAmount) / Number(ethAmount);
               console.log(`   💰 Mint Request: ${ethAmount} ETH`);
@@ -200,57 +225,139 @@ export async function calculateNetPosition(
               console.log(`      USD Value: $${usdAmount}`);
             }
           } catch (error: any) {
-            console.warn(`Failed to get USD value for ${request.tokenIn}: ${error.message}`);
-            // Continue processing other requests
-          }
-        } else {
-          // Already valued (shouldn't happen for pending requests, but handle it)
-          totalMintUSD += request.amountInUSD;
-          
-          // Log if already valued
-          if (request.tokenIn === ethers.ZeroAddress) {
-            const ethAmount = ethers.formatEther(request.amountIn);
-            const usdAmount = ethers.formatEther(request.amountInUSD);
-            const ethPrice = Number(usdAmount) / Number(ethAmount);
-            console.log(`   💰 Mint Request: ${ethAmount} ETH (already valued)`);
-            console.log(`      ETH Price: $${ethPrice.toFixed(2)}`);
-            console.log(`      USD Value: $${usdAmount}`);
+            console.warn(`Failed to get USD value for mint event: ${error.message}`);
+            // Continue processing other events
           }
         }
       }
-    } catch (error) {
-      console.warn(`Failed to get mint request for user ${user}:`, error);
-      // Continue processing other users
+    }
+  } catch (error: any) {
+    console.warn(`Failed to query mint events, falling back to stored requests: ${error.message}`);
+    
+    // Fallback to stored requests (old behavior, but may miss multiple requests from same user)
+    for (const user of mintUsers) {
+      try {
+        const request = await kashYield.getPendingMintRequest(user, batchCycle);
+        
+        if (request.user !== ethers.ZeroAddress && request.amountIn > 0n) {
+          mintRequests.push({
+            user: request.user,
+            tokenIn: request.tokenIn,
+            amountIn: request.amountIn,
+            amountInUSD: request.amountInUSD,
+            batchCycle: request.batchCycle,
+          });
+
+          if (request.amountInUSD === 0n) {
+            try {
+              const usdValue = await kashYield.getTokenUSD(request.tokenIn, request.amountIn);
+              const usdValueBigInt = BigInt(usdValue.toString());
+              totalMintUSD += usdValueBigInt;
+              
+              if (request.tokenIn === ethers.ZeroAddress) {
+                const ethAmount = ethers.formatEther(request.amountIn);
+                const usdAmount = ethers.formatEther(usdValueBigInt);
+                const ethPrice = Number(usdAmount) / Number(ethAmount);
+                console.log(`   💰 Mint Request: ${ethAmount} ETH`);
+                console.log(`      ETH Price: $${ethPrice.toFixed(2)}`);
+                console.log(`      USD Value: $${usdAmount}`);
+              }
+            } catch (error: any) {
+              console.warn(`Failed to get USD value for ${request.tokenIn}: ${error.message}`);
+            }
+          } else {
+            totalMintUSD += request.amountInUSD;
+            
+            if (request.tokenIn === ethers.ZeroAddress) {
+              const ethAmount = ethers.formatEther(request.amountIn);
+              const usdAmount = ethers.formatEther(request.amountInUSD);
+              const ethPrice = Number(usdAmount) / Number(ethAmount);
+              console.log(`   💰 Mint Request: ${ethAmount} ETH (already valued)`);
+              console.log(`      ETH Price: $${ethPrice.toFixed(2)}`);
+              console.log(`      USD Value: $${usdAmount}`);
+            }
+          }
+        }
+      } catch (error) {
+        console.warn(`Failed to get mint request for user ${user}:`, error);
+      }
     }
   }
 
   // Calculate total redeem USD value
+  // Process ALL events to capture multiple requests from the same user
   let totalRedeemUSD = 0n;
   const redeemRequests: RedeemRequest[] = [];
 
-  for (const user of redeemUsers) {
-    try {
-      const request = await kashYield.getPendingRedeemRequest(user, batchCycle);
-      
-      // Only process if request exists and has amount
-      if (request.user !== ethers.ZeroAddress && request.kashAmount > 0n) {
-        redeemRequests.push({
-          user: request.user,
-          kashAmount: request.kashAmount,
-          tokenOut: request.tokenOut,
-          batchCycle: request.batchCycle,
-        });
-
-        // Calculate USD value using current NAV
-        // USD value = (kashAmount * NAV) / 1e18
-        const navBigInt = BigInt(currentNAV.toString());
-        const divisor = 10n ** 18n;
-        const usdValue = (request.kashAmount * navBigInt) / divisor;
-        totalRedeemUSD += usdValue;
+  try {
+    const currentBlock = await provider.getBlockNumber();
+    const allRedeemEvents = await kashYield.queryFilter(
+      kashYield.filters.RedeemRequested(),
+      undefined,
+      currentBlock
+    );
+    
+    // Filter events by batch cycle
+    const batchRedeemEvents = allRedeemEvents.filter((event) => {
+      if ('args' in event && event.args) {
+        const args = event.args as any;
+        return BigInt(args.batchCycle?.toString() || '0') === batchCycle;
       }
-    } catch (error) {
-      console.warn(`Failed to get redeem request for user ${user}:`, error);
-      // Continue processing other users
+      return false;
+    });
+
+    console.log(`📊 Processing ${batchRedeemEvents.length} redeem event(s) for batch ${batchCycle}`);
+
+    // Process each event
+    for (const event of batchRedeemEvents) {
+      if ('args' in event && event.args) {
+        const args = event.args as any;
+        const user = args.user as string;
+        const kashAmount = BigInt(args.kashAmount?.toString() || '0');
+        const tokenOut = args.tokenOut as string;
+        const eventBatchCycle = BigInt(args.batchCycle?.toString() || '0');
+
+        if (user && user !== ethers.ZeroAddress && kashAmount > 0n) {
+          // Calculate USD value using current NAV
+          // USD value = (kashAmount * NAV) / 1e18
+          const navBigInt = BigInt(currentNAV.toString());
+          const divisor = 10n ** 18n;
+          const usdValue = (kashAmount * navBigInt) / divisor;
+          totalRedeemUSD += usdValue;
+
+          redeemRequests.push({
+            user,
+            kashAmount,
+            tokenOut,
+            batchCycle: eventBatchCycle,
+          });
+        }
+      }
+    }
+  } catch (error: any) {
+    console.warn(`Failed to query redeem events, falling back to stored requests: ${error.message}`);
+    
+    // Fallback to stored requests
+    for (const user of redeemUsers) {
+      try {
+        const request = await kashYield.getPendingRedeemRequest(user, batchCycle);
+        
+        if (request.user !== ethers.ZeroAddress && request.kashAmount > 0n) {
+          redeemRequests.push({
+            user: request.user,
+            kashAmount: request.kashAmount,
+            tokenOut: request.tokenOut,
+            batchCycle: request.batchCycle,
+          });
+
+          const navBigInt = BigInt(currentNAV.toString());
+          const divisor = 10n ** 18n;
+          const usdValue = (request.kashAmount * navBigInt) / divisor;
+          totalRedeemUSD += usdValue;
+        }
+      } catch (error) {
+        console.warn(`Failed to get redeem request for user ${user}:`, error);
+      }
     }
   }
 
