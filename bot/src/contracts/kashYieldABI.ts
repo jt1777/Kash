@@ -261,6 +261,27 @@ export const kashYieldABI = [
     stateMutability: "view",
     type: "function",
   },
+  {
+    inputs: [{ name: "_aavePool", type: "address" }],
+    name: "setAavePool",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [{ name: "newFee", type: "uint256" }],
+    name: "setFeeBps",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [{ name: "newNAV", type: "uint256" }],
+    name: "updateNAV",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
   // Events
   {
     anonymous: false,

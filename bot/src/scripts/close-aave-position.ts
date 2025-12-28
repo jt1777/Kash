@@ -67,7 +67,7 @@ async function main() {
     usdtDebt = await aavePool.getBorrowedAmount(config.kashYieldAddress);
     console.log(`   USDT Debt: ${ethers.formatUnits(usdtDebt, 6)} USDT\n`);
   } catch (error: any) {
-    // MockAaveV3 might use different function name or not support it
+    // Real Aave doesn't have getBorrowedAmount, use getUserAccountData instead
     console.log(`   ⚠️  Could not get debt directly, will try to repay max amount\n`);
   }
 
@@ -153,11 +153,13 @@ async function main() {
 
   // Step 3: Check ETH balance in Aave
   console.log('📊 Step 3: Checking ETH balance in Aave...');
+  const wethAddress = await kashYield.wethAddress();
   let aaveEthBalance = 0n;
   let aaveSuppliedAmount = 0n;
   try {
     // getATokenBalance includes yield, but we can only withdraw the original supplied amount
-    aaveEthBalance = await aavePool.getATokenBalance(ethers.ZeroAddress, config.kashYieldAddress);
+    // Use WETH address since contract wraps ETH to WETH for Aave
+    aaveEthBalance = await aavePool.getATokenBalance(wethAddress, config.kashYieldAddress);
     console.log(`   Aave ETH Balance (with yield): ${ethers.formatEther(aaveEthBalance)} ETH`);
     
     // Try to get the actual supplied amount (original deposit without yield)
@@ -192,6 +194,7 @@ async function main() {
     console.log(`   Withdrawable amount: ${ethers.formatEther(withdrawableAmount)} ETH`);
     try {
       // Try withdrawing max amount first (withdraws all)
+      // Use ETH_ADDRESS (address(0)) - contract will handle unwrapping WETH to ETH
       const maxUint256 = ethers.MaxUint256;
       const withdrawTx = await kashYield.withdrawFromAave(ethers.ZeroAddress, maxUint256);
       console.log(`   Transaction sent: ${withdrawTx.hash}`);
@@ -208,6 +211,7 @@ async function main() {
       // Try withdrawing the withdrawable amount
       console.log(`\n   Trying to withdraw withdrawable amount (${ethers.formatEther(withdrawableAmount)} ETH)...`);
       try {
+        // Use ETH_ADDRESS (address(0)) - contract will handle unwrapping WETH to ETH
         const withdrawTx = await kashYield.withdrawFromAave(ethers.ZeroAddress, withdrawableAmount);
         console.log(`   Transaction sent: ${withdrawTx.hash}`);
         const receipt = await withdrawTx.wait();
@@ -220,6 +224,7 @@ async function main() {
           const slightlyLess = withdrawableAmount - 1000n; // Subtract 1000 wei
           console.log(`\n   Trying to withdraw slightly less (${ethers.formatEther(slightlyLess)} ETH) to account for rounding...`);
           try {
+            // Use ETH_ADDRESS (address(0)) - contract will handle unwrapping WETH to ETH
             const withdrawTx = await kashYield.withdrawFromAave(ethers.ZeroAddress, slightlyLess);
             console.log(`   Transaction sent: ${withdrawTx.hash}`);
             const receipt = await withdrawTx.wait();
@@ -246,7 +251,8 @@ async function main() {
   let finalAaveEth = 0n;
   let finalAaveUsdtDebt = 0n;
   try {
-    finalAaveEth = await aavePool.getATokenBalance(ethers.ZeroAddress, config.kashYieldAddress);
+    // Use WETH address since contract wraps ETH to WETH for Aave
+    finalAaveEth = await aavePool.getATokenBalance(wethAddress, config.kashYieldAddress);
     finalAaveUsdtDebt = await aavePool.getBorrowedAmount(config.kashYieldAddress);
   } catch (error: any) {
     // Ignore errors for final check

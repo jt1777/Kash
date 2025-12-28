@@ -25,18 +25,67 @@ async function main() {
   const actualBalance = await provider.getBalance(config.kashYieldAddress);
   console.log(`💰 Actual Contract ETH Balance: ${ethers.formatEther(actualBalance)} ETH\n`);
 
-  // Get what events say should be there
-  console.log('📊 Checking events for batch cycle 20440...');
-  const tokenBalances = await getBalancesFromEvents(provider, 20440n);
+  // Get what events say should be there - check ALL batches with ETH mints
+  console.log('📊 Checking events for all batches with ETH deposits...');
   
-  let expectedETH = 0n;
-  for (const balance of tokenBalances) {
-    if (balance.token === ethers.ZeroAddress) {
-      expectedETH = balance.amount;
-      console.log(`\n📈 Expected ETH from events: ${balance.amountFormatted} ETH`);
-      console.log(`   USD Value: $${balance.usdValueFormatted}`);
+  // Query all MintRequested events to find all batches
+  const currentBlock = await provider.getBlockNumber();
+  const allMintEvents = await kashYield.queryFilter(
+    kashYield.filters.MintRequested(),
+    undefined,
+    currentBlock
+  );
+  
+  // Find all unique batch cycles with ETH mints
+  const batchCyclesWithETH = new Set<bigint>();
+  const ethMintsByBatch = new Map<bigint, bigint>();
+  
+  for (const event of allMintEvents) {
+    if ('args' in event && event.args) {
+      const args = event.args as any;
+      const batchCycle = BigInt(args.batchCycle?.toString() || '0');
+      const tokenIn = args.tokenIn as string;
+      const amountIn = BigInt(args.amountIn?.toString() || '0');
+      
+      if (tokenIn === ethers.ZeroAddress && amountIn > 0n) {
+        batchCyclesWithETH.add(batchCycle);
+        const current = ethMintsByBatch.get(batchCycle) || 0n;
+        ethMintsByBatch.set(batchCycle, current + amountIn);
+      }
     }
   }
+  
+  // Sort batch cycles
+  const sortedBatches = Array.from(batchCyclesWithETH).sort((a, b) => {
+    if (a < b) return -1;
+    if (a > b) return 1;
+    return 0;
+  });
+  
+  let totalExpectedETH = 0n;
+  console.log(`\n   Found ${sortedBatches.length} batch cycle(s) with ETH deposits:\n`);
+  
+  for (const batchCycle of sortedBatches) {
+    const ethAmount = ethMintsByBatch.get(batchCycle) || 0n;
+    totalExpectedETH += ethAmount;
+    console.log(`   Batch ${batchCycle}: ${ethers.formatEther(ethAmount)} ETH`);
+  }
+  
+  console.log(`\n📈 Total Expected ETH from all batches: ${ethers.formatEther(totalExpectedETH)} ETH`);
+  
+  // Also get detailed info for the most recent batch (for compatibility)
+  if (sortedBatches.length > 0) {
+    const mostRecentBatch = sortedBatches[sortedBatches.length - 1];
+    const tokenBalances = await getBalancesFromEvents(provider, mostRecentBatch);
+    for (const balance of tokenBalances) {
+      if (balance.token === ethers.ZeroAddress) {
+        console.log(`   (Most recent batch ${mostRecentBatch}: ${balance.amountFormatted} ETH)`);
+        break;
+      }
+    }
+  }
+  
+  const expectedETH = totalExpectedETH;
 
   console.log(`\n📊 Comparison:`);
   console.log(`   Actual Balance: ${ethers.formatEther(actualBalance)} ETH`);
@@ -57,27 +106,27 @@ async function main() {
     console.log(`✅ Balance matches events!`);
   }
 
-  // Check all mint events for batch 20440 to see transaction status
+  // Check all mint events for all batches to see transaction status
   console.log(`\n🔍 Checking individual mint transactions...`);
-  const currentBlock = await provider.getBlockNumber();
-  const allMintEvents = await kashYield.queryFilter(
+  const allMintEventsForCheck = await kashYield.queryFilter(
     kashYield.filters.MintRequested(),
     undefined,
     currentBlock
   );
 
-  const batch20440Events = allMintEvents.filter((event) => {
+  // Filter for ETH mints only
+  const ethMintEvents = allMintEventsForCheck.filter((event) => {
     if ('args' in event && event.args) {
       const args = event.args as any;
-      return BigInt(args.batchCycle?.toString() || '0') === 20440n;
+      return args.tokenIn === ethers.ZeroAddress || args.tokenIn === '0x0000000000000000000000000000000000000000';
     }
     return false;
   });
 
-  console.log(`   Found ${batch20440Events.length} MintRequested event(s) for batch 20440\n`);
+  console.log(`   Found ${ethMintEvents.length} ETH MintRequested event(s) across all batches\n`);
 
-  for (let i = 0; i < batch20440Events.length; i++) {
-    const event = batch20440Events[i];
+  for (let i = 0; i < ethMintEvents.length; i++) {
+    const event = ethMintEvents[i];
     if ('args' in event && event.args) {
       const args = event.args as any;
       const amount = ethers.formatEther(args.amountIn?.toString() || '0');
@@ -120,14 +169,21 @@ async function main() {
     }
   }
 
-  // Check what the contract's batchMintsByToken mapping says
-  console.log(`\n📋 Checking contract's batchMintsByToken mapping...`);
+  // Check what the contract's batchMintsByToken mapping says for all batches
+  console.log(`\n📋 Checking contract's batchMintsByToken mapping for all batches...`);
+  let totalContractRecordedETH = 0n;
   try {
-    const batchMintsByToken = await kashYield.batchMintsByToken(20440n, ethers.ZeroAddress);
-    console.log(`   Contract's recorded ETH mints for batch 20440: ${ethers.formatEther(batchMintsByToken)} ETH`);
+    for (const batchCycle of sortedBatches) {
+      const batchMintsByToken = await kashYield.batchMintsByToken(batchCycle, ethers.ZeroAddress);
+      if (batchMintsByToken > 0n) {
+        totalContractRecordedETH += BigInt(batchMintsByToken.toString());
+        console.log(`   Batch ${batchCycle}: ${ethers.formatEther(batchMintsByToken)} ETH`);
+      }
+    }
+    console.log(`   Total recorded in contract: ${ethers.formatEther(totalContractRecordedETH)} ETH`);
     
-    if (BigInt(batchMintsByToken.toString()) !== expectedETH) {
-      console.log(`   ⚠️  Contract mapping (${ethers.formatEther(batchMintsByToken)}) doesn't match event total (${ethers.formatEther(expectedETH)})`);
+    if (totalContractRecordedETH !== expectedETH) {
+      console.log(`   ⚠️  Contract mapping (${ethers.formatEther(totalContractRecordedETH)}) doesn't match event total (${ethers.formatEther(expectedETH)})`);
     } else {
       console.log(`   ✅ Contract mapping matches event total`);
     }
@@ -368,8 +424,11 @@ async function main() {
     
     const aavePool = new ethers.Contract(aavePoolAddress, aavePoolABI, provider);
     
-    // Check ETH balance in Aave (asset = address(0) for ETH)
-    const aaveEthBalance = await aavePool.getATokenBalance(ethers.ZeroAddress, config.kashYieldAddress);
+    // Get WETH address from contract (Aave uses WETH for ETH deposits)
+    const wethAddress = await kashYield.wethAddress();
+    
+    // Check ETH balance in Aave (use WETH address since contract wraps ETH to WETH)
+    const aaveEthBalance = await aavePool.getATokenBalance(wethAddress, config.kashYieldAddress);
     const aaveEthBalanceFormatted = ethers.formatEther(aaveEthBalance);
     
     console.log(`   📊 Actual ETH balance in Aave: ${aaveEthBalanceFormatted} ETH`);

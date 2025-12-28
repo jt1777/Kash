@@ -68,7 +68,19 @@ async function main() {
   // Check Aave balances (if any tokens are deposited)
   console.log(`\n🔍 Checking Aave balances...`);
   const aavePoolAddress = await kashYield.aavePoolAddress();
-  console.log(`Aave Pool: ${aavePoolAddress}\n`);
+  const realAaveAddress = '0x6Ae43d3271ff6888e7Fc43Fd7321a503ff738951'; // Arbitrum Sepolia
+  const mockAaveAddress = '0x1Fbe5029cC02e7bF88AB8d0082272655399379E8';
+  
+  console.log(`Aave Pool: ${aavePoolAddress}`);
+  if (aavePoolAddress.toLowerCase() === mockAaveAddress.toLowerCase()) {
+    console.log(`   ⚠️  WARNING: Contract is using MockAaveV3 address!`);
+    console.log(`   Update contract to use real Aave: ${realAaveAddress}`);
+    console.log(`   Call: kashYield.setAavePool("${realAaveAddress}")\n`);
+  } else if (aavePoolAddress.toLowerCase() === realAaveAddress.toLowerCase()) {
+    console.log(`   ✅ Using real Aave V3 Pool\n`);
+  } else {
+    console.log(`   ⚠️  Unknown Aave Pool address\n`);
+  }
 
   const aavePoolABI = [
     {
@@ -85,66 +97,79 @@ async function main() {
 
   const aavePool = new ethers.Contract(aavePoolAddress, aavePoolABI, provider);
 
-  // Check ETH in Aave (MockAaveV3 only supports ETH)
+  // Check ETH in Aave (use WETH address since contract wraps ETH to WETH for real Aave)
   let aaveEthBalance = 0n;
   try {
-    aaveEthBalance = await aavePool.getATokenBalance(ethers.ZeroAddress, config.kashYieldAddress);
+    // Contract wraps ETH to WETH before depositing to Aave
+    aaveEthBalance = await aavePool.getATokenBalance(wethAddress, config.kashYieldAddress);
     if (aaveEthBalance > 0n) {
-      console.log(`📊 Aave ETH: ${ethers.formatEther(aaveEthBalance)} ETH`);
+      console.log(`📊 Aave ETH (as WETH): ${ethers.formatEther(aaveEthBalance)} ETH`);
+    } else {
+      console.log(`📊 Aave ETH (as WETH): 0 ETH`);
     }
   } catch (error: any) {
-    console.log(`   ⚠️  Could not check Aave ETH balance: ${error.message}`);
-  }
-
-  // Check WETH in Aave (only if not using MockAaveV3)
-  try {
-    const aaveWethBalance = await aavePool.getATokenBalance(wethAddress, config.kashYieldAddress);
-    if (aaveWethBalance > 0n) {
-      console.log(`📊 Aave WETH: ${ethers.formatUnits(aaveWethBalance, 18)} WETH`);
-    }
-  } catch (error: any) {
-    // MockAaveV3 doesn't support non-ETH tokens, so we silently skip
-    if (!error.message.includes('Mock only supports ETH')) {
-      console.log(`   ⚠️  Could not check Aave WETH balance: ${error.message}`);
-    }
-  }
-
-  // Check WBTC in Aave (only if not using MockAaveV3)
-  try {
-    const aaveWbtcBalance = await aavePool.getATokenBalance(wbtcAddress, config.kashYieldAddress);
-    if (aaveWbtcBalance > 0n) {
-      console.log(`📊 Aave WBTC: ${ethers.formatUnits(aaveWbtcBalance, 8)} WBTC`);
-    }
-  } catch (error: any) {
-    // MockAaveV3 doesn't support non-ETH tokens, so we silently skip
-    if (!error.message.includes('Mock only supports ETH')) {
-      console.log(`   ⚠️  Could not check Aave WBTC balance: ${error.message}`);
+    const errorMsg = error.message || error.reason || 'Unknown error';
+    if (errorMsg.includes('Mock only supports ETH')) {
+      console.log(`   ⚠️  MockAaveV3 detected - only supports ETH, not WETH`);
+      // Try with ETH address for mock
+      try {
+        aaveEthBalance = await aavePool.getATokenBalance(ethers.ZeroAddress, config.kashYieldAddress);
+        if (aaveEthBalance > 0n) {
+          console.log(`📊 Aave ETH (Mock): ${ethers.formatEther(aaveEthBalance)} ETH`);
+        }
+      } catch (mockError: any) {
+        console.log(`   ⚠️  Could not check Aave ETH balance: ${errorMsg}`);
+      }
+    } else {
+      console.log(`   ⚠️  Could not check Aave ETH balance: ${errorMsg}`);
     }
   }
 
-  // Check USDT in Aave (only if not using MockAaveV3)
-  try {
-    const aaveUsdtBalance = await aavePool.getATokenBalance(usdtAddress, config.kashYieldAddress);
-    if (aaveUsdtBalance > 0n) {
-      console.log(`📊 Aave USDT: ${ethers.formatUnits(aaveUsdtBalance, 6)} USDT`);
-    }
-  } catch (error: any) {
-    // MockAaveV3 doesn't support non-ETH tokens, so we silently skip
-    if (!error.message.includes('Mock only supports ETH')) {
-      console.log(`   ⚠️  Could not check Aave USDT balance: ${error.message}`);
+  // Check WETH in Aave (only for real Aave, mock doesn't support this)
+  if (aavePoolAddress.toLowerCase() === realAaveAddress.toLowerCase()) {
+    try {
+      const aaveWethBalance = await aavePool.getATokenBalance(wethAddress, config.kashYieldAddress);
+      if (aaveWethBalance > 0n) {
+        console.log(`📊 Aave WETH: ${ethers.formatUnits(aaveWethBalance, 18)} WETH`);
+      }
+    } catch (error: any) {
+      // Silently skip - might not have WETH deposited separately
     }
   }
 
-  // Check USDC in Aave (only if not using MockAaveV3)
-  try {
-    const aaveUsdcBalance = await aavePool.getATokenBalance(usdcAddress, config.kashYieldAddress);
-    if (aaveUsdcBalance > 0n) {
-      console.log(`📊 Aave USDC: ${ethers.formatUnits(aaveUsdcBalance, 6)} USDC`);
+  // Check WBTC in Aave (only for real Aave)
+  if (aavePoolAddress.toLowerCase() === realAaveAddress.toLowerCase()) {
+    try {
+      const aaveWbtcBalance = await aavePool.getATokenBalance(wbtcAddress, config.kashYieldAddress);
+      if (aaveWbtcBalance > 0n) {
+        console.log(`📊 Aave WBTC: ${ethers.formatUnits(aaveWbtcBalance, 8)} WBTC`);
+      }
+    } catch (error: any) {
+      // Silently skip - might not have WBTC deposited
     }
-  } catch (error: any) {
-    // MockAaveV3 doesn't support non-ETH tokens, so we silently skip
-    if (!error.message.includes('Mock only supports ETH')) {
-      console.log(`   ⚠️  Could not check Aave USDC balance: ${error.message}`);
+  }
+
+  // Check USDT in Aave (only for real Aave, mock doesn't support this)
+  if (aavePoolAddress.toLowerCase() === realAaveAddress.toLowerCase()) {
+    try {
+      const aaveUsdtBalance = await aavePool.getATokenBalance(usdtAddress, config.kashYieldAddress);
+      if (aaveUsdtBalance > 0n) {
+        console.log(`📊 Aave USDT: ${ethers.formatUnits(aaveUsdtBalance, 6)} USDT`);
+      }
+    } catch (error: any) {
+      // Silently skip - might not have USDT deposited
+    }
+  }
+
+  // Check USDC in Aave (only for real Aave)
+  if (aavePoolAddress.toLowerCase() === realAaveAddress.toLowerCase()) {
+    try {
+      const aaveUsdcBalance = await aavePool.getATokenBalance(usdcAddress, config.kashYieldAddress);
+      if (aaveUsdcBalance > 0n) {
+        console.log(`📊 Aave USDC: ${ethers.formatUnits(aaveUsdcBalance, 6)} USDC`);
+      }
+    } catch (error: any) {
+      // Silently skip - might not have USDC deposited
     }
   }
 

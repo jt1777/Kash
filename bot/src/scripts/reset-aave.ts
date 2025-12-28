@@ -58,7 +58,10 @@ async function main() {
   ];
   
   const aavePool = new ethers.Contract(aavePoolAddress, aavePoolABI, provider);
-  const aaveEthBalance = await aavePool.getATokenBalance(ethers.ZeroAddress, config.kashYieldAddress);
+  
+  // Get WETH address from contract (Aave uses WETH for ETH deposits)
+  const wethAddress = await kashYield.wethAddress();
+  const aaveEthBalance = await aavePool.getATokenBalance(wethAddress, config.kashYieldAddress);
   const aaveEthBalanceFormatted = ethers.formatEther(aaveEthBalance);
   
   console.log(`   Aave ETH Balance: ${aaveEthBalanceFormatted} ETH\n`);
@@ -69,6 +72,7 @@ async function main() {
     console.log(`📤 Withdrawing ${aaveEthBalanceFormatted} ETH from Aave...`);
     try {
       // Withdraw all ETH from Aave (use type(uint256).max to withdraw all)
+      // Use ETH_ADDRESS (address(0)) - contract will handle unwrapping WETH to ETH
       const maxUint256 = ethers.MaxUint256;
       const withdrawTx = await kashYield.withdrawFromAave(ethers.ZeroAddress, maxUint256);
       console.log(`   Transaction sent: ${withdrawTx.hash}`);
@@ -85,6 +89,7 @@ async function main() {
       // Try withdrawing exact amount instead
       console.log(`\n   Trying to withdraw exact amount instead...`);
       try {
+        // Use ETH_ADDRESS (address(0)) - contract will handle unwrapping WETH to ETH
         const withdrawTx = await kashYield.withdrawFromAave(ethers.ZeroAddress, aaveEthBalance);
         console.log(`   Transaction sent: ${withdrawTx.hash}`);
         const receipt = await withdrawTx.wait();
@@ -99,7 +104,8 @@ async function main() {
   // Check final balances
   console.log('📊 Final Balances:');
   const finalContractBalance = await provider.getBalance(config.kashYieldAddress);
-  const finalAaveBalance = await aavePool.getATokenBalance(ethers.ZeroAddress, config.kashYieldAddress);
+  // Use WETH address since contract wraps ETH to WETH for Aave
+  const finalAaveBalance = await aavePool.getATokenBalance(wethAddress, config.kashYieldAddress);
   
   console.log(`   Contract ETH: ${ethers.formatEther(finalContractBalance)} ETH`);
   console.log(`   Aave ETH: ${ethers.formatEther(finalAaveBalance)} ETH`);

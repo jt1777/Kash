@@ -18,6 +18,10 @@
     "deploy:aave": "ts-node src/scripts/deploy-aave.ts",
     "check:balance": "ts-node src/scripts/check-eth-balance.ts",
     "check:tokens": "ts-node src/scripts/check-token-balances.ts",
+    "check:aave-address": "ts-node src/scripts/check-aave-address.ts",
+    "check:aave-eth": "ts-node src/scripts/check-aave-eth.ts",
+    "update:aave-address": "ts-node src/scripts/update-aave-address.ts",
+    "withdraw:mock-aave": "ts-node src/scripts/withdraw-from-mock-aave.ts",
     "reset:aave": "ts-node src/scripts/reset-aave.ts",
     "close:aave": "ts-node src/scripts/close-aave-position.ts"
   },

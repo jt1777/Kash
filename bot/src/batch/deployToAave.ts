@@ -142,14 +142,16 @@ export async function deployToAave(
       console.log(`   Contract ETH Balance: ${ethers.formatEther(contractEthBalance)} ETH`);
       
       // Check ETH already in Aave
+      // Get WETH address since contract wraps ETH to WETH for Aave
+      const wethAddress = await kashYield.wethAddress();
       let aaveEthBalance = 0n;
       try {
-        aaveEthBalance = await aavePool.getATokenBalance(ethers.ZeroAddress, config.kashYieldAddress);
+        aaveEthBalance = await aavePool.getATokenBalance(wethAddress, config.kashYieldAddress);
         if (aaveEthBalance > 0n) {
           console.log(`   ETH already in Aave: ${ethers.formatEther(aaveEthBalance)} ETH`);
         }
       } catch (error: any) {
-        // MockAaveV3 might not support this, continue
+        // Error checking Aave balance, continue
       }
       
       // Only deposit what's actually in the contract
@@ -285,7 +287,7 @@ export async function deployToAave(
   console.log(`   USDT Address: ${usdtTokenAddress}`);
   console.log(`   USDT Amount (raw): ${usdtAmount.toString()}`);
   
-  // Verify Aave has USDT available (for MockAaveV3)
+  // Verify Aave has USDT available (optional check)
   try {
     const aavePoolABI = [
       {
@@ -300,7 +302,7 @@ export async function deployToAave(
     const totalBorrowed = await aavePool.totalBorrowed();
     console.log(`   Aave total borrowed: ${ethers.formatUnits(totalBorrowed, 6)} USDT`);
     
-    // Check if MockAaveV3 has enough USDT
+    // Check if Aave has enough USDT (optional check)
     const erc20ABI = [
       {
         inputs: [{ name: 'account', type: 'address' }],
@@ -321,7 +323,7 @@ export async function deployToAave(
       console.log(`      This borrow will fail. Please fund Aave with USDT first.`);
     }
   } catch (error: any) {
-    // Not a MockAaveV3 or can't check balance, continue anyway
+    // Can't check balance, continue anyway (real Aave should have liquidity)
     console.log(`   ℹ️  Could not verify Aave USDT balance (this is OK for real Aave)`);
   }
   
