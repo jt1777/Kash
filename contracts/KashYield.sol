@@ -3,699 +3,655 @@ pragma solidity ^0.8.28;
 
 import './KashEthToken.sol';
 import '@openzeppelin/contracts/token/ERC20/IERC20.sol';
+import '@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol';
 
-// interface with mock Aave contract
+// Asset type enum for multi-asset support
+enum AssetType { ETH, WETH, WBTC, USDT, USDC }
+
+// Aave V3 Pool interface
 interface IPool {
     function supply(address asset, uint256 amount, address onBehalfOf, uint16 referralCode) external payable;
     function withdraw(address asset, uint256 amount, address to) external returns (uint256);
-    function getATokenBalance(address asset, address user) external view returns (uint256);
+    function getUserAccountData(address user) external view returns (
+        uint256 totalCollateralBase,
+        uint256 totalDebtBase,
+        uint256 availableBorrowsBase,
+        uint256 currentLiquidationThreshold,
+        uint256 ltv,
+        uint256 healthFactor
+    );
     function borrow(address asset, uint256 amount, uint256 interestRateMode, uint16 referralCode, address onBehalfOf) external;
     function repay(address asset, uint256 amount, uint256 rateMode, address onBehalfOf) external returns (uint256);
 }
 
-// for eth price feed
+// Chainlink Price Feed interface
 interface IChainlinkPriceFeed {
     function latestRoundData() external view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound);
     function decimals() external view returns (uint8);
 }
 
-// Interface for MockGMX to interact with the mock GMX DEX contract
-interface IMockGMX {
-    function depositCollateralAndOpenPosition(uint256 amount, bool isLong, address onBehalfOf) external;
-    function depositCollateralAndOpenPositionWithSize(uint256 amount, uint256 positionSize, bool isLong, address onBehalfOf) external;
-    function closePosition(address onBehalfOf) external;
-    function swap(address tokenIn, address tokenOut, uint256 amountIn, uint256 minAmountOut, address recipient) external returns (uint256 amountOut);
-}
-
-// Event for KashEth redemption and withdrawal
-event KashEthRedeemed(address indexed user, uint256 kashEthAmount, uint256 ethWithdrawn, uint256 batchCycle);
-
-// Event for user sending ETH to mint KashEths
-event KashEthMinted(address indexed user, uint256 ethAmount, uint256 kashEthAmount, uint256 timestamp, uint256 batchCycle);
-
-// Event for smart contract depositing ETH to Aave
-event BulkDepositToAave(uint256 amount, uint256 timestamp);
-
-// Event for USDT borrowing
-event USDTBorrowed(uint256 usdtAmount, uint256 timestamp);
-
-// Event for configuration update
-event ConfigurationUpdated(uint256 transactionsPerDay, uint256 cutoffHourHKT, uint256 cutoffMinuteHKT, uint256 borrowPercentage);
-
-// Event for USDT transfer to GMX
-event USDTTransferredToGMX(uint256 amount);
-
-// Event for redemption requested
-event RedemptionRequested(address indexed user, uint256 amount, uint256 timestamp);
-
-// Event for daily metrics recorded
-event DailyMetricsRecorded(uint256 timestamp, uint256 aTokenBalance, uint256 usdtDebt, int256 gmxFunding, int256 netFees);
-
-// Event for bulk redemption from Aave
-event BulkRedeemedFromAave(uint256 amount, uint256 timestamp);
-
-// Event for no action needed, to be used for logging purposes
-event NoActionNeeded(uint256 timestamp);
-
-// Event for ETH distributed to user
-event EthDistributedToUser(address indexed user, uint256 amount);
-
-// Event for daily fees distributed
-event DailyFeesDistributed(uint256 timestamp, int256 netFees, uint256 totalBatchContributions, uint256 batchCycleTimestamp);
-
-// Event for daily fees distributed to a user, maybe we don't really need this as much as the cumulative total.
-event DailyUserFees(address indexed user, uint256 dayOrTimestamp, int256 feeAmount);
-
-// Event for redemption request queued
-event RedemptionRequestQueued(address indexed user, uint256 kashEthAmount, uint256 batchCycle, uint256 timestamp, uint256 userTotalBalance, bool isPartialRedemption);
-
-// Event for bulk redemption processed from Aave, GMX, and USDT repayment
-event BulkRedemptionProcessed(uint256 totalEthWithdrawn, uint256 usdtRepaid, uint256 ethShortCovered, uint256 timestamp);
-
-// Extend IPool to get user account data for debt balance
-interface IPoolExtended {
-    function getUserAccountData(address user) external view returns (
-        uint256 totalCollateralETH,
-        uint256 totalDebtETH,
-        uint256 availableBorrowsETH,
-        uint256 currentLiquidationThreshold,
-        uint256 ltv,
-        uint256 healthFactor
+// Hyperliquid interface
+interface IHyperliquid {
+    function depositCollateralAndOpenShort(uint256 usdcAmount, uint256 positionSizeUsd, address onBehalfOf) external;
+    function closePosition(address onBehalfOf) external returns (uint256 collateralReturned, int256 pnl);
+    function getPositionFunding(address account) external view returns (int256);
+    function accrueFunding(address account) external;
+    function getPosition(address account) external view returns (
+        uint256 collateral,
+        uint256 positionSize,
+        uint256 entryPrice,
+        bool isLong,
+        bool isOpen,
+        int256 funding
     );
 }
 
-// Interface for GMX funding (adjust based on real GMX contract)
-interface IGMX {
-    function getPositionFunding(address account, address indexToken, bool isLong) external view returns (int256 fundingAmount);
-}
+// Events
+event KashEthMinted(address indexed user, address indexed asset, uint256 assetAmount, uint256 kashEthAmount, uint256 timestamp, uint256 batchCycle);
+event KashEthRedeemed(address indexed user, uint256 kashEthAmount, uint256 assetAmount, uint256 assetType, uint256 batchCycle);
+event BulkDepositToAave(address indexed asset, uint256 amount, uint256 timestamp);
+event USDCBorrowed(uint256 usdcAmount, uint256 timestamp);
+event USDCDepositedToHyperliquid(uint256 amount, uint256 timestamp);
+event PositionClosed(uint256 usdcReturned, int256 pnl, uint256 timestamp);
+event BulkRedemptionProcessed(uint256 totalAssetWithdrawn, uint256 usdcRepaid, uint256 timestamp);
+event DailyMetricsRecorded(uint256 timestamp, uint256 totalCollateral, uint256 usdcDebt, int256 hyperliquidFunding, int256 netFees);
+event DailyFeesDistributed(uint256 timestamp, int256 netFees, uint256 totalBatchContributions);
+event ConfigurationUpdated(uint256 transactionsPerDay, uint256 borrowPercentage, uint256 leverage);
+event RedemptionRequestQueued(address indexed user, uint256 kashEthAmount, uint256 batchCycle, uint256 timestamp);
+event AssetDistributedToUser(address indexed user, address indexed asset, uint256 amount);
 
 /**
  * @title KashYield
- * @dev this is a smart contract that allows users to deposit ETH and mint KashEths.
- * The yield from KashEths comes from funding earned by shorting Eth on GMX, a perpetual DEX.  The smart contract sends Eth to Aave, then borrows USDT.  The USDT is sent to GMX and is used to swap for more Eth.  The Eth is then used as collateral short the full leveraged Eth exposure.  Net fees earned from these transactions are paid out to the users as yield.
+ * @dev Multi-asset yield vault using Aave + Hyperliquid
+ * Users deposit ETH/wETH (future: wBTC, USDT, USDC) → Mint KashEth → Earn yield from funding fees
  */
-
 contract KashYield {
+    using SafeERC20 for IERC20;
+    
+    // ============ State Variables ============
+    
     address payable public owner;
     address public aavePoolAddress;
-    address public priceFeedAddress;
-    address public usdtAddress;
-    address public gmxAddress;
+    address public priceFeedAddress; // ETH/USD price feed
+    address public usdcAddress;
+    address public hyperliquidAddress;
+    address public wethAddress; // Wrapped ETH address
     
     KashEth public kashEth;
     
-    // Array to track all unique depositors
+    // Supported assets (ETH is address(0))
+    mapping(AssetType => address) public assetAddresses;
+    mapping(address => AssetType) public assetTypeByAddress;
+    mapping(AssetType => bool) public isAssetSupported;
+    AssetType[] public supportedAssets;
+    
+    // User tracking
     address[] public allDepositors;
-    // Mapping to check if an address is already in allDepositors to avoid duplicates
     mapping(address => bool) public isDepositor;
     
-    // Keep mappings and variables related to ETH operations for the smart contract
-    mapping(address => uint) public eligibleCycleDay;
-    uint public totalATokenBalance;
-    uint256 public totalAmountInAave;
-    uint public totalBorrowedUSDT;
-    uint public lastBulkTransferTime;
-    uint256 public pendingDepositBalance;
-    uint256 public totalEthDepositedToAave;
-    uint256 public totalUsdValueShorted;
-    mapping(address => uint256) public userUsdValueShorted;
-
-    // Configuration variables for design and testing
-    uint public transactionsPerDay = 1; // Number of bulk deposits to Aave per day (default: 1)
-    uint256 public usdtBorrowPercentage = 70; // Percentage of ETH value to borrow as USDT (default: 70%)
-    uint256 public depositorsPerFeeBatch = 50; // Number of depositors to process per batch for fee distribution (configurable)
-    uint256 public processingDelaySeconds = 23 * 3600; // Delay in seconds before processDailyActions can be called again (default: 23 hours)
-    uint256 public lastProcessedTimestamp; // Tracks the last time processDailyActions was successfully called
-
-    // Mapping to track individual user deposits to Aave
-    mapping(address => uint256) public userDepositedToAave; // Tracks per user ETH deposited to Aave
-    
-    // Add variables to track user contributions per batch cycle
-    mapping(address => mapping(uint256 => uint256)) public userBatchContributions; // Tracks user ETH contributions per batch cycle (eligibleCycleDay)
-    mapping(uint256 => uint256) public totalBatchContributions; // Tracks total ETH for each batch cycle
-    
-    // mapping to track cumulative ETH deposited by each user across all batch cycles
-    mapping(address => uint256) public userTotalEthDeposited; // Running total of ETH deposited by user
-
-    // Track users who contributed to each batch (for distribution)
+    // Batching system
+    mapping(address => mapping(uint256 => mapping(AssetType => uint256))) public userBatchContributions;
+    mapping(uint256 => mapping(AssetType => uint256)) public totalBatchContributions;
     mapping(uint256 => address[]) public batchContributors;
-    // Track users who requested redemption in each batch
-    mapping(uint256 => address[]) public batchRedeemers;
-
-    // Track daily metrics for aToken balance, USDT debt, and GMX funding
-    mapping(uint256 => uint256) public dailyATokenBalance; // ETH aToken balance at end of day
-    mapping(uint256 => uint256) public dailyUsdtDebtBalance; // USDT debt balance at end of day
-    mapping(uint256 => int256) public dailyGmxFunding; // GMX funding earned/owed at end of day
-    mapping(uint256 => int256) public dailyNetFeesEarned; // Net fees (yield - interest + funding) per day
+    mapping(uint256 => mapping(address => bool)) public isContributorInBatch;
     
-    // Mapping to track cumulative net fees earned per user
+    // Redemption system
+    mapping(address => mapping(uint256 => uint256)) public pendingRedemptionsPerBatch;
+    mapping(uint256 => address[]) public batchRedeemers;
+    mapping(uint256 => uint256) public totalRedemptionRequestsPerBatch;
+    
+    // Protocol positions
+    uint256 public totalUsdcBorrowed;
+    uint256 public totalHyperliquidCollateral;
+    uint256 public hyperliquidPositionSize;
+    bool public isHyperliquidPositionOpen;
+    
+    // User totals
+    mapping(address => uint256) public userTotalUsdDeposited;
     mapping(address => int256) public userCumulativeFeesEarned;
-
-    // Struct to store fee snapshots for each day with total batch contributions for the relevant cycle
+    
+    // Configuration
+    uint256 public transactionsPerDay = 1;
+    uint256 public usdcBorrowPercentage = 70; // 70% of collateral value
+    uint256 public leverage = 170; // 1.7x = 170 (in basis points)
+    uint256 public depositorsPerFeeBatch = 50;
+    uint256 public processingDelaySeconds = 23 * 3600; // 23 hours
+    uint256 public lastProcessedTimestamp;
+    
+    // Time windows (HKT)
+    uint256 public startHourHKT = 0;
+    uint256 public startMinuteHKT = 15;
+    uint256 public endHourHKT = 23;
+    uint256 public endMinuteHKT = 45;
+    
+    // Daily metrics
+    mapping(uint256 => uint256) public dailyTotalCollateral;
+    mapping(uint256 => uint256) public dailyUsdcDebt;
+    mapping(uint256 => int256) public dailyHyperliquidFunding;
+    mapping(uint256 => int256) public dailyNetFeesEarned;
+    
     struct FeeSnapshot {
         int256 netFees;
         uint256 totalBatchContributions;
-        uint256 batchCycleTimestamp; // Timestamp of the batch cycle associated with this day's fees
+        uint256 batchCycleTimestamp;
         bool isDistributed;
     }
     mapping(uint256 => FeeSnapshot) public historicalFeeSnapshots;
-    
-    // Mapping to track if a user has claimed fees for a specific day
     mapping(address => mapping(uint256 => bool)) public hasClaimed;
-
-    // Add state variables for tracking pending redemptions
-    uint256 public pendingRedemptionBalance; // Total ETH value requested for redemption
-    mapping(address => mapping(uint256 => uint256)) public pendingRedemptionsPerBatch; // Tracks per-user pending redemption in KashEth amount per batch cycle
-    mapping(address => uint256) public redemptionBatchCycle; // Tracks the batch cycle for user's redemption request (for simplicity, tracks latest batch)
-    mapping(uint256 => uint256) public totalRedemptionRequestsPerBatch; // Tracks total KashEth amount per batch cycle for redemption
-
-    // Add state variables for transaction window times
-    uint public startHourHKT = 0; // Default start hour for transaction window
-    uint public startMinuteHKT = 15; // Default start minute for transaction window
-    uint public endHourHKT = 23; // Default end hour for transaction window
-    uint public endMinuteHKT = 45; // Default end minute for transaction window
-
+    
+    // ============ Modifiers ============
+    
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Only owner");
+        _;
+    }
+    
+    // ============ Constructor ============
+    
     constructor(
         address _aavePoolAddress,
-        address _usdtAddress,
+        address _usdcAddress,
         address _priceFeedAddress,
-        address _gmxAddress
+        address _hyperliquidAddress,
+        address _wethAddress
     ) payable {
         owner = payable(msg.sender);
         aavePoolAddress = _aavePoolAddress;
-        usdtAddress = _usdtAddress;
+        usdcAddress = _usdcAddress;
         priceFeedAddress = _priceFeedAddress;
-        gmxAddress = _gmxAddress;
-        kashEth = new KashEth();
-        kashEth.transferOwnership(msg.sender); // Ensure owner can control minting/burning if needed
+        hyperliquidAddress = _hyperliquidAddress;
+        wethAddress = _wethAddress;
         
-        emit KashEthMinted(msg.sender, msg.value, 0, block.timestamp, 0);
+        kashEth = new KashEth();
+        kashEth.transferOwnership(address(this));
+        
+        // Initialize supported assets
+        assetAddresses[AssetType.ETH] = address(0);
+        assetAddresses[AssetType.WETH] = _wethAddress;
+        
+        assetTypeByAddress[address(0)] = AssetType.ETH;
+        assetTypeByAddress[_wethAddress] = AssetType.WETH;
+        
+        isAssetSupported[AssetType.ETH] = true;
+        isAssetSupported[AssetType.WETH] = true;
+        supportedAssets.push(AssetType.ETH);
+        supportedAssets.push(AssetType.WETH);
+        
+        emit KashEthMinted(msg.sender, address(0), msg.value, 0, block.timestamp, 0);
     }
-
-    // Modifier to restrict functions to contract owner
-    modifier onlyOwner() {
-        require(msg.sender == owner, "Only owner can call this function");
-        _;
-    }
-
-    // Function to update configuration parameters (only callable by owner)
-    function updateConfiguration(uint _transactionsPerDay, uint _cutoffHourHKT, uint _cutoffMinuteHKT, uint _borrowPercentage, uint _startHourHKT, uint _startMinuteHKT, uint _endHourHKT, uint _endMinuteHKT, uint _depositorsPerFeeBatch, uint256 _processingDelaySeconds) external onlyOwner {
-        require(_transactionsPerDay > 0, "Transactions per day must be greater than 0");
-        require(_cutoffHourHKT < 24, "Cutoff hour must be between 0 and 23");
-        require(_cutoffMinuteHKT < 60, "Cutoff minute must be between 0 and 59");
-        require(_startHourHKT < 24, "Start hour must be between 0 and 23");
-        require(_startMinuteHKT < 60, "Start minute must be between 0 and 59");
-        require(_endHourHKT < 24, "End hour must be between 0 and 23");
-        require(_endMinuteHKT < 60, "End minute must be between 0 and 59");
-        require(_borrowPercentage == 40, "Borrow percentage must be exactly 40");
-        require(_depositorsPerFeeBatch > 0, "Depositors per fee batch must be greater than 0");
-        require(_processingDelaySeconds >= 3600, "Processing delay must be at least 1 hour");
+    
+    // ============ Admin Functions ============
+    
+    function updateConfiguration(
+        uint256 _transactionsPerDay,
+        uint256 _borrowPercentage,
+        uint256 _leverage,
+        uint256 _depositorsPerFeeBatch,
+        uint256 _processingDelaySeconds,
+        uint256 _startHourHKT,
+        uint256 _startMinuteHKT,
+        uint256 _endHourHKT,
+        uint256 _endMinuteHKT
+    ) external onlyOwner {
+        require(_transactionsPerDay > 0, "Invalid transactionsPerDay");
+        require(_borrowPercentage <= 75, "Borrow percentage max 75%");
+        require(_leverage >= 100 && _leverage <= 200, "Leverage 1-2x");
+        require(_depositorsPerFeeBatch > 0, "Invalid batch size");
+        require(_processingDelaySeconds >= 3600, "Min 1 hour delay");
+        
         transactionsPerDay = _transactionsPerDay;
-        usdtBorrowPercentage = _borrowPercentage;
+        usdcBorrowPercentage = _borrowPercentage;
+        leverage = _leverage;
         depositorsPerFeeBatch = _depositorsPerFeeBatch;
         processingDelaySeconds = _processingDelaySeconds;
-        // Store start and end times for transaction window (default set to start at 00:15 and end at 23:45)
         startHourHKT = _startHourHKT;
         startMinuteHKT = _startMinuteHKT;
         endHourHKT = _endHourHKT;
         endMinuteHKT = _endMinuteHKT;
-        emit ConfigurationUpdated(_transactionsPerDay, _cutoffHourHKT, _cutoffMinuteHKT, _borrowPercentage);
+        
+        emit ConfigurationUpdated(_transactionsPerDay, _borrowPercentage, _leverage);
     }
-
-    // USER FUNCTIONS *******************************
     
-    // Function for users to send ETH and mint KashEths (previously called deposit)
-    function mintKashEth() external payable {
-        require(msg.value > 0, "ETH amount must be greater than 0");
-        require(isWithinTransactionWindow(), "Not within deposit window");
-        pendingDepositBalance += msg.value;
-        // Calculate the next midnight (00:00 UTC) timestamp for batching
-        uint256 SECONDS_PER_DAY = 86400;
-        uint256 nextMidnight = ((block.timestamp / SECONDS_PER_DAY) + 1) * SECONDS_PER_DAY;
-        eligibleCycleDay[msg.sender] = nextMidnight;
-        // Track user's contribution to this batch cycle
-        if (userBatchContributions[msg.sender][nextMidnight] == 0) {
-            batchContributors[nextMidnight].push(msg.sender);
-            // Add to allDepositors if not already added
-            if (!isDepositor[msg.sender]) {
-                allDepositors.push(msg.sender);
-                isDepositor[msg.sender] = true;
+    function addSupportedAsset(AssetType assetType, address assetAddress) external onlyOwner {
+        require(!isAssetSupported[assetType], "Asset already supported");
+        require(assetAddress != address(0) || assetType == AssetType.ETH, "Invalid address");
+        
+        assetAddresses[assetType] = assetAddress;
+        if (assetAddress != address(0)) {
+            assetTypeByAddress[assetAddress] = assetType;
+        }
+        isAssetSupported[assetType] = true;
+        supportedAssets.push(assetType);
+    }
+    
+    // ============ User Functions ============
+    
+    /**
+     * @dev Deposit ETH and queue for batch minting
+     */
+    function depositETH() external payable {
+        require(msg.value > 0, "Amount must be > 0");
+        require(isWithinTransactionWindow(), "Outside deposit window");
+        require(isAssetSupported[AssetType.ETH], "ETH not supported");
+        
+        uint256 batchCycle = getNextMidnightTimestamp();
+        
+        _recordContribution(msg.sender, AssetType.ETH, msg.value, batchCycle);
+        
+        emit KashEthMinted(msg.sender, address(0), msg.value, 0, block.timestamp, batchCycle);
+    }
+    
+    /**
+     * @dev Deposit WETH and queue for batch minting
+     */
+    function depositWETH(uint256 amount) external {
+        require(amount > 0, "Amount must be > 0");
+        require(isWithinTransactionWindow(), "Outside deposit window");
+        require(isAssetSupported[AssetType.WETH], "WETH not supported");
+        
+        IERC20(wethAddress).safeTransferFrom(msg.sender, address(this), amount);
+        
+        uint256 batchCycle = getNextMidnightTimestamp();
+        
+        _recordContribution(msg.sender, AssetType.WETH, amount, batchCycle);
+        
+        emit KashEthMinted(msg.sender, wethAddress, amount, 0, block.timestamp, batchCycle);
+    }
+    
+    /**
+     * @dev Internal function to record user contributions
+     */
+    function _recordContribution(address user, AssetType assetType, uint256 amount, uint256 batchCycle) internal {
+        if (userBatchContributions[user][batchCycle][assetType] == 0) {
+            if (!isContributorInBatch[batchCycle][user]) {
+                batchContributors[batchCycle].push(user);
+                isContributorInBatch[batchCycle][user] = true;
+            }
+            if (!isDepositor[user]) {
+                allDepositors.push(user);
+                isDepositor[user] = true;
             }
         }
-        userBatchContributions[msg.sender][nextMidnight] += msg.value;
-        totalBatchContributions[nextMidnight] += msg.value;
-        // Update user's cumulative ETH contributed total
-        userTotalEthDeposited[msg.sender] += msg.value;
-
-        // Do NOT mint KashEths immediately. Minting will occur after batch processing.
-        emit KashEthMinted(msg.sender, msg.value, 0, block.timestamp, nextMidnight);
+        
+        userBatchContributions[user][batchCycle][assetType] += amount;
+        totalBatchContributions[batchCycle][assetType] += amount;
+        
+        // Convert to USD for tracking
+        uint256 usdValue = convertAssetToUsd(assetType, amount);
+        userTotalUsdDeposited[user] += usdValue;
     }
-
-    // Function for users to check their accumulated fees without redeeming
+    
+    /**
+     * @dev Request redemption of KashEth (batched)
+     */
+    function requestRedemption(uint256 kashEthAmount) external {
+        require(kashEthAmount > 0, "Amount must be > 0");
+        require(isWithinTransactionWindow(), "Outside window");
+        require(kashEth.balanceOf(msg.sender) >= kashEthAmount, "Insufficient balance");
+        
+        kashEth.transferFrom(msg.sender, address(this), kashEthAmount);
+        
+        uint256 batchCycle = getNextMidnightTimestamp();
+        
+        if (pendingRedemptionsPerBatch[msg.sender][batchCycle] == 0) {
+            batchRedeemers[batchCycle].push(msg.sender);
+        }
+        pendingRedemptionsPerBatch[msg.sender][batchCycle] += kashEthAmount;
+        totalRedemptionRequestsPerBatch[batchCycle] += kashEthAmount;
+        
+        emit RedemptionRequestQueued(msg.sender, kashEthAmount, batchCycle, block.timestamp);
+    }
+    
+    /**
+     * @dev Get accumulated fees for user
+     */
     function getAccumulatedFees() external view returns (int256) {
         return userCumulativeFeesEarned[msg.sender];
     }
-
-    // Function for users to request redemption of KashEths (queues the request instead of immediate processing)
-    function requestRedemption(uint256 kashEthAmount) external {
-        require(isWithinTransactionWindow(), "Not within deposit window");
-        require(kashEth.balanceOf(msg.sender) >= kashEthAmount, "Insufficient KashEth balance");
-        uint256 totalKashEthSupply = kashEth.totalSupply();
-        require(totalKashEthSupply > 0, "No KashEth in circulation");
-
-        // User must transfer KashEths to this contract for redemption
-        bool success = kashEth.transferFrom(msg.sender, address(this), kashEthAmount);
-        require(success, "KashEth transfer failed");
-
-        // Calculate the next midnight (00:00 UTC) timestamp for batching
-        uint256 SECONDS_PER_DAY = 86400;
-        uint256 nextMidnight = ((block.timestamp / SECONDS_PER_DAY) + 1) * SECONDS_PER_DAY;
-
-        // Queue the redemption request for the specific batch cycle
-        if (pendingRedemptionsPerBatch[msg.sender][nextMidnight] == 0) {
-            batchRedeemers[nextMidnight].push(msg.sender);
-        }
-        pendingRedemptionsPerBatch[msg.sender][nextMidnight] += kashEthAmount;
-        redemptionBatchCycle[msg.sender] = nextMidnight; // Track latest batch for reference
-        totalRedemptionRequestsPerBatch[nextMidnight] += kashEthAmount;
-
-        // Estimate ETH value for pending redemption balance (for reference, will be recalculated during processing)
-        uint256 ethPrice = getLatestEthPrice();
-        uint256 ethValue = (kashEthAmount * 1e18) / ethPrice; // Rough estimate, KashEth pegged at $1
-        pendingRedemptionBalance += ethValue;
-
-        // Determine if this is a partial redemption
-        uint256 userTotalBalance = kashEth.balanceOf(msg.sender) + kashEthAmount; // Balance before transfer + amount transferred
-        bool isPartial = kashEthAmount < userTotalBalance;
-        emit RedemptionRequestQueued(msg.sender, kashEthAmount, nextMidnight, block.timestamp, userTotalBalance, isPartial);
-    }
-
-    // BOT FUNCTIONS *******************************
-
-    // Function to process daily actions at midnight: handle deposits or redemptions based on net balance, record daily metrics, calculate fees, and distribute fees to depositors.
-    function processDailyActions(uint256 batchCycle) external {
-        require(isMidnightProcessingTime(), "Not within processing window");
-        require(block.timestamp >= lastProcessedTimestamp + processingDelaySeconds, "Daily actions already processed for this window");
-
-        // Record daily metrics and calculate fees at the end of the day
-        // Using a timestamp or day identifier for metrics recording
+    
+    // ============ Batch Processing (Bot/Automated) ============
+    
+    /**
+     * @dev Process daily batch - deposits, redemptions, fee distribution
+     */
+    function processDailyActions(uint256 batchCycle) external onlyOwner {
+        require(isMidnightProcessingTime(), "Outside processing window");
+        require(block.timestamp >= lastProcessedTimestamp + processingDelaySeconds, "Already processed");
+        
         uint256 dayOrTimestamp = block.timestamp / 1 days;
+        
+        // Record metrics before processing
         recordDailyMetrics(dayOrTimestamp);
-        calculateDailyContractFees(dayOrTimestamp);
-
-        // Calculate net pending balance for the batch cycle (deposits minus redemptions in ETH terms)
-        int256 netBalance = calculateNetPendingBalance(batchCycle);
-
-        if (netBalance > 0) {
-            bulkDepositToAave(batchCycle);
-        } else if (netBalance < 0) {
-            bulkRedemptionFromAave(batchCycle);
-        } else {
-            emit NoActionNeeded(block.timestamp);
+        
+        // Calculate net batch value (deposits - redemptions)
+        (int256 netUsdValue, uint256 totalDepositsUsd, uint256 totalRedemptionsUsd) = calculateNetBatchValue(batchCycle);
+        
+        if (netUsdValue > 0) {
+            // Net deposits - add to position
+            _processNetDeposit(batchCycle, uint256(netUsdValue), totalDepositsUsd);
+        } else if (netUsdValue < 0) {
+            // Net redemptions - reduce position
+            _processNetRedemption(batchCycle, uint256(-netUsdValue), totalRedemptionsUsd);
         }
         
-        // Always call both distribution functions to ensure users receive their tokens and ETH
-        this.distributeKashEths(batchCycle);
-        this.distributeRedeemedEth(batchCycle);
-
-        // Calculate daily fees for all depositors in configurable batch sizes
-        uint256 totalDepositors = allDepositors.length;
-        if (totalDepositors > 0) {
-            uint256 startIndex = 0;
-            while (startIndex < totalDepositors) {
-                uint256 endIndex = startIndex + depositorsPerFeeBatch - 1;
-                if (endIndex >= totalDepositors) {
-                    endIndex = totalDepositors - 1;
-                }
-                this.calculateDailyFeesForRange(dayOrTimestamp, startIndex, endIndex);
-                startIndex = endIndex + 1;
-            }
-        }
-
-        // Update the last processed timestamp after successful execution
+        // Distribute KashEth to depositors
+        distributeKashEths(batchCycle);
+        
+        // Distribute assets to redeemers
+        distributeRedeemedAssets(batchCycle);
+        
+        // Calculate fees for depositors
+        calculateDailyFees(dayOrTimestamp);
+        
         lastProcessedTimestamp = block.timestamp;
     }
-
-    // Function to get the total number of depositors
-    function getDepositorCount() external view returns (uint256) {
-        return allDepositors.length;
+    
+    /**
+     * @dev Process net deposits - supply to Aave, borrow USDC, deposit to Hyperliquid
+     */
+    function _processNetDeposit(uint256 batchCycle, uint256 netUsdValue, uint256 totalDepositsUsd) internal {
+        // Convert batch deposits to ETH and supply to Aave
+        uint256 ethToSupply = convertUsdToEth(netUsdValue);
+        
+        // Supply ETH to Aave
+        IPool(aavePoolAddress).supply{value: ethToSupply}(address(0), ethToSupply, address(this), 0);
+        emit BulkDepositToAave(address(0), ethToSupply, block.timestamp);
+        
+        // Borrow USDC (70% of deposited value)
+        uint256 usdcToBorrow = (netUsdValue * usdcBorrowPercentage * 1e6) / (100 * 1e18); // USDC has 6 decimals
+        
+        if (usdcToBorrow > 0) {
+            IPool(aavePoolAddress).borrow(usdcAddress, usdcToBorrow, 2, 0, address(this));
+            totalUsdcBorrowed += usdcToBorrow;
+            emit USDCBorrowed(usdcToBorrow, block.timestamp);
+            
+            // Calculate position size (1.7x leverage on the collateral value)
+            uint256 positionSizeUsd = (netUsdValue * leverage) / 100;
+            
+            // Deposit USDC to Hyperliquid and open 1.7x ETH short
+            IERC20(usdcAddress).approve(hyperliquidAddress, usdcToBorrow);
+            IHyperliquid(hyperliquidAddress).depositCollateralAndOpenShort(usdcToBorrow, positionSizeUsd, address(this));
+            
+            totalHyperliquidCollateral += usdcToBorrow;
+            hyperliquidPositionSize += positionSizeUsd;
+            isHyperliquidPositionOpen = true;
+            
+            emit USDCDepositedToHyperliquid(usdcToBorrow, block.timestamp);
+        }
     }
     
-    // Bot function to calculate daily fees for a batch of depositors
-    function calculateDailyFeesForRange(uint256 dayOrTimestamp, uint256 startIndex, uint256 endIndex) external onlyOwner {
-        FeeSnapshot memory snapshot = historicalFeeSnapshots[dayOrTimestamp];
-        require(snapshot.netFees != 0, "No fees recorded for this day");
-        require(startIndex <= endIndex, "Invalid index range");
-        require(endIndex < allDepositors.length, "End index out of bounds");
-        
-        for (uint256 i = startIndex; i <= endIndex; i++) {
-            address user = allDepositors[i];
-            if (!hasClaimed[user][dayOrTimestamp]) {
-                uint256 userProportion = this.getUserShareOfDailyFees(user);
-                int256 userFeeShare = (snapshot.netFees * int256(userProportion)) / int256(1e18);
-                userCumulativeFeesEarned[user] += userFeeShare;
-                hasClaimed[user][dayOrTimestamp] = true;
-                emit DailyUserFees(user, dayOrTimestamp, userFeeShare);
-            }
-        }
-        // If this is the last range for the day, mark as distributed
-        if (endIndex == allDepositors.length - 1) {
-            historicalFeeSnapshots[dayOrTimestamp].isDistributed = true;
-        }
-    }
-
-    // SMART CONTRACT FUNCTIONS *******************************
-
     /**
-     * @dev For the smart contract to deposit the net amount of ETH (deposits minus redemptions) for the given batchCycle.  Only deposits if the net amount is positive. Uses calculateNetPendingBalance.  Updates state and emits events.
+     * @dev Process net redemptions - close portion of position, repay USDC, withdraw ETH
      */
-    function bulkDepositToAave(uint256 batchCycle) public {
-        int256 netBalance = calculateNetPendingBalance(batchCycle);
-        uint256 netDepositAmount = uint256(netBalance);
-        require(netDepositAmount > 0 && netDepositAmount <= pendingDepositBalance, "Invalid net deposit amount");
-
-        // Deposit net ETH to Aave and receive aTokens
-        IPool(aavePoolAddress).supply{value: netDepositAmount}(address(0), netDepositAmount, address(this), 0);
-        pendingDepositBalance -= netDepositAmount;
-        totalEthDepositedToAave += netDepositAmount;
-        emit BulkDepositToAave(netDepositAmount, block.timestamp);
-
-        // Borrow USDT based on the deposited ETH value
-        uint256 ethPrice = getLatestEthPrice();
-        uint256 ethValueInUsd = (netDepositAmount * ethPrice) / 1e18;
-        uint256 usdtToBorrow = (ethValueInUsd * usdtBorrowPercentage * 1e6) / (100 * 1e18); // USDT has 6 decimals
-        if (usdtToBorrow > 0) {
-            IPool(aavePoolAddress).borrow(usdtAddress, usdtToBorrow, 2, 0, address(this));
-            totalBorrowedUSDT += usdtToBorrow;
-            emit USDTBorrowed(usdtToBorrow, block.timestamp);
-
-            // Approve GMX contract to spend USDT
-            IERC20(usdtAddress).approve(gmxAddress, usdtToBorrow);
-
-            // Swap USDT to ETH via GMX
-            uint256 ethReceived = IMockGMX(gmxAddress).swap(usdtAddress, address(0), usdtToBorrow, 0, address(this));
-            emit USDTTransferredToGMX(usdtToBorrow);
-
-            // Use received ETH as collateral to open a short ETH position
-            uint256 shortSize = (netDepositAmount * (100 + usdtBorrowPercentage)) / 100;
-            IMockGMX(gmxAddress).depositCollateralAndOpenPositionWithSize(ethReceived, shortSize, false, address(this));
-            // Track the total USD value of the shorted ETH amount
-            totalUsdValueShorted += (shortSize * ethPrice) / 1e18; // Store total USD value in 18 decimals
+    function _processNetRedemption(uint256 batchCycle, uint256 netUsdValue, uint256 totalRedemptionsUsd) internal {
+        // Calculate proportional amount to unwind
+        uint256 redemptionRatio = (netUsdValue * 1e18) / (totalRedemptionsUsd + getTotalPositionValue());
+        
+        uint256 usdcToRepay = (totalUsdcBorrowed * redemptionRatio) / 1e18;
+        uint256 ethToWithdraw = convertUsdToEth(netUsdValue);
+        
+        // Close portion of Hyperliquid position
+        if (isHyperliquidPositionOpen) {
+            (uint256 usdcReturned, int256 pnl) = IHyperliquid(hyperliquidAddress).closePosition(address(this));
+            totalHyperliquidCollateral = totalHyperliquidCollateral > usdcReturned ? totalHyperliquidCollateral - usdcReturned : 0;
+            hyperliquidPositionSize = 0;
+            isHyperliquidPositionOpen = false;
+            
+            emit PositionClosed(usdcReturned, pnl, block.timestamp);
+            
+            // If there's still a position remaining, reopen it with reduced size
+            // (This is simplified - in production might use partial closes)
         }
+        
+        // Repay USDC to Aave
+        if (usdcToRepay > 0 && totalUsdcBorrowed >= usdcToRepay) {
+            IERC20(usdcAddress).approve(aavePoolAddress, usdcToRepay);
+            IPool(aavePoolAddress).repay(usdcAddress, usdcToRepay, 2, address(this));
+            totalUsdcBorrowed -= usdcToRepay;
+        }
+        
+        // Withdraw ETH from Aave
+        if (ethToWithdraw > 0) {
+            IPool(aavePoolAddress).withdraw(address(0), ethToWithdraw, address(this));
+        }
+        
+        emit BulkRedemptionProcessed(ethToWithdraw, usdcToRepay, block.timestamp);
     }
-
-    // Function to distribute KashEths to users after batch processing, this is the end of the MINTING process
-    function distributeKashEths(uint256 batchCycle) external {
-        uint256 totalForBatch = totalBatchContributions[batchCycle];
-        require(totalForBatch > 0, "No ETH contributions for this batch");
+    
+    /**
+     * @dev Distribute KashEth to depositors after batch processing
+     */
+    function distributeKashEths(uint256 batchCycle) internal {
         address[] memory contributors = batchContributors[batchCycle];
+        uint256 ethPrice = getLatestEthPrice();
+        
         for (uint256 i = 0; i < contributors.length; i++) {
             address user = contributors[i];
-            uint256 userContribution = userBatchContributions[user][batchCycle];
-            uint256 ethPrice = getLatestEthPrice();
-            uint256 kashEthAmount = (userContribution * ethPrice) / 1e18;
-            kashEth.mint(user, kashEthAmount);
-            emit KashEthMinted(user, userContribution, kashEthAmount, block.timestamp, batchCycle);
+            uint256 totalUsdContribution = 0;
+            
+            // Sum all asset contributions for this user in this batch
+            for (uint256 j = 0; j < supportedAssets.length; j++) {
+                AssetType assetType = supportedAssets[j];
+                uint256 amount = userBatchContributions[user][batchCycle][assetType];
+                if (amount > 0) {
+                    totalUsdContribution += convertAssetToUsd(assetType, amount);
+                    userBatchContributions[user][batchCycle][assetType] = 0;
+                }
+            }
+            
+            if (totalUsdContribution > 0) {
+                // Mint KashEth 1:1 with USD value (KashEth pegged to $1)
+                uint256 kashEthAmount = totalUsdContribution / 1e12; // Convert to 6 decimals for KashEth
+                kashEth.mint(user, kashEthAmount);
+                
+                emit KashEthMinted(user, address(0), 0, kashEthAmount, block.timestamp, batchCycle);
+            }
+            
+            isContributorInBatch[batchCycle][user] = false;
         }
+        
+        delete batchContributors[batchCycle];
     }
-
-    // Function to process bulk redemptions from Aave: Cover ETH short on GMX, swap Eth collateral to USDT and then repay USDT loan to Aave, then withdraw Eth.  This is called by the smart contract, not the user.
-    function bulkRedemptionFromAave(uint256 batchCycle) public {
-        int256 netBalance = calculateNetPendingBalance(batchCycle);
-        uint256 totalEthToWithdraw = uint256(-netBalance);
-        require(totalEthToWithdraw > 0 && totalEthToWithdraw <= totalEthDepositedToAave, "Invalid redemption amount");
-
-        // Get current ETH price to convert USD to ETH
-        uint256 ethPrice = getLatestEthPrice();
-
-        // Simplified calculation: ETH to cover is based directly on totalEthToWithdraw * (1 + usdtBorrowPercentage/100)
-        uint256 ethShortToCover = (totalEthToWithdraw * (100 + usdtBorrowPercentage)) / 100;
-        uint256 usdShortedToCover = (ethShortToCover * ethPrice) / 1e18;
-        uint256 usdtToRepay = (usdShortedToCover * usdtBorrowPercentage * 1e6) / (100 * 1e18); // USDT to repay based on borrow percentage
-        
-        // Step 1: Cover ETH short position on GMX
-        if (ethShortToCover > 0) {
-            IMockGMX(gmxAddress).closePosition(address(this));
-            totalUsdValueShorted -= usdShortedToCover;
-        }
-        
-        // Step 1.5: Swap ETH collateral back to USDT via GMX
-        uint256 ethBalance = address(this).balance;
-        if (ethBalance > 0 && usdtToRepay > 0) {
-            IMockGMX(gmxAddress).swap(address(0), usdtAddress, ethBalance, 0, address(this));
-        }
-        
-        // Step 2: Repay USDT debt to Aave
-        if (usdtToRepay > 0 && totalBorrowedUSDT >= usdtToRepay) {
-            IERC20(usdtAddress).approve(aavePoolAddress, usdtToRepay);
-            IPool(aavePoolAddress).repay(usdtAddress, usdtToRepay, 2, address(this));
-            totalBorrowedUSDT -= usdtToRepay;
-        }
-        
-        // Step 3: Withdraw ETH from Aave to cover the redemption
-        if (address(this).balance < totalEthToWithdraw) {
-            uint256 shortfall = totalEthToWithdraw - address(this).balance;
-            uint256 withdrawnAmount = IPool(aavePoolAddress).withdraw(address(0), shortfall, address(this));
-            totalEthDepositedToAave -= withdrawnAmount;
-            emit BulkRedeemedFromAave(withdrawnAmount, block.timestamp);
-        }
-        
-        // Update pending redemption balance (rough estimate, adjust if fees included)
-        pendingRedemptionBalance = (pendingRedemptionBalance > totalEthToWithdraw) ? (pendingRedemptionBalance - totalEthToWithdraw) : 0;
-        totalRedemptionRequestsPerBatch[batchCycle] = 0; // Reset for this batch
-        
-        // Distribute redeemed ETH and associated fees to users
-        this.distributeRedeemedEth(batchCycle);
-        
-        emit BulkRedemptionProcessed(totalEthToWithdraw, usdtToRepay, ethShortToCover, block.timestamp);
-    }
-
-    // Function to distribute redeemed ETH to users after bulk redemption (call after bulkRedemptionFromAave).  Includes distribution of user fees.  This is the end of the REDEMPTION process.
-    function distributeRedeemedEth(uint256 batchCycle) external {
-        require(isWithinTransactionWindow(), "Not within processing window");
-        // Iterate through users who requested redemption for this batch cycle
+    
+    /**
+     * @dev Distribute redeemed assets to users
+     */
+    function distributeRedeemedAssets(uint256 batchCycle) internal {
         address[] memory redeemers = batchRedeemers[batchCycle];
         uint256 ethPrice = getLatestEthPrice();
         
         for (uint256 i = 0; i < redeemers.length; i++) {
             address user = redeemers[i];
-            uint256 userKashEthAmount = pendingRedemptionsPerBatch[user][batchCycle];
-            if (userKashEthAmount > 0) {
-                // Calculate ETH to distribute based on KashEth amount (pegged to USD)
-                uint256 ethToDistribute = (userKashEthAmount * 1e18) / ethPrice;
-                // Adjust ETH distribution based on user fees (positive or negative), prorated for partial redemption
-                int256 feesEarned = userCumulativeFeesEarned[user];
-                uint256 finalEthToDistribute = ethToDistribute;
-                if (feesEarned != 0) {
-                    // Calculate total KashEth balance before redemption to determine proportion
-                    uint256 userTotalKashEthsBefore = userKashEthAmount + kashEth.balanceOf(user);
-                    if (userTotalKashEthsBefore > 0) {
-                        // Prorate fees based on redeemed KashEth amount vs total holdings
-                        int256 proratedFees = (feesEarned * int256(userKashEthAmount)) / int256(userTotalKashEthsBefore);
-                        if (proratedFees > 0) {
-                            // Positive fees: add to the ETH to distribute
-                            finalEthToDistribute += uint256(proratedFees);
-                        } else {
-                            // Negative fees: reduce the ETH to distribute
-                            uint256 feeDeduction = uint256(-proratedFees);
-                            if (feeDeduction <= finalEthToDistribute) {
-                                finalEthToDistribute -= feeDeduction;
-                            } else {
-                                finalEthToDistribute = 0; // Prevent negative distribution
-                            }
-                        }
-                        // Deduct only the prorated portion from cumulative fees
-                        userCumulativeFeesEarned[user] -= proratedFees;
-                    }
+            uint256 kashEthAmount = pendingRedemptionsPerBatch[user][batchCycle];
+            
+            if (kashEthAmount > 0) {
+                // Calculate USD value (KashEth is $1 pegged)
+                uint256 usdValue = kashEthAmount * 1e12; // Convert from 6 decimals to 18
+                
+                // Add prorated fees
+                int256 fees = userCumulativeFeesEarned[user];
+                uint256 finalUsdValue = usdValue;
+                
+                if (fees > 0) {
+                    finalUsdValue += uint256(fees);
+                    userCumulativeFeesEarned[user] = 0;
+                } else if (fees < 0) {
+                    uint256 feeDeduction = uint256(-fees);
+                    finalUsdValue = finalUsdValue > feeDeduction ? finalUsdValue - feeDeduction : 0;
+                    userCumulativeFeesEarned[user] = 0;
                 }
-                // Ensure contract has enough ETH to distribute
-                if (address(this).balance >= finalEthToDistribute) {
-                    payable(user).transfer(finalEthToDistribute);
-                    pendingRedemptionsPerBatch[user][batchCycle] = 0;
-                    emit EthDistributedToUser(user, finalEthToDistribute);
-                } else {
-                    // If insufficient balance, log or handle partial distribution if needed
-                    emit NoActionNeeded(block.timestamp); // Placeholder for logging insufficient balance
+                
+                // Convert USD to ETH and send
+                uint256 ethToSend = (finalUsdValue * 1e18) / ethPrice;
+                
+                if (address(this).balance >= ethToSend && ethToSend > 0) {
+                    payable(user).transfer(ethToSend);
+                    kashEth.burn(address(this), kashEthAmount);
+                    emit AssetDistributedToUser(user, address(0), ethToSend);
+                }
+                
+                pendingRedemptionsPerBatch[user][batchCycle] = 0;
+            }
+        }
+        
+        totalRedemptionRequestsPerBatch[batchCycle] = 0;
+        delete batchRedeemers[batchCycle];
+    }
+    
+    /**
+     * @dev Calculate and distribute daily fees
+     */
+    function calculateDailyFees(uint256 dayOrTimestamp) internal {
+        int256 netFees = dailyNetFeesEarned[dayOrTimestamp];
+        if (netFees == 0) return;
+        
+        uint256 batchCycle = dayOrTimestamp * 1 days;
+        uint256 totalContrib = 0;
+        
+        // Calculate total USD contributions for this batch
+        for (uint256 j = 0; j < supportedAssets.length; j++) {
+            totalContrib += totalBatchContributions[batchCycle][supportedAssets[j]];
+        }
+        
+        if (totalContrib == 0) return;
+        
+        // Store fee snapshot
+        historicalFeeSnapshots[dayOrTimestamp] = FeeSnapshot({
+            netFees: netFees,
+            totalBatchContributions: totalContrib,
+            batchCycleTimestamp: batchCycle,
+            isDistributed: false
+        });
+        
+        // Distribute to users in batches
+        uint256 totalDepositors = allDepositors.length;
+        if (totalDepositors > 0) {
+            for (uint256 startIndex = 0; startIndex < totalDepositors; startIndex += depositorsPerFeeBatch) {
+                uint256 endIndex = startIndex + depositorsPerFeeBatch - 1;
+                if (endIndex >= totalDepositors) {
+                    endIndex = totalDepositors - 1;
+                }
+                _distributeFeesToRange(dayOrTimestamp, startIndex, endIndex);
+            }
+        }
+        
+        historicalFeeSnapshots[dayOrTimestamp].isDistributed = true;
+        emit DailyFeesDistributed(dayOrTimestamp, netFees, totalContrib);
+    }
+    
+    function _distributeFeesToRange(uint256 dayOrTimestamp, uint256 startIndex, uint256 endIndex) internal {
+        FeeSnapshot memory snapshot = historicalFeeSnapshots[dayOrTimestamp];
+        
+        for (uint256 i = startIndex; i <= endIndex && i < allDepositors.length; i++) {
+            address user = allDepositors[i];
+            if (!hasClaimed[user][dayOrTimestamp]) {
+                uint256 userShare = getUserShareOfFees(user);
+                if (userShare > 0) {
+                    int256 userFeeShare = (snapshot.netFees * int256(userShare)) / 1e18;
+                    userCumulativeFeesEarned[user] += userFeeShare;
+                    hasClaimed[user][dayOrTimestamp] = true;
                 }
             }
         }
     }
-
-    // Function for the contract to send fees to the user automatically after redemption
-    function distributeUserFees(address user) public {
-        int256 feesEarned = userCumulativeFeesEarned[user];
-        require(feesEarned > 0, "No fees to claim");
-        
-        uint256 ethToDistribute = uint256(feesEarned);
-        require(address(this).balance >= ethToDistribute, "Insufficient contract balance to pay fees");
-        
-        // Reset the user's cumulative fees to zero after claiming
-        userCumulativeFeesEarned[user] = 0;
-        
-        // Transfer the ETH equivalent of the fees to the user
-        payable(user).transfer(ethToDistribute);
-        
-        emit EthDistributedToUser(user, ethToDistribute);
-    }
-
-    // Function to get a user's total ETH contributions to the contract across all batch cycles
-    function getUserTotalContributions(address user) external view returns (uint256 total) {
-        // Return the cumulative total of ETH deposited by the user
-        return userTotalEthDeposited[user];
-    }
-
-    // Function to get the total amount of ETH deposited by the SC to Aave across all batch cycles
-    function getTotalEthDepositedToAave() external view returns (uint256) {
-        return totalEthDepositedToAave;
-    }
-
-    // Function to get a user's share of daily fees. It is the proportion of his/her total ETH deposited to the total ETH deposited by the SC to Aave
-    function getUserShareOfDailyFees(address user) external view returns (uint256) {
-        if (totalEthDepositedToAave == 0) {
-            return 0;
+    
+    // ============ View Functions ============
+    
+    function calculateNetBatchValue(uint256 batchCycle) public view returns (int256 netUsdValue, uint256 totalDepositsUsd, uint256 totalRedemptionsUsd) {
+        // Calculate total deposits in USD
+        for (uint256 j = 0; j < supportedAssets.length; j++) {
+            AssetType assetType = supportedAssets[j];
+            uint256 assetAmount = totalBatchContributions[batchCycle][assetType];
+            if (assetAmount > 0) {
+                totalDepositsUsd += convertAssetToUsd(assetType, assetAmount);
+            }
         }
-        // Calculate share as a percentage (multiplied by 1e18 for precision)
-        return (userTotalEthDeposited[user] * 1e18) / totalEthDepositedToAave;
-    }
-
-    // Function to calculate daily contract fees for the Smart Contract (store snapshot for later claims)
-    function calculateDailyContractFees(uint256 dayOrTimestamp) public {
-        int256 netFees = dailyNetFeesEarned[dayOrTimestamp];
-        if (netFees == 0) return;
         
-        // Determine the batch cycle timestamp associated with this day
-        // For simplicity, assume dayOrTimestamp matches the batch cycle timestamp (e.g., fees on Day 3 are for batch at 12:00 AM Day 3)
-        uint256 batchCycleTimestamp = dayOrTimestamp;
-        uint256 totalBatchContrib = totalBatchContributions[batchCycleTimestamp];
-        if (totalBatchContrib == 0) return;
+        // Calculate redemptions in USD (KashEth is $1 pegged)
+        totalRedemptionsUsd = totalRedemptionRequestsPerBatch[batchCycle] * 1e12; // Convert 6 decimals to 18
         
-        // Store the net fees and total batch contributions for later claims
-        if (historicalFeeSnapshots[dayOrTimestamp].netFees == 0) {
-            historicalFeeSnapshots[dayOrTimestamp] = FeeSnapshot(netFees, totalBatchContrib, batchCycleTimestamp, false);
-            emit DailyFeesDistributed(dayOrTimestamp, netFees, totalBatchContrib, batchCycleTimestamp);
-        }
-    }
-
-    // HELPER FUNCTIONS *******************************
-
-    // Function to check if current time is within the transactions window for bulk transfer to Aave
-    function isWithinTransactionWindow() public view returns (bool) {
-        uint256 SECONDS_PER_DAY = 86400;
-        uint256 currentTimeOfDay = block.timestamp % SECONDS_PER_DAY;
-        // Calculate window start and end in seconds since midnight
-        uint256 windowStart = (startHourHKT * 3600) + (startMinuteHKT * 60);
-        uint256 windowEnd = (endHourHKT * 3600) + (endMinuteHKT * 60);
-        if (currentTimeOfDay >= windowStart && currentTimeOfDay <= windowEnd) {
-            return true; // Within the deposit window
-        }
-        return false; // Outside the window
-    }
-
-    // Function to check if current time is around midnight (12:00:00 AM) for processing on Day 2
-    function isMidnightProcessingTime() public view returns (bool) {
-        uint256 TIME_OFFSET = 30 * 60; // 30 minutes offset instead of HKT 8 hours
-        uint256 SECONDS_PER_DAY = 86400;
-        uint256 currentTimeAdjusted = (block.timestamp + TIME_OFFSET) % SECONDS_PER_DAY;
-        // Midnight is 00:00, allow a small window around it (e.g., 00:00:00 to 00:05:00 for flexibility)
-        uint256 midnightStart = 0;
-        uint256 midnightEnd = 5 * 60; // 5 minutes after midnight
-        return currentTimeAdjusted >= midnightStart && currentTimeAdjusted <= midnightEnd;
-    }
-
-    // Function to record daily metrics slightly before midnight
-    function recordDailyMetrics(uint256 dayOrTimestamp) public {
-        uint256 prevDayOrTimestamp = dayOrTimestamp - 1 days; // Simplified, adjust if using different keying
-        
-        // Record aToken balance for ETH deposits and calculate yield
-        uint256 currentATokenBalance = IPool(aavePoolAddress).getATokenBalance(address(0), address(this));
-        dailyATokenBalance[dayOrTimestamp] = currentATokenBalance;
-        uint256 yieldEarned = currentATokenBalance > dailyATokenBalance[prevDayOrTimestamp] 
-            ? currentATokenBalance - dailyATokenBalance[prevDayOrTimestamp] 
-            : 0;
-        
-        // Record USDT debt balance and calculate interest cost
-        ( , uint256 totalDebtETH, , , , ) = IPoolExtended(aavePoolAddress).getUserAccountData(address(this));
-        dailyUsdtDebtBalance[dayOrTimestamp] = totalDebtETH; // Adjust for USDT decimals if needed
-        uint256 interestCost = totalDebtETH > dailyUsdtDebtBalance[prevDayOrTimestamp] 
-            ? totalDebtETH - dailyUsdtDebtBalance[prevDayOrTimestamp] 
-            : 0;
-        
-        // Record GMX funding for ETH short
-        int256 currentFunding = IGMX(gmxAddress).getPositionFunding(address(this), address(0), false);
-        dailyGmxFunding[dayOrTimestamp] = currentFunding;
-        int256 fundingChange = currentFunding - dailyGmxFunding[prevDayOrTimestamp];
-        
-        // Calculate net fees earned (yield - interest + funding)
-        // Note: Adjust for decimals and units as needed (e.g., convert all to USD or ETH equivalent)
-        int256 netFees = int256(yieldEarned) - int256(interestCost) + fundingChange;
-        dailyNetFeesEarned[dayOrTimestamp] = netFees;
-        
-        emit DailyMetricsRecorded(dayOrTimestamp, currentATokenBalance, totalDebtETH, currentFunding, netFees);
-    }
-
-    // Helper Function to calculate net pending balance for a batch cycle (ETH deposits minus ETH equivalent of redemptions)
-    function calculateNetPendingBalance(uint256 batchCycle) public view returns (int256) {
-        uint256 totalDeposits = totalBatchContributions[batchCycle]; // ETH to be deposited for this batch
-        uint256 totalRedemptions = totalRedemptionRequestsPerBatch[batchCycle]; // KashEth amount (USD pegged)
-        
-        // Convert redemption KashEth amount to ETH equivalent using current ETH price
-        uint256 ethPrice = getLatestEthPrice(); // Price in 18 decimals (USD per ETH)
-        uint256 redemptionEthEquivalent = (totalRedemptions * 1e18) / ethPrice; // Convert USD to ETH
-        
-        // Calculate net balance in ETH terms
-        int256 netBalance = int256(totalDeposits) - int256(redemptionEthEquivalent);
-        return netBalance;
-    }
-
-    // Helper function to get total KashEth supply (for proportion calculations)
-    function getTotalKashEthSupply() public view returns (uint256) {
-        return kashEth.totalSupply();
-    }
-
-    // to determine how much USDT to borrow from Aave
-    function calculateUsdtToBorrow(uint ethAmount) internal view returns (uint) {
-        (, int256 ethPrice, , , ) = IChainlinkPriceFeed(priceFeedAddress).latestRoundData();
-        uint8 priceDecimals = IChainlinkPriceFeed(priceFeedAddress).decimals();
-        // Convert ETH price to 18 decimals for calculation (ETH is 18 decimals)
-        uint256 ethPriceAdjusted = uint256(ethPrice) * (10 ** (18 - priceDecimals));
-        // Calculate total ETH value in USD (ETH amount * price per ETH)
-        uint256 ethValueInUsd = (ethAmount * ethPriceAdjusted) / 10**18;
-        // Calculate configurable percentage of ETH value
-        uint256 borrowValueInUsd = (ethValueInUsd * usdtBorrowPercentage) / 100;
-        // Assume 1 USDT = 1 USD, and USDT has 6 decimals
-        uint256 usdtAmount = borrowValueInUsd / 10**(18 - 6);
-        return usdtAmount;
+        netUsdValue = int256(totalDepositsUsd) - int256(totalRedemptionsUsd);
     }
     
-    // Function to get the contract's total aToken balance from Aave (for ETH that was deposited)
-    function getContractAaveBalance() public view returns (uint) {
-        return IPool(aavePoolAddress).getATokenBalance(address(0), address(this));
-    }
-
-    function getLatestEthPrice() public view returns (uint256) {
-        (, int256 price, , , ) = IChainlinkPriceFeed(priceFeedAddress).latestRoundData();
-        require(price > 0, "Invalid price from oracle");
-        uint8 priceDecimals = IChainlinkPriceFeed(priceFeedAddress).decimals();
-        // Convert price to 18 decimals for consistency with ETH calculations
-        uint256 adjustedPrice = uint256(price) * (10 ** (18 - priceDecimals));
-        return adjustedPrice; // Price adjusted to 18 decimals
-    }
-
-    // this is per batch, maybe not useful
-    function getUserDepositPercentage(address user, uint256 batchCycle) public view returns (uint256) {
-        uint256 userContribution = userBatchContributions[user][batchCycle];
-        uint256 totalForBatch = totalBatchContributions[batchCycle];
-        if (totalForBatch == 0) {
-            return 0;
+    function getUserShareOfFees(address user) public view returns (uint256) {
+        uint256 totalDeposited = 0;
+        for (uint256 i = 0; i < allDepositors.length; i++) {
+            totalDeposited += userTotalUsdDeposited[allDepositors[i]];
         }
-        return (userContribution * 100) / totalForBatch;
+        if (totalDeposited == 0) return 0;
+        return (userTotalUsdDeposited[user] * 1e18) / totalDeposited;
     }
-
-    // Function to perform a token swap via GMX
-    function swapViaGMX(address tokenIn, address tokenOut, uint256 amountIn, uint256 minAmountOut) external returns (uint256) {
-        require(amountIn > 0, "Swap amount must be greater than 0");
-        IERC20(tokenIn).approve(gmxAddress, amountIn);
-        uint256 amountOut = IMockGMX(gmxAddress).swap(tokenIn, tokenOut, amountIn, minAmountOut, address(this));
-        return amountOut;
+    
+    function getTotalPositionValue() public view returns (uint256) {
+        (uint256 totalCollateral,,,,,) = IPool(aavePoolAddress).getUserAccountData(address(this));
+        return totalCollateral;
     }
+    
+    function getLatestEthPrice() public view returns (uint256) {
+        (, int256 price,,,) = IChainlinkPriceFeed(priceFeedAddress).latestRoundData();
+        require(price > 0, "Invalid price");
+        uint8 priceDecimals = IChainlinkPriceFeed(priceFeedAddress).decimals();
+        return uint256(price) * (10 ** (18 - priceDecimals));
+    }
+    
+    function convertAssetToUsd(AssetType assetType, uint256 amount) public view returns (uint256) {
+        uint256 ethPrice = getLatestEthPrice();
+        
+        if (assetType == AssetType.ETH || assetType == AssetType.WETH) {
+            return (amount * ethPrice) / 1e18;
+        } else if (assetType == AssetType.WBTC) {
+            // Would need BTC price feed in production
+            uint256 btcPrice = ethPrice * 15; // Simplified assumption
+            return (amount * btcPrice) / 1e8; // WBTC has 8 decimals
+        } else if (assetType == AssetType.USDT || assetType == AssetType.USDC) {
+            return amount * 1e12; // Convert from 6 decimals to 18
+        }
+        return 0;
+    }
+    
+    function convertUsdToEth(uint256 usdAmount) public view returns (uint256) {
+        uint256 ethPrice = getLatestEthPrice();
+        return (usdAmount * 1e18) / ethPrice;
+    }
+    
+    function getNextMidnightTimestamp() public view returns (uint256) {
+        uint256 secondsPerDay = 86400;
+        return ((block.timestamp / secondsPerDay) + 1) * secondsPerDay;
+    }
+    
+    function isWithinTransactionWindow() public view returns (bool) {
+        uint256 secondsPerDay = 86400;
+        uint256 currentTimeOfDay = block.timestamp % secondsPerDay;
+        uint256 windowStart = (startHourHKT * 3600) + (startMinuteHKT * 60);
+        uint256 windowEnd = (endHourHKT * 3600) + (endMinuteHKT * 60);
+        return currentTimeOfDay >= windowStart && currentTimeOfDay <= windowEnd;
+    }
+    
+    function isMidnightProcessingTime() public view returns (bool) {
+        uint256 timeOffset = 30 * 60; // 30 min offset
+        uint256 secondsPerDay = 86400;
+        uint256 currentTimeAdjusted = (block.timestamp + timeOffset) % secondsPerDay;
+        return currentTimeAdjusted <= 5 * 60; // First 5 minutes of day
+    }
+    
+    function recordDailyMetrics(uint256 dayOrTimestamp) internal {
+        (uint256 totalCollateral, uint256 totalDebt,,,,) = IPool(aavePoolAddress).getUserAccountData(address(this));
+        
+        dailyTotalCollateral[dayOrTimestamp] = totalCollateral;
+        dailyUsdcDebt[dayOrTimestamp] = totalDebt;
+        
+        // Get Hyperliquid funding
+        int256 funding = IHyperliquid(hyperliquidAddress).getPositionFunding(address(this));
+        dailyHyperliquidFunding[dayOrTimestamp] = funding;
+        
+        // Calculate net fees (simplified - would need actual yield calculation)
+        int256 netFees = int256(totalCollateral) - int256(totalDebt) + funding;
+        dailyNetFeesEarned[dayOrTimestamp] = netFees;
+        
+        emit DailyMetricsRecorded(dayOrTimestamp, totalCollateral, totalDebt, funding, netFees);
+    }
+    
+    // ============ Receive Function ============
+    
+    receive() external payable {}
 }
