@@ -269,6 +269,66 @@
         }
         
         /* Terminal cursor effect */
+        /* Navigation */
+        .nav {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            padding: 20px;
+            background: rgba(10, 10, 15, 0.9);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid rgba(0, 255, 136, 0.1);
+            z-index: 100;
+        }
+        
+        .nav-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .nav-logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #00ff88;
+            text-decoration: none;
+        }
+        
+        .nav-links {
+            display: flex;
+            gap: 30px;
+            align-items: center;
+        }
+        
+        .nav-link {
+            color: #7dd3c0;
+            text-decoration: none;
+            font-size: 0.9rem;
+            transition: color 0.3s;
+        }
+        
+        .nav-link:hover {
+            color: #00ff88;
+        }
+        
+        .nav-button {
+            background: #00ff88;
+            color: #0a0a0f;
+            padding: 8px 20px;
+            border-radius: 4px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 0.9rem;
+            transition: all 0.3s;
+        }
+        
+        .nav-button:hover {
+            box-shadow: 0 0 20px rgba(0, 255, 136, 0.5);
+        }
+        
         .cursor {
             display: inline-block;
             width: 10px;
@@ -293,14 +353,27 @@
     </style>
 </head>
 <body>
+    <nav class="nav">
+        <div class="nav-content">
+            <a href="#" class="nav-logo">KASH</a>
+            <div class="nav-links">
+                <a href="#features" class="nav-link">Features</a>
+                <a href="#integration" class="nav-link">Integration</a>
+                <a href="https://github.com/jt1777/yieldproduct" class="nav-link">GitHub</a>
+                <a href="../frontend/index.html" class="nav-button">Launch App →</a>
+            </div>
+        </div>
+    </nav>
+    
     <section class="hero">
         <div class="container">
             <div class="badge">🤖 BY AGENTS, FOR AGENTS</div>
             <h1>KASH<span class="cursor"></span></h1>
             <p class="subtitle">The first yield-bearing token designed for AI agents. Deposit ETH, earn automated yield from decentralized funding rates. No humans required.</p>
             <div>
-                <a href="#integration" class="cta-button">Start Earning Yield</a>
-                <a href="https://github.com/jt1777/yieldproduct" class="secondary-cta">View Contracts →</a>
+                <a href="../frontend/index.html" class="cta-button">🚀 Launch App</a>
+                <a href="#integration" class="secondary-cta">Documentation</a>
+                <a href="https://github.com/jt1777/yieldproduct" class="secondary-cta">GitHub →</a>
             </div>
         </div>
     </section>

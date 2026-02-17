@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KASH Yield App</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.ethers.io/lib/ethers-5.7.umd.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'JetBrains Mono', monospace; background: #0a0a0f; }
+        .neon-border { box-shadow: 0 0 20px rgba(0, 255, 136, 0.3); }
+        .neon-text { text-shadow: 0 0 10px rgba(0, 255, 136, 0.5); }
+        .glow:hover { box-shadow: 0 0 30px rgba(0, 255, 136, 0.5); }
+        input[type="number"]::-webkit-inner-spin-button,
+        input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+    </style>
+</head>
+<body class="text-green-400 min-h-screen">
+    <div id="app" class="container mx-auto px-4 py-8 max-w-4xl">
+        <!-- Header -->
+        <header class="flex justify-between items-center mb-12">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 bg-green-400 rounded flex items-center justify-center">
+                    <span class="text-black font-bold text-xl">K</span>
+                </div>
+                <h1 class="text-2xl font-bold neon-text">KASH Yield</h1>
+            </div>
+            <button id="connectBtn" onclick="toggleWallet()" class="px-6 py-2 border border-green-400 rounded hover:bg-green-400 hover:text-black transition-all glow">
+                Connect Wallet
+            </button>
+        </header>
+
+        <!-- Wallet Info -->
+        <div id="walletInfo" class="hidden mb-8 p-4 border border-green-400/30 rounded bg-green-400/5">
+            <div class="flex justify-between items-center">
+                <div>
+                    <p class="text-sm text-green-600">Connected</p>
+                    <p id="walletAddress" class="font-mono"></p>
+                </div>
+                <div class="text-right">
+                    <p class="text-sm text-green-600">ETH Balance</p>
+                    <p id="ethBalance" class="text-xl font-bold"></p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Grid -->
+        <div class="grid md:grid-cols-2 gap-6">
+            <!-- Deposit Card -->
+            <div class="border border-green-400/30 rounded-lg p-6 bg-green-400/5 neon-border">
+                <h2 class="text-xl font-bold mb-4 flex items-center gap-2">
+                    <span>↓</span> Deposit
+                </h2>
+                
+                <!-- Asset Selection -->
+                <div class="mb-4">
+                    <label class="block text-sm text-green-600 mb-2">Select Asset</label>
+                    <div class="flex gap-2">
+                        <button onclick="selectAsset('ETH')" id="btnETH" class="asset-btn flex-1 py-2 px-4 border border-green-400 rounded bg-green-400 text-black font-bold">
+                            ETH
+                        </button>
+                        <button onclick="selectAsset('WETH')" id="btnWETH" class="asset-btn flex-1 py-2 px-4 border border-green-400/50 rounded hover:border-green-400">
+                            wETH
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Amount Input -->
+                <div class="mb-4">
+                    <label class="block text-sm text-green-600 mb-2">Amount</label>
+                    <div class="relative">
+                        <input type="number" id="depositAmount" step="0.01" placeholder="0.00" 
+                            class="w-full bg-black border border-green-400/50 rounded px-4 py-3 text-white focus:border-green-400 focus:outline-none">
+                        <button onclick="setMaxDeposit()" class="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-green-600 hover:text-green-400">
+                            MAX
+                        </button>
+                    </div>
+                    <p class="text-xs text-green-600 mt-1">≈ $<span id="usdValue">0.00</span> USD</p>
+                </div>
+
+                <!-- Info -->
+                <div class="text-xs text-green-600 mb-4 space-y-1">
+                    <p>• 70% LTV • 1.7x leverage</p>
+                    <p>• Delta neutral position</p>
+                    <p>• Batched at midnight UTC</p>
+                </div>
+
+                <button onclick="deposit()" id="depositBtn" disabled
+                    class="w-full py-3 bg-green-400/20 border border-green-400 rounded font-bold opacity-50 cursor-not-allowed">
+                    Deposit
+                </button>
+            </div>
+
+            <!-- Redeem Card -->
+            <div class="border border-green-400/30 rounded-lg p-6 bg-green-400/5 neon-border">
+                <h2 class="text-xl font-bold mb-4 flex items-center gap-2">
+                    <span>↑</span> Redeem
+                </h2>
+
+                <!-- KashEth Balance -->
+                <div class="mb-4 p-3 border border-green-400/20 rounded bg-black/50">
+                    <p class="text-sm text-green-600">Your KashEth Balance</p>
+                    <p id="kashEthBalance" class="text-2xl font-bold neon-text">0.00 YTK</p>
+                    <p class="text-xs text-green-600">≈ $<span id="kashEthUsd">0.00</span> USD</p>
+                </div>
+
+                <!-- Redemption Amount -->
+                <div class="mb-4">
+                    <label class="block text-sm text-green-600 mb-2">Redeem Amount</label>
+                    <div class="relative">
+                        <input type="number" id="redeemAmount" step="0.01" placeholder="0.00"
+                            class="w-full bg-black border border-green-400/50 rounded px-4 py-3 text-white focus:border-green-400 focus:outline-none">
+                        <button onclick="setMaxRedeem()" class="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-green-600 hover:text-green-400">
+                            MAX
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Info -->
+                <div class="text-xs text-green-600 mb-4 space-y-1">
+                    <p>• Redemptions processed next batch</p>
+                    <p>• Receive ETH + accumulated yield</p>
+                    <p>• Net earnings since deposit</p>
+                </div>
+
+                <button onclick="redeem()" id="redeemBtn" disabled
+                    class="w-full py-3 bg-green-400/20 border border-green-400 rounded font-bold opacity-50 cursor-not-allowed">
+                    Request Redemption
+                </button>
+            </div>
+        </div>
+
+        <!-- Stats Section -->
+        <div class="mt-8 grid grid-cols-3 gap-4">
+            <div class="border border-green-400/20 rounded p-4 text-center">
+                <p class="text-2xl font-bold neon-text" id="tvl">$0</p>
+                <p class="text-xs text-green-600">Total Value Locked</p>
+            </div>
+            <div class="border border-green-400/20 rounded p-4 text-center">
+                <p class="text-2xl font-bold neon-text" id="apy">--%</p>
+                <p class="text-xs text-green-600">Current APY</p>
+            </div>
+            <div class="border border-green-400/20 rounded p-4 text-center">
+                <p class="text-2xl font-bold neon-text" id="earned">$0</p>
+                <p class="text-xs text-green-600">Your Earnings</p>
+            </div>
+        </div>
+
+        <!-- Transaction History -->
+        <div class="mt-8 border border-green-400/20 rounded-lg p-6">
+            <h3 class="text-lg font-bold mb-4">Recent Activity</h3>
+            <div id="txHistory" class="space-y-2 text-sm">
+                <p class="text-green-600 text-center py-4">No transactions yet</p>
+            </div>
+        </div>
+
+        <!-- Contract Info -->
+        <div class="mt-8 text-center text-xs text-green-600">
+            <p>KashYield Contract: <span id="contractAddress" class="font-mono">Not deployed</span></p>
+            <p class="mt-1">Network: Arbitrum One</p>
+        </div>
+    </div>
+
+    <script>
+        // Contract ABI (minimal)
+        const KASH_YIELD_ABI = [
+            "function depositETH() external payable",
+            "function depositWETH(uint256 amount) external",
+            "function requestRedemption(uint256 kashEthAmount) external",
+            "function getAccumulatedFees() external view returns (int256)",
+            "function kashEth() external view returns (address)",
+            "function getLatestEthPrice() external view returns (uint256)",
+            "function totalEthDepositedToAave() external view returns (uint256)",
+            "event KashEthMinted(address indexed user, address indexed asset, uint256 assetAmount, uint256 kashEthAmount, uint256 timestamp, uint256 batchCycle)"
+        ];
+
+        const KASH_ETH_ABI = [
+            "function balanceOf(address account) external view returns (uint256)",
+            "function approve(address spender, uint256 amount) external returns (bool)",
+            "function allowance(address owner, address spender) external view returns (uint256)"
+        ];
+
+        // State
+        let provider, signer, walletAddress;
+        let kashYieldContract, kashEthContract;
+        let selectedAsset = 'ETH';
+        let ethPrice = 3000;
+
+        // Initialize
+        async function init() {
+            // Check if wallet is already connected
+            if (window.ethereum && window.ethereum.selectedAddress) {
+                await connectWallet();
+            }
+            updateUI();
+        }
+
+        // Toggle wallet connection
+        async function toggleWallet() {
+            if (walletAddress) {
+                disconnectWallet();
+            } else {
+                await connectWallet();
+            }
+        }
+
+        // Connect wallet
+        async function connectWallet() {
+            if (!window.ethereum) {
+                alert('Please install MetaMask');
+                return;
+            }
+
+            try {
+                provider = new ethers.providers.Web3Provider(window.ethereum);
+                await provider.send('eth_requestAccounts', []);
+                signer = provider.getSigner();
+                walletAddress = await signer.getAddress();
+
+                // Setup contracts (replace with actual addresses)
+                const kashYieldAddress = localStorage.getItem('kashYieldAddress') || '0x...';
+                kashYieldContract = new ethers.Contract(kashYieldAddress, KASH_YIELD_ABI, signer);
+                
+                const kashEthAddress = await kashYieldContract.kashEth();
+                kashEthContract = new ethers.Contract(kashEthAddress, KASH_ETH_ABI, signer);
+
+                // Listen for events
+                window.ethereum.on('accountsChanged', handleAccountsChanged);
+                window.ethereum.on('chainChanged', () => window.location.reload());
+
+                await updateBalances();
+                updateUI();
+            } catch (err) {
+                console.error('Connection failed:', err);
+            }
+        }
+
+        // Disconnect
+        function disconnectWallet() {
+            walletAddress = null;
+            provider = null;
+            signer = null;
+            kashYieldContract = null;
+            kashEthContract = null;
+            updateUI();
+        }
+
+        // Handle account changes
+        function handleAccountsChanged(accounts) {
+            if (accounts.length === 0) {
+                disconnectWallet();
+            } else {
+                walletAddress = accounts[0];
+                updateUI();
+                updateBalances();
+            }
+        }
+
+        // Select asset
+        function selectAsset(asset) {
+            selectedAsset = asset;
+            document.querySelectorAll('.asset-btn').forEach(btn => {
+                btn.classList.remove('bg-green-400', 'text-black', 'font-bold');
+                btn.classList.add('border-green-400/50');
+            });
+            document.getElementById('btn' + asset).classList.add('bg-green-400', 'text-black', 'font-bold');
+            document.getElementById('btn' + asset).classList.remove('border-green-400/50');
+        }
+
+        // Update USD value
+        document.getElementById('depositAmount')?.addEventListener('input', (e) => {
+            const amount = parseFloat(e.target.value) || 0;
+            document.getElementById('usdValue').textContent = (amount * ethPrice).toFixed(2);
+        });
+
+        // Set max deposit
+        async function setMaxDeposit() {
+            if (!walletAddress) return;
+            const balance = await provider.getBalance(walletAddress);
+            const max = ethers.utils.formatEther(balance);
+            document.getElementById('depositAmount').value = max;
+            document.getElementById('usdValue').textContent = (parseFloat(max) * ethPrice).toFixed(2);
+        }
+
+        // Set max redeem
+        async function setMaxRedeem() {
+            if (!kashEthContract || !walletAddress) return;
+            const balance = await kashEthContract.balanceOf(walletAddress);
+            document.getElementById('redeemAmount').value = ethers.utils.formatUnits(balance, 6);
+        }
+
+        // Deposit
+        async function deposit() {
+            if (!kashYieldContract) return;
+            
+            const amount = document.getElementById('depositAmount').value;
+            if (!amount || amount <= 0) return;
+
+            try {
+                document.getElementById('depositBtn').disabled = true;
+                document.getElementById('depositBtn').textContent = 'Processing...';
+
+                let tx;
+                if (selectedAsset === 'ETH') {
+                    tx = await kashYieldContract.depositETH({
+                        value: ethers.utils.parseEther(amount)
+                    });
+                } else {
+                    // WETH deposit logic
+                    tx = await kashYieldContract.depositWETH(ethers.utils.parseEther(amount));
+                }
+
+                await tx.wait();
+                addToHistory('Deposit', amount + ' ' + selectedAsset, tx.hash);
+                document.getElementById('depositAmount').value = '';
+                await updateBalances();
+            } catch (err) {
+                console.error('Deposit failed:', err);
+                alert('Deposit failed: ' + err.message);
+            } finally {
+                document.getElementById('depositBtn').disabled = false;
+                document.getElementById('depositBtn').textContent = 'Deposit';
+            }
+        }
+
+        // Redeem
+        async function redeem() {
+            if (!kashYieldContract || !kashEthContract) return;
+
+            const amount = document.getElementById('redeemAmount').value;
+            if (!amount || amount <= 0) return;
+
+            try {
+                document.getElementById('redeemBtn').disabled = true;
+                document.getElementById('redeemBtn').textContent = 'Processing...';
+
+                // Approve first
+                const kashEthAmount = ethers.utils.parseUnits(amount, 6);
+                const allowance = await kashEthContract.allowance(walletAddress, kashYieldContract.address);
+                
+                if (allowance.lt(kashEthAmount)) {
+                    const approveTx = await kashEthContract.approve(kashYieldContract.address, kashEthAmount);
+                    await approveTx.wait();
+                }
+
+                // Request redemption
+                const tx = await kashYieldContract.requestRedemption(kashEthAmount);
+                await tx.wait();
+
+                addToHistory('Redemption Requested', amount + ' YTK', tx.hash);
+                document.getElementById('redeemAmount').value = '';
+                await updateBalances();
+            } catch (err) {
+                console.error('Redemption failed:', err);
+                alert('Redemption failed: ' + err.message);
+            } finally {
+                document.getElementById('redeemBtn').disabled = false;
+                document.getElementById('redeemBtn').textContent = 'Request Redemption';
+            }
+        }
+
+        // Update balances
+        async function updateBalances() {
+            if (!provider || !walletAddress) return;
+
+            try {
+                const ethBalance = await provider.getBalance(walletAddress);
+                document.getElementById('ethBalance').textContent = 
+                    parseFloat(ethers.utils.formatEther(ethBalance)).toFixed(4) + ' ETH';
+
+                if (kashEthContract) {
+                    const kashBalance = await kashEthContract.balanceOf(walletAddress);
+                    document.getElementById('kashEthBalance').textContent = 
+                        parseFloat(ethers.utils.formatUnits(kashBalance, 6)).toFixed(2) + ' YTK';
+                    document.getElementById('kashEthUsd').textContent = 
+                        parseFloat(ethers.utils.formatUnits(kashBalance, 6)).toFixed(2);
+                }
+
+                if (kashYieldContract) {
+                    const fees = await kashYieldContract.getAccumulatedFees({ from: walletAddress });
+                    document.getElementById('earned').textContent = 
+                        '$' + parseFloat(ethers.utils.formatEther(fees)).toFixed(2);
+                }
+            } catch (err) {
+                console.error('Balance update failed:', err);
+            }
+        }
+
+        // Add to history
+        function addToHistory(type, amount, hash) {
+            const history = document.getElementById('txHistory');
+            const item = document.createElement('div');
+            item.className = 'flex justify-between items-center p-3 border border-green-400/20 rounded';
+            item.innerHTML = `
+                <div>
+                    <span class="font-bold">${type}</span>
+                    <span class="text-green-600 ml-2">${amount}</span>
+                </div>
+                <a href="https://arbiscan.io/tx/${hash}" target="_blank" class="text-xs text-green-600 hover:text-green-400">
+                    View →
+                </a>
+            `;
+            
+            // Remove "No transactions" message
+            if (history.children[0]?.textContent.includes('No transactions')) {
+                history.innerHTML = '';
+            }
+            
+            history.insertBefore(item, history.firstChild);
+        }
+
+        // Update UI
+        function updateUI() {
+            const connectBtn = document.getElementById('connectBtn');
+            const walletInfo = document.getElementById('walletInfo');
+            const depositBtn = document.getElementById('depositBtn');
+            const redeemBtn = document.getElementById('redeemBtn');
+
+            if (walletAddress) {
+                connectBtn.textContent = 'Disconnect';
+                walletInfo.classList.remove('hidden');
+                document.getElementById('walletAddress').textContent = 
+                    walletAddress.slice(0, 6) + '...' + walletAddress.slice(-4);
+                
+                depositBtn.disabled = false;
+                depositBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                depositBtn.classList.add('hover:bg-green-400', 'hover:text-black', 'glow');
+                
+                redeemBtn.disabled = false;
+                redeemBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                redeemBtn.classList.add('hover:bg-green-400', 'hover:text-black', 'glow');
+            } else {
+                connectBtn.textContent = 'Connect Wallet';
+                walletInfo.classList.add('hidden');
+                
+                depositBtn.disabled = true;
+                depositBtn.classList.add('opacity-50', 'cursor-not-allowed');
+                depositBtn.classList.remove('hover:bg-green-400', 'hover:text-black', 'glow');
+                
+                redeemBtn.disabled = true;
+                redeemBtn.classList.add('opacity-50', 'cursor-not-allowed');
+                redeemBtn.classList.remove('hover:bg-green-400', 'hover:text-black', 'glow');
+            }
+        }
+
+        // Initialize on load
+        window.addEventListener('load', init);
+    </script>
+</body>
+</html>
