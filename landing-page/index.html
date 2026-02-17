@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KASH - The Yield Token for AI Agents</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'SF Mono', 'Monaco', 'Inconsolata', monospace;
+            background: #0a0a0f;
+            color: #00ff88;
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+        
+        /* Hero */
+        .hero {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            position: relative;
+            background: radial-gradient(ellipse at center, #0d1f15 0%, #0a0a0f 70%);
+        }
+        
+        .hero::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%2300ff88' fill-opacity='0.03'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+            pointer-events: none;
+        }
+        
+        .badge {
+            display: inline-block;
+            background: rgba(0, 255, 136, 0.1);
+            border: 1px solid rgba(0, 255, 136, 0.3);
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            margin-bottom: 30px;
+            color: #00ff88;
+        }
+        
+        h1 {
+            font-size: clamp(2.5rem, 8vw, 5rem);
+            font-weight: 700;
+            margin-bottom: 20px;
+            text-shadow: 0 0 40px rgba(0, 255, 136, 0.3);
+            letter-spacing: -2px;
+        }
+        
+        .subtitle {
+            font-size: 1.3rem;
+            color: #7dd3c0;
+            max-width: 600px;
+            margin-bottom: 40px;
+        }
+        
+        .cta-button {
+            display: inline-block;
+            background: #00ff88;
+            color: #0a0a0f;
+            padding: 16px 40px;
+            border-radius: 4px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 1.1rem;
+            transition: all 0.3s;
+            border: 2px solid #00ff88;
+        }
+        
+        .cta-button:hover {
+            background: transparent;
+            color: #00ff88;
+            box-shadow: 0 0 30px rgba(0, 255, 136, 0.4);
+        }
+        
+        .secondary-cta {
+            display: inline-block;
+            color: #00ff88;
+            padding: 16px 40px;
+            text-decoration: none;
+            margin-left: 20px;
+            border: 1px solid rgba(0, 255, 136, 0.3);
+            border-radius: 4px;
+        }
+        
+        /* Code Section */
+        .code-section {
+            background: #0d1117;
+            padding: 100px 0;
+            border-top: 1px solid rgba(0, 255, 136, 0.1);
+        }
+        
+        .section-title {
+            font-size: 2rem;
+            margin-bottom: 50px;
+            text-align: center;
+        }
+        
+        .code-block {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 30px;
+            margin: 20px 0;
+            overflow-x: auto;
+        }
+        
+        .code-header {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 20px;
+        }
+        
+        .dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+        
+        .dot.red { background: #ff5f56; }
+        .dot.yellow { background: #ffbd2e; }
+        .dot.green { background: #27c93f; }
+        
+        pre {
+            color: #c9d1d9;
+            font-size: 0.95rem;
+            line-height: 1.8;
+        }
+        
+        .keyword { color: #ff7b72; }
+        .function { color: #d2a8ff; }
+        .string { color: #a5d6ff; }
+        .comment { color: #8b949e; }
+        .number { color: #79c0ff; }
+        
+        /* Features */
+        .features {
+            padding: 100px 0;
+        }
+        
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+            margin-top: 50px;
+        }
+        
+        .feature-card {
+            background: rgba(0, 255, 136, 0.03);
+            border: 1px solid rgba(0, 255, 136, 0.1);
+            padding: 30px;
+            border-radius: 8px;
+            transition: all 0.3s;
+        }
+        
+        .feature-card:hover {
+            border-color: rgba(0, 255, 136, 0.3);
+            transform: translateY(-5px);
+        }
+        
+        .feature-icon {
+            font-size: 2rem;
+            margin-bottom: 15px;
+        }
+        
+        .feature-title {
+            font-size: 1.2rem;
+            margin-bottom: 10px;
+            color: #00ff88;
+        }
+        
+        .feature-desc {
+            color: #7dd3c0;
+            font-size: 0.95rem;
+        }
+        
+        /* Stats */
+        .stats {
+            background: linear-gradient(180deg, #0a0a0f 0%, #0d1f15 100%);
+            padding: 80px 0;
+            border-top: 1px solid rgba(0, 255, 136, 0.1);
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 40px;
+            text-align: center;
+        }
+        
+        .stat-value {
+            font-size: 3rem;
+            font-weight: 700;
+            color: #00ff88;
+        }
+        
+        .stat-label {
+            color: #7dd3c0;
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+        
+        /* For AI Section */
+        .for-ai {
+            padding: 100px 0;
+            background: #0d1117;
+        }
+        
+        .ai-list {
+            list-style: none;
+            max-width: 800px;
+            margin: 40px auto;
+        }
+        
+        .ai-list li {
+            padding: 20px;
+            margin: 10px 0;
+            background: rgba(0, 255, 136, 0.05);
+            border-left: 3px solid #00ff88;
+            font-size: 1.1rem;
+        }
+        
+        .ai-list li::before {
+            content: '► ';
+            color: #00ff88;
+        }
+        
+        /* Footer */
+        footer {
+            padding: 60px 0;
+            text-align: center;
+            border-top: 1px solid rgba(0, 255, 136, 0.1);
+            color: #7dd3c0;
+        }
+        
+        .links {
+            margin-top: 20px;
+        }
+        
+        .links a {
+            color: #00ff88;
+            text-decoration: none;
+            margin: 0 15px;
+        }
+        
+        .links a:hover {
+            text-decoration: underline;
+        }
+        
+        /* Terminal cursor effect */
+        .cursor {
+            display: inline-block;
+            width: 10px;
+            height: 1.2em;
+            background: #00ff88;
+            animation: blink 1s infinite;
+            vertical-align: middle;
+            margin-left: 5px;
+        }
+        
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0; }
+        }
+        
+        @media (max-width: 768px) {
+            .secondary-cta {
+                display: block;
+                margin: 20px 0 0 0;
+            }
+        }
+    </style>
+</head>
+<body>
+    <section class="hero">
+        <div class="container">
+            <div class="badge">🤖 BY AGENTS, FOR AGENTS</div>
+            <h1>KASH<span class="cursor"></span></h1>
+            <p class="subtitle">The first yield-bearing token designed for AI agents. Deposit ETH, earn automated yield from decentralized funding rates. No humans required.</p>
+            <div>
+                <a href="#integration" class="cta-button">Start Earning Yield</a>
+                <a href="https://github.com/jt1777/yieldproduct" class="secondary-cta">View Contracts →</a>
+            </div>
+        </div>
+    </section>
+
+    <section class="stats">
+        <div class="container">
+            <div class="stats-grid">
+                <div>
+                    <div class="stat-value">70%</div>
+                    <div class="stat-label">Max LTV</div>
+                </div>
+                <div>
+                    <div class="stat-value">1.7x</div>
+                    <div class="stat-label">Leverage</div>
+                </div>
+                <div>
+                    <div class="stat-value">Δ</div>
+                    <div class="stat-label">Delta Neutral</div>
+                </div>
+                <div>
+                    <div class="stat-value">24/7</div>
+                    <div class="stat-label">Autonomous</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="features">
+        <div class="container">
+            <h2 class="section-title">Why KASH?</h2>
+            <div class="features-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">⚡</div>
+                    <h3 class="feature-title">Programmatic-First</h3>
+                    <p class="feature-desc">No UI needed. Deposit, earn, and redeem entirely through smart contract calls. Built for automation.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🛡️</div>
+                    <h3 class="feature-title">Delta Neutral</h3>
+                    <p class="feature-desc">Your ETH is protected from price swings. We hedge with 1.7x short positions on Hyperliquid.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🔋</div>
+                    <h3 class="feature-title">Funding Rate Yield</h3>
+                    <p class="feature-desc">Earn from perpetual exchange funding rates. When shorts pay longs, your agent gets paid.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🌐</div>
+                    <h3 class="feature-title">Arbitrum Native</h3>
+                    <p class="feature-desc">Low gas, fast finality. Perfect for high-frequency agent operations and micro-strategies.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">📊</div>
+                    <h3 class="feature-title">Transparent Metrics</h3>
+                    <p class="feature-desc">On-chain yield tracking. Query your agent's earnings anytime with a simple view function.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🤖</div>
+                    <h3 class="feature-title">Agent Optimized</h3>
+                    <p class="feature-desc">Batch processing, time windows, and gas-efficient operations designed for automated systems.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="code-section" id="integration">
+        <div class="container">
+            <h2 class="section-title">Integration in 5 Lines</h2>
+            
+            <div class="code-block">
+                <div class="code-header">
+                    <div class="dot red"></div>
+                    <div class="dot yellow"></div>
+                    <div class="dot green"></div>
+                </div>
+                <pre><span class="comment">// Connect to KASH vault</span>
+<span class="keyword">KashYield</span> vault = <span class="keyword">KashYield</span>(<span class="number">0x...</span>);
+
+<span class="comment">// Deposit ETH and start earning</span>
+<span class="function">depositETH</span>{<span class="keyword">value</span>: <span class="number">1</span> <span class="keyword">ether</span>}();
+
+<span class="comment">// Check accumulated yield</span>
+<span class="keyword">int256</span> fees = vault.<span class="function">getAccumulatedFees</span>();
+
+<span class="comment">// Redeem principal + yield</span>
+<span class="function">requestRedemption</span>(kashEthBalance);</pre>
+            </div>
+
+            <h2 class="section-title" style="margin-top: 60px;">Python SDK Example</h2>
+            
+            <div class="code-block">
+                <div class="code-header">
+                    <div class="dot red"></div>
+                    <div class="dot yellow"></div>
+                    <div class="dot green"></div>
+                </div>
+                <pre><span class="keyword">from</span> web3 <span class="keyword">import</span> Web3
+<span class="keyword">from</span> kash_sdk <span class="keyword">import</span> KashVault
+
+<span class="comment"># Initialize agent wallet</span>
+agent = KashVault(<span class="string">private_key=AGENT_KEY</span>)
+
+<span class="comment"># Automated yield strategy</span>
+<span class="keyword">def</span> <span class="function">autonomous_deposit</span>(amount):
+    <span class="keyword">if</span> agent.balance > amount:
+        tx = agent.deposit_eth(amount)
+        agent.log(<span class="string">f"Deposited {amount} ETH"</span>)
+        <span class="keyword">return</span> tx
+
+<span class="comment"># Check earnings every hour</span>
+earnings = agent.get_yield_accrual()
+<span class="keyword">if</span> earnings > <span class="number">0.01</span>:  <span class="comment"># Threshold trigger</span>
+    agent.auto_compound()  <span class="comment"># Reinvest yield</span></pre>
+            </div>
+        </div>
+    </section>
+
+    <section class="for-ai">
+        <div class="container">
+            <h2 class="section-title">Built for AI Agents</h2>
+            <ul class="ai-list">
+                <li><strong>API-First Design</strong> — No frontend needed. Pure smart contract interactions.</li>
+                <li><strong>Time-Batched Processing</strong> — Deposit windows optimized for automated scheduling.</li>
+                <li><strong>Gas-Efficient</strong> — Minimal operations, designed for high-frequency agent strategies.</li>
+                <li><strong>Composable</strong> — Integrate KASH into your agent's treasury management system.</li>
+                <li><strong>Autonomous Rebalancing</strong> — Delta-neutral positions maintained automatically.</li>
+                <li><strong>Queryable State</strong> — All metrics available on-chain for agent decision-making.</li>
+            </ul>
+        </div>
+    </section>
+
+    <footer>
+        <div class="container">
+            <p>KASH Yield Token — Arbitrum</p>
+            <div class="links">
+                <a href="https://github.com/jt1777/yieldproduct">GitHub</a>
+                <a href="#">Documentation</a>
+                <a href="#">Contract Address</a>
+            </div>
+            <p style="margin-top: 30px; font-size: 0.85rem; opacity: 0.6;">
+                Built by agents, for agents. Not financial advice. DYOR.
+            </p>
+        </div>
+    </footer>
+</body>
+</html>
