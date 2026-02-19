@@ -1,5 +1,7 @@
 # Off-Chain Bot Specification for KashYield
 
+> **⚠️ Partially outdated.** The **current** contract does **not** use `setMintValuation()` or a separate claim step. Batch flow is: during 23:50–23:59 UTC call `processBatch()` (which values mints via Chainlink, settles redeems, and distributes in one tx). The bot should (1) call `processBatch()` in the processing window (or use Chainlink Automation) and (2) react to `ProtocolInteraction("NET_MINT" | "NET_REDEEM")` events for capital deployment. NAV formulas and protocol interaction *ideas* (Aave, Hyperliquid) still apply; the **timeline and step-by-step below** (e.g. “Call setMintValuation”) reflect the old flow. See `frontend/README.md` for current status.
+
 ## Overview
 
 The off-chain bot is responsible for calculating the Net Asset Value (NAV), processing batch settlements, rebalancing the portfolio, and storing historical data. This document outlines the bot's responsibilities, calculation formulas, and operational procedures.

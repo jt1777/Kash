@@ -1,25 +1,25 @@
 # KashYield - Simplified Yield Strategy Protocol
 
-A capital-efficient yield strategy protocol that allows users to deposit multiple assets (ETH, wETH, wBTC, USDT, USDC) and receive Kash tokens representing their share of the portfolio.
+A capital-efficient yield strategy protocol that allows users to deposit multiple assets (ETH, wETH, wBTC) and receive Kash tokens representing their share of the portfolio.
 
 ## 🎯 Key Features
 
-- **Multi-Asset Support**: Deposit and redeem in ETH, wETH, wBTC, USDT, or USDC
+- **Multi-Asset Support**: Deposit and redeem in ETH, wETH, or wBTC.
 - **NAV-Based Pricing**: Kash tokens are priced at current Net Asset Value (NAV)
 - **Daily Batch Settlement**: Capital-efficient processing at 23:50 UTC daily
 - **Daily NAV Updates**: NAV updated once daily during batch processing
-- **Hyperliquid Integration**: Spot trading and perpetual futures
-- **Aave Integration**: Lending and borrowing for yield generation
+- **Hyperliquid Integration**: Perpetual futures
+- **Aave Integration**: Lending and borrowing for yield generation and leverage
 
 ## 📋 Architecture
 
-### Smart Contracts (511 lines vs 798 lines original)
+### Smart Contracts
 
 1. **KashYield.sol** - Main protocol contract
-   - User functions: `requestMint()`, `requestRedeem()`, `claimTokens()`
-   - Batch processing: `processBatch()` 
-   - Protocol interactions: Aave and Hyperliquid functions
-   - NAV management (updated daily by bot)
+   - User functions: `requestMint()`, `requestRedeem()` (no claim step; distribution happens inside `processBatch()`)
+   - Batch processing: `processBatch()` (values mints via Chainlink, settles redemptions, mints/burns KASH, distributes in one tx)
+   - Protocol interactions: Aave and Hyperliquid functions (owner/bot)
+   - NAV management: `updateNAV()` (owner); batch uses `currentNAV`
 
 2. **KashToken.sol** - ERC20 token (Kash)
    - Name: "Kash"
@@ -31,7 +31,7 @@ A capital-efficient yield strategy protocol that allows users to deposit multipl
 - Calculates NAV during daily batch processing
 - Processes daily batches at 23:50 UTC
 - Updates on-chain NAV after batch settlement
-- Executes rebalancing operations
+- Executes rebalancing operations at batch processing time or throughout the day as necessary
 - Stores historical data
 - Provides API for frontend
 
@@ -40,8 +40,8 @@ A capital-efficient yield strategy protocol that allows users to deposit multipl
 | Time (UTC) | Window | Actions Allowed |
 |------------|--------|-----------------|
 | 00:00 - 23:49 | User Window | Users can `requestMint()` and `requestRedeem()` |
-| 23:50 - 23:59 | Processing Window | Bot calls `processBatch()`, no user actions |
-| 00:00+ | Distribution | Users can `claimTokens()` for processed batches |
+| 23:50 - 23:59 | Processing Window | Keeper or bot calls `processBatch()`; no user actions |
+| 00:00+ | — | Minters receive KASH and redeemers are returned their assets plus any net yield (distributed in `processBatch()`) |
 
 ## 🚀 Quick Start
 
@@ -100,16 +100,8 @@ npm run start
 
 2. **Wait for Batch Processing**
    - Requests are queued during the day
-   - Bot calculates real-time asset prices and NAV at 23:50 UTC
-   - Bot values all deposits and processes batch
-   - Tokens available to claim after 00:00 UTC
-
-3. **Claim Tokens**
-   ```solidity
-   kashYield.claimTokens();
-   // Receives Kash tokens (for mints) or redeemed assets (for redeems)
-   // Amounts are calculated using the NAV from batch processing time
-   ```
+   - During 23:50–23:59 UTC a keeper or bot calls `processBatch()`
+   - Contract values deposits via Chainlink oracles, settles redeems, mints KASH to minters, sends tokens to redeemers (no separate claim)
 
 4. **Redeem**
    ```solidity
@@ -260,11 +252,11 @@ npx hardhat run scripts/deploy.js --network sepolia
 
 ## 📝 TODO
 
-- [ ] Implement Hyperliquid integration (currently placeholder)
+- [ ] Update smart contract and implement Aave and Hyperliquid integration (currently placeholder)
 - [ ] Build off-chain bot
-- [ ] Create frontend interface
+- [ ] Polish up frontend interface
 - [ ] Smart contract audit
-- [ ] Testnet deployment
+- [ ] Testnet launch and testing (in progress)
 - [ ] Mainnet deployment
 
 ## 📄 License

@@ -13,5 +13,8 @@ node_modules
 /coverage
 /coverage.json
 
+# Gas reporter output (generated when REPORT_GAS=true)
+gasReporterOutput.json
+
 # Deployment files
 /deployments

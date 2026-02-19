@@ -1,8 +1,10 @@
 # Architecture Changes: Bot-Calculated Pricing
 
+> **⚠️ Outdated.** This document describes an intermediate design. The **current** KashYield contract uses **Chainlink oracles** inside `processBatch()` for mint valuation and distributes in the same tx (no `setMintValuation`, no `claimTokens()`). See `frontend/README.md` for current contract behavior and “Smart Contract: Current vs Older Version”.
+
 ## Overview
 
-The KashYield contract has been refactored to remove on-chain price feed dependencies. All pricing and valuation is now handled by the off-chain bot during daily batch processing.
+The KashYield contract was refactored at one point to move pricing off-chain. The **current** deployed contract has since moved valuation back on-chain: `processBatch()` uses Chainlink (`getTokenUSD`) and does immediate distribution. This doc is kept for history only.
 
 ## Key Changes
 
