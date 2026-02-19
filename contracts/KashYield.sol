@@ -6,13 +6,39 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 import "./KashToken.sol";
 
-// Interface with Aave V3 Pool (Arbitrum)
+// Interface with Aave V3 Pool (Arbitrum Sepolia)
 interface IPool {
-    function supply(address asset, uint256 amount, address onBehalfOf, uint16 referralCode) external payable;
+    function supply(address asset, uint256 amount, address onBehalfOf, uint16 referralCode) external;
     function withdraw(address asset, uint256 amount, address to) external returns (uint256);
     function getATokenBalance(address asset, address user) external view returns (uint256);
     function borrow(address asset, uint256 amount, uint256 interestRateMode, uint16 referralCode, address onBehalfOf) external;
     function repay(address asset, uint256 amount, uint256 rateMode, address onBehalfOf) external returns (uint256);
+}
+
+// Interface for WETH (for wrapping/unwrapping ETH)
+interface IWETH is IERC20 {
+    function deposit() external payable;
+    function withdraw(uint256 amount) external;
+}
+
+// Minimal interface for Hyperliquid (or mock/adapter). Bot calls these via owner-only functions.
+// Real Hyperliquid: deposit = transfer USDC to bridge; trading/withdraw may be API-signed. Use an adapter if needed.
+interface IHyperliquid {
+    function depositToSpotWallet(address stableToken, uint256 amount) external;
+    function withdrawFromSpotWallet(address stableToken, uint256 amount) external;
+    function openPerpPosition(string calldata symbol, uint256 size, bool isLong) external;
+    function closePerpPosition(string calldata symbol) external;
+    function getSpotBalance(address user) external view returns (uint256);
+    function getPosition(address user, string calldata symbol) external view returns (
+        uint256 size,
+        uint256 collateral,
+        uint256 entryPrice,
+        bool isLong,
+        bool isActive
+    );
+    // Optional: order book (mock can no-op; real HL uses API)
+    function cancelOrder(bytes32 orderId) external;
+    function getOpenOrderIds(address account) external view returns (bytes32[] memory);
 }
 
 // Events (kept from original)
@@ -39,17 +65,18 @@ contract KashYield {
     Kash public kashToken;
     uint256 public currentNAV; // 18 decimals, initialized at 1e18 ($1)
     
-    // Protocol addresses (Arbitrum mainnet)
-    address public aavePoolAddress = 0x794a61358D6845594F94dc1DB02A252b5b4814aD;
-    
-    // Supported tokens (Arbitrum addresses)
+    // Protocol addresses (Arbitrum Sepolia)
+    address public aavePoolAddress = 0x6Ae43d3271ff6888e7Fc43Fd7321a503ff738951;
+    address public hyperliquidAddress; // Hyperliquid adapter or bridge (0 = disabled). Bot uses for deposit/short/withdraw.
+
+    // Supported tokens (Arbitrum Sepolia addresses)
     address public constant ETH_ADDRESS = address(0);
-    address public wethAddress = 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1;
-    address public wbtcAddress = 0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f;
-    address public usdtAddress = 0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9;
-    address public usdcAddress = 0xaf88d065e77c8cC2239327C5EDb3A432268e5831;
+    address public wethAddress = 0x89c8C8AD33c4a9539361a2Cf1A908C4300F258D9;
+    address public wbtcAddress = 0x4D8b720b94D341F54df948696747B05998c5FbD5;
+    address public usdtAddress = 0x833EdA586220B1d0C25034E9bAb5ed4B4a5769a1;
+    address public usdcAddress = 0x15BB91b9e63EA29863678B1dcBcB01dE31bD8Ab5;
     
-    // Chainlink oracles (Arbitrum mainnet, USD pairs)
+    // Chainlink oracles (Arbitrum Sepolia, USD pairs)
     mapping(address => address) public tokenOracles;
     mapping(address => uint8) public tokenDecimals;
     
@@ -141,12 +168,12 @@ contract KashYield {
         tokenDecimals[usdtAddress] = 6;
         tokenDecimals[usdcAddress] = 6;
         
-        // Set Chainlink oracles (ETH for ETH/wETH)
-        tokenOracles[ETH_ADDRESS] = 0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612; // ETH/USD
-        tokenOracles[wethAddress] = 0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612; // Same as ETH
-        tokenOracles[wbtcAddress] = 0x6ce185860a4963106506C203335A2910413708e9; // BTC/USD
-        tokenOracles[usdtAddress] = 0x3f3f5dF88dC9F13eac63DF89EC16ef6e7E25DdE7; // USDT/USD
-        tokenOracles[usdcAddress] = 0x50834F3163758fcC1Df9973b6e91f0F0F0434aD3; // USDC/USD
+        // Set Chainlink oracles (Arbitrum Sepolia)
+        tokenOracles[ETH_ADDRESS] = 0x1AdF01abD96C11AEE2f20a41a03fAD11b3D8d2b4; // ETH/USD
+        tokenOracles[wethAddress] = 0x1AdF01abD96C11AEE2f20a41a03fAD11b3D8d2b4; // Same as ETH
+        tokenOracles[wbtcAddress] = 0xBfFE5FE928F9597E2A21Ba8f2cDE7D2D10C09d27; // BTC/USD
+        tokenOracles[usdtAddress] = 0x78a59DD416d0CE4AbfD2e27BFd2f6bFdceC446e3; // USDT/USD
+        tokenOracles[usdcAddress] = 0xed45CBB45d34F53bf14C70e6FC2711bDd6454E76; // USDC/USD
     }
 
     // Allow contract to receive ETH
@@ -349,17 +376,29 @@ contract KashYield {
 
     function depositToAave(address asset, uint256 amount) external onlyOwner {
         if (asset == ETH_ADDRESS) {
-            IPool(aavePoolAddress).supply{value: amount}(asset, amount, address(this), 0);
+            // Aave V3 on Arbitrum uses WETH for native ETH deposits
+            // Wrap ETH to WETH first, then supply WETH to Aave
+            IWETH(wethAddress).deposit{value: amount}();
+            IERC20(wethAddress).forceApprove(aavePoolAddress, amount);
+            IPool(aavePoolAddress).supply(wethAddress, amount, address(this), 0);
+            emit ProtocolInteraction("AAVE_DEPOSIT", wethAddress, amount);
         } else {
             IERC20(asset).forceApprove(aavePoolAddress, amount);
             IPool(aavePoolAddress).supply(asset, amount, address(this), 0);
+            emit ProtocolInteraction("AAVE_DEPOSIT", asset, amount);
         }
-        emit ProtocolInteraction("AAVE_DEPOSIT", asset, amount);
     }
 
     function withdrawFromAave(address asset, uint256 amount) external onlyOwner {
-        IPool(aavePoolAddress).withdraw(asset, amount, address(this));
-        emit ProtocolInteraction("AAVE_WITHDRAW", asset, amount);
+        if (asset == ETH_ADDRESS) {
+            // Withdraw WETH from Aave, then unwrap to ETH
+            IPool(aavePoolAddress).withdraw(wethAddress, amount, address(this));
+            IWETH(wethAddress).withdraw(amount);
+            emit ProtocolInteraction("AAVE_WITHDRAW", ETH_ADDRESS, amount);
+        } else {
+            IPool(aavePoolAddress).withdraw(asset, amount, address(this));
+            emit ProtocolInteraction("AAVE_WITHDRAW", asset, amount);
+        }
     }
 
     function borrowFromAave(address asset, uint256 amount) external onlyOwner {
@@ -371,6 +410,87 @@ contract KashYield {
         IERC20(asset).forceApprove(aavePoolAddress, amount);
         IPool(aavePoolAddress).repay(asset, amount, 2, address(this));
         emit ProtocolInteraction("AAVE_REPAY", asset, amount);
+    }
+
+    // ============================================
+    // HYPERLIQUID INTERACTION (Owner / Bot Only)
+    // ============================================
+    // All moves stay in protocol: contract deposits/withdraws to Hyperliquid adapter (or bridge).
+    // Real mainnet: deposit = transfer USDC to bridge; trading/withdraw often via Hyperliquid API (off-chain sigs).
+
+    function setHyperliquid(address _hyperliquidAddress) external onlyOwner {
+        hyperliquidAddress = _hyperliquidAddress;
+    }
+
+    /// @notice Deposit USDC from contract to Hyperliquid spot wallet (collateral).
+    function depositToHyperliquid(uint256 amount) external onlyOwner {
+        require(hyperliquidAddress != address(0), "Hyperliquid not set");
+        require(amount > 0, "Amount must be > 0");
+        IERC20(usdcAddress).forceApprove(hyperliquidAddress, amount);
+        IHyperliquid(hyperliquidAddress).depositToSpotWallet(usdcAddress, amount);
+        emit ProtocolInteraction("HL_DEPOSIT", usdcAddress, amount);
+    }
+
+    /// @notice Withdraw USDC from Hyperliquid spot wallet back to contract.
+    function withdrawFromHyperliquid(uint256 amount) external onlyOwner {
+        require(hyperliquidAddress != address(0), "Hyperliquid not set");
+        require(amount > 0, "Amount must be > 0");
+        IHyperliquid(hyperliquidAddress).withdrawFromSpotWallet(usdcAddress, amount);
+        emit ProtocolInteraction("HL_WITHDRAW", usdcAddress, amount);
+    }
+
+    /// @notice Add collateral to Hyperliquid (same as deposit).
+    function addCollateralToHyperliquid(uint256 amount) external onlyOwner {
+        require(hyperliquidAddress != address(0), "Hyperliquid not set");
+        require(amount > 0, "Amount must be > 0");
+        IERC20(usdcAddress).forceApprove(hyperliquidAddress, amount);
+        IHyperliquid(hyperliquidAddress).depositToSpotWallet(usdcAddress, amount);
+        emit ProtocolInteraction("HL_ADD_COLLATERAL", usdcAddress, amount);
+    }
+
+    /// @notice Open a short perp position (e.g. "ETH", "BTC"). Size in asset units (18 decimals).
+    function openShort(string calldata symbol, uint256 size) external onlyOwner {
+        require(hyperliquidAddress != address(0), "Hyperliquid not set");
+        require(size > 0, "Size must be > 0");
+        IHyperliquid(hyperliquidAddress).openPerpPosition(symbol, size, false);
+        emit ProtocolInteraction("HL_OPEN_SHORT", address(0), size);
+    }
+
+    /// @notice Close the short perp position for symbol.
+    function closeShort(string calldata symbol) external onlyOwner {
+        require(hyperliquidAddress != address(0), "Hyperliquid not set");
+        IHyperliquid(hyperliquidAddress).closePerpPosition(symbol);
+        emit ProtocolInteraction("HL_CLOSE_SHORT", address(0), 0);
+    }
+
+    /// @notice Cancel an open order by id (if adapter supports it; otherwise no-op or revert).
+    function cancelHyperliquidOrder(bytes32 orderId) external onlyOwner {
+        require(hyperliquidAddress != address(0), "Hyperliquid not set");
+        IHyperliquid(hyperliquidAddress).cancelOrder(orderId);
+        emit ProtocolInteraction("HL_CANCEL_ORDER", address(0), 0);
+    }
+
+    // --- Views ---
+
+    function getHyperliquidSpotBalance() external view returns (uint256) {
+        if (hyperliquidAddress == address(0)) return 0;
+        return IHyperliquid(hyperliquidAddress).getSpotBalance(address(this));
+    }
+
+    function getHyperliquidPosition(string calldata symbol) external view returns (
+        uint256 size,
+        uint256 collateral,
+        uint256 entryPrice,
+        bool isLong,
+        bool isActive
+    ) {
+        if (hyperliquidAddress == address(0)) return (0, 0, 0, false, false);
+        return IHyperliquid(hyperliquidAddress).getPosition(address(this), symbol);
+    }
+
+    function getHyperliquidOpenOrderIds() external view returns (bytes32[] memory) {
+        if (hyperliquidAddress == address(0)) return new bytes32[](0);
+        return IHyperliquid(hyperliquidAddress).getOpenOrderIds(address(this));
     }
 
     // ============================================

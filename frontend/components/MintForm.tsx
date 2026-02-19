@@ -9,10 +9,8 @@ import { parseEther, parseUnits, zeroAddress } from 'viem';
 
 const TOKENS = [
   { symbol: 'ETH', address: zeroAddress, decimals: 18 },
-  { symbol: 'USDC', address: CONTRACTS.tokens.usdc, decimals: 6 },
-  { symbol: 'USDT', address: CONTRACTS.tokens.usdt, decimals: 6 },
-  { symbol: 'wETH', address: CONTRACTS.tokens.weth, decimals: 18 }, // Fixed: wETH has 18 decimals, not 6
-  { symbol: 'wBTC', address: CONTRACTS.tokens.wbtc, decimals: 8 }, // Fixed: wBTC has 8 decimals, not 6
+  { symbol: 'wETH', address: CONTRACTS.tokens.weth, decimals: 18 },
+  { symbol: 'wBTC', address: CONTRACTS.tokens.wbtc, decimals: 8 },
 ];
 
 export function MintForm() {

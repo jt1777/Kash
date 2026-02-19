@@ -208,6 +208,33 @@ contract MockHyperliquid {
         return spotBalances[user];
     }
 
+    /// @notice Get perp position for a user and symbol (for KashYield / adapter interface).
+    function getPosition(address user, string calldata symbol) external view returns (
+        uint256 size,
+        uint256 collateral,
+        uint256 entryPrice,
+        bool isLong,
+        bool isActive
+    ) {
+        bytes32 symHash = keccak256(bytes(symbol));
+        if (symHash != keccak256("ETH") && symHash != keccak256("BTC")) {
+            return (0, 0, 0, false, false);
+        }
+        uint256 assetId = symHash == keccak256("ETH") ? 0 : 1;
+        Position storage pos = perpPositions[user][assetId];
+        return (pos.size, pos.collateral, pos.entryPrice, pos.isLong, pos.isActive);
+    }
+
+    /// @notice No-op for mock (no order book). Real HL uses API for cancel.
+    function cancelOrder(bytes32 /* orderId */) external {
+        // Mock has no order book; no-op.
+    }
+
+    /// @notice Mock has no order book; returns empty array.
+    function getOpenOrderIds(address /* account */) external pure returns (bytes32[] memory) {
+        return new bytes32[](0);
+    }
+
     // Allow receiving ETH for spot sales
     receive() external payable {}
 }

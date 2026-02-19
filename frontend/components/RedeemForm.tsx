@@ -9,8 +9,6 @@ import { parseEther, formatEther, zeroAddress } from 'viem';
 
 const TOKENS = [
   { symbol: 'ETH', address: zeroAddress },
-  { symbol: 'USDC', address: CONTRACTS.tokens.usdc },
-  { symbol: 'USDT', address: CONTRACTS.tokens.usdt },
   { symbol: 'wETH', address: CONTRACTS.tokens.weth },
   { symbol: 'wBTC', address: CONTRACTS.tokens.wbtc },
 ];

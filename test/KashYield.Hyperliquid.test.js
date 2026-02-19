@@ -10,15 +10,15 @@ describe("KashYield - Hyperliquid Migration", function () {
   async function deployKashYieldFixture() {
     const [owner, user1, user2, user3, bot] = await ethers.getSigners();
 
-    // Deploy mock contracts
-    const MockUSDC = await ethers.getContractFactory('MockUSDC');
-    const mockUsdc = await MockUSDC.deploy();
+    // Deploy mock contracts (MockUSDT used as USDC for tests - same 6 decimals)
+    const MockUSDT = await ethers.getContractFactory('MockUSDT');
+    const mockUsdc = await MockUSDT.deploy(1_000_000);
     await mockUsdc.waitForDeployment();
 
     const MockAave = await ethers.getContractFactory('MockAaveV3');
     const mockAavePool = await MockAave.deploy(mockUsdc.target);
     await mockAavePool.waitForDeployment();
-    await mockAavePool.setUsdcAddress(mockUsdc.target);
+    await mockAavePool.setUsdtAddress(mockUsdc.target);
 
     const MockPriceFeed = await ethers.getContractFactory('MockChainlinkPriceFeed');
     const mockPriceFeed = await MockPriceFeed.deploy(300000000000n); // $3000 ETH
