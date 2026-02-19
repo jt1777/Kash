@@ -66,7 +66,8 @@ contract KashYield {
     uint256 public currentNAV; // 18 decimals, initialized at 1e18 ($1)
     
     // Protocol addresses (Arbitrum Sepolia)
-    address public aavePoolAddress = 0x6Ae43d3271ff6888e7Fc43Fd7321a503ff738951;
+    // Aave V3 Pool: https://github.com/bgd-labs/aave-address-book (AaveV3ArbitrumSepolia.POOL)
+    address public aavePoolAddress = 0xBfC91D59fdAA134A4ED45f7B584cAf96D7792Eff;
     address public hyperliquidAddress; // Hyperliquid adapter or bridge (0 = disabled). Bot uses for deposit/short/withdraw.
 
     // Supported tokens (Arbitrum Sepolia addresses)

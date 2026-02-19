@@ -1,7 +1,7 @@
 // Deployed contract addresses on Arbitrum Sepolia
 export const CONTRACTS = {
-  kashYield: "0xc4aF7357c36DE37da8183ACeebe8519d4cd1e310" as `0x${string}`,
-  kashToken: "0xb6a74Fb6Bb240e754237982F1943cAd77361d554" as `0x${string}`,
+  kashYield: "0x4C3910E93aB0c5983c6DEE003749485E525E5Db7" as `0x${string}`,
+  kashToken: "0x3461e725Fb77ead9a4FD22A10e0f0c9373156297" as `0x${string}`,
   mockAave: "0x1Fbe5029cC02e7bF88AB8d0082272655399379E8" as `0x${string}`,
   mockHyperliquid: "0x71194656990EB0A8501126d0c5f7F3daB29628b1" as `0x${string}`,
   tokens: {
