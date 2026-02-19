@@ -17,24 +17,30 @@ Open 1.7x ETH short position
 Earn funding rate yield
 ```
 
-## Contract Addresses Needed
+## Contract Addresses
+
+### Arbitrum Mainnet (Production)
+
+| Contract | Address | Purpose |
+|----------|---------|---------|
+| `Hyperliquid Deposit Bridge` | `0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7` | Main L1 bridge contract for deposits/withdrawals |
+| `USDC (Native)` | `0xaf88d065e77c8cC2239327C5EDb3A432268e5831` | Circle's native USDC on Arbitrum |
+| `USDC.e (Bridged)` | `0xff970a61a04b1ca14834a43f5de4533ebddb5cc8` | Bridged USDC from Ethereum |
+| `ETH-PERP` | N/A | Not a contract - use API via coin name "ETH" |
+
+### Nova's Trading Bot Wallet
+- **Address:** `0x4485716f61Db964ff03469310582f6103537c2e3`
+- **Network:** Hyperliquid mainnet
+- **Access:** API-based (no direct contract interactions for trading)
 
 ### Arbitrum Sepolia (Testnet)
 
-You mentioned you already have Hyperliquid access from the AI trading bot project. We need these addresses:
+| Contract | Address | Purpose |
+|----------|---------|---------|
+| `Hyperliquid Deposit Bridge` | `0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7` | Same address on testnet |
+| `USDC` | `0xd9CBEC81df392A88AEff575E962d149d57F4d6bc` | Testnet USDC |
 
-| Contract | Purpose | Where to Find |
-|----------|---------|---------------|
-| `Clearinghouse` | Main Hyperliquid L1 contract | Your trading bot config |
-| `USDC` | USDC token on Sepolia | Usually `0xd9CBEC81df392A88AEff575E962d149d57F4d6bc` |
-| `ETH-PERP` | ETH perpetual market ID | Hyperliquid API or your bot |
-
-### Finding Your Addresses
-
-From your AI trading bot project, look for:
-1. The wallet address that deposited to Hyperliquid
-2. Any contract addresses in your `.env` or config files
-3. The `HYPERLIQUID_API_URL` or similar - probably `https://api.hyperliquid-testnet.xyz`
+**Note:** The trading bot uses Hyperliquid's REST API, not direct contract calls for trading. The bridge contract is only used for deposits/withdrawals.
 
 ## Hyperliquid Interaction Flow
 
@@ -109,12 +115,18 @@ This is similar to how your AI trading bot works!
 
 Add to your `.env`:
 ```bash
+# Hyperliquid Mainnet (Production)
+HYPERLIQUID_API_URL=https://api.hyperliquid.xyz
+HYPERLIQUID_CLEARINGHOUSE=0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7
+HYPERLIQUID_USDC=0xaf88d065e77c8cC2239327C5EDb3A432268e5831
+
 # Hyperliquid Testnet
 HYPERLIQUID_TESTNET_API_URL=https://api.hyperliquid-testnet.xyz
-HYPERLIQUID_CLEARINGHOUSE=0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7
-HYPERLIQUID_USDC=0xd9CBEC81df392A88AEff575E962d149d57F4d6bc
+HYPERLIQUID_TESTNET_CLEARINGHOUSE=0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7
+HYPERLIQUID_TESTNET_USDC=0xd9CBEC81df392A88AEff575E962d149d57F4d6bc
 
 # Wallet (same as AI trading bot)
+HYPERLIQUID_MAIN_WALLET_ADDRESS=0x4485716f61Db964ff03469310582f6103537c2e3
 DEPLOYER_PRIVATE_KEY=0x...
 ```
 
@@ -144,4 +156,4 @@ Before mainnet:
 
 ---
 
-**Next**: Can you share the wallet address or contract addresses from your AI trading bot project? Then I can update the deployment scripts with the exact addresses.
+**Updated**: 2026-02-19 - Added actual contract addresses from Nova's AI Trading Bot project
