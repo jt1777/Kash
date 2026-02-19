@@ -1,6 +1,6 @@
 import { ethers } from 'ethers';
 import { config } from './config';
-import { calculateNetPosition, getYesterdayBatchCycle } from './batch/calculateNetPosition';
+import { BatchProcessor } from './batch/batchProcessor';
 import { validateConfig, verifyContract } from './utils/validateConfig';
 
 async function main() {
@@ -15,19 +15,29 @@ async function main() {
     process.exit(1);
   }
 
-  // Initialize provider
+  // Initialize provider and signer
   const provider = new ethers.JsonRpcProvider(config.rpcUrl);
+  
+  if (!config.privateKey) {
+    console.error('❌ Private key not configured. Set PRIVATE_KEY in .env');
+    process.exit(1);
+  }
+  
+  const wallet = new ethers.Wallet(config.privateKey, provider);
+  console.log(`🔑 Bot Wallet: ${wallet.address}`);
+  
+  // Check wallet balance
+  const balance = await provider.getBalance(wallet.address);
+  console.log(`💰 Wallet Balance: ${ethers.formatEther(balance)} ETH\n`);
+  
+  if (balance === 0n) {
+    console.error('❌ Wallet has no ETH for gas. Please fund the bot wallet.');
+    process.exit(1);
+  }
+
   console.log(`📡 Connected to RPC: ${config.rpcUrl}`);
   console.log(`📄 Contract Address: ${config.kashYieldAddress}`);
-  console.log(`🔗 Chain ID: ${config.chainId}`);
-  if (process.env.ARBITRUM_SEPOLIA_RPC_URL) {
-    console.log(`ℹ️  Using ARBITRUM_SEPOLIA_RPC_URL from .env`);
-  } else if (process.env.RPC_URL) {
-    console.log(`ℹ️  Using RPC_URL from .env`);
-  } else {
-    console.log(`ℹ️  Using default Sepolia RPC`);
-  }
-  console.log('');
+  console.log(`🔗 Chain ID: ${config.chainId}\n`);
 
   // Verify contract exists
   try {
@@ -39,37 +49,17 @@ async function main() {
     process.exit(1);
   }
 
-  // Get yesterday's batch cycle
-  const batchCycle = await getYesterdayBatchCycle(provider);
-  console.log(`📅 Processing batch cycle: ${batchCycle}`);
+  // Create batch processor
+  const processor = new BatchProcessor(provider, wallet);
 
-  // Calculate net position
-  console.log('📊 Calculating net position (mints - redeems)...');
-  const netPosition = await calculateNetPosition(provider, batchCycle);
-
-  // Display results
-  console.log('\n📈 Net Position Results:');
-  console.log('─'.repeat(50));
-  console.log(`Batch Cycle:        ${netPosition.batchCycle}`);
-  console.log(`Total Mint USD:     ${ethers.formatEther(netPosition.totalMintUSD)} USD`);
-  console.log(`Total Redeem USD:   ${ethers.formatEther(netPosition.totalRedeemUSD)} USD`);
-  console.log(`Net Position USD:   ${ethers.formatEther(netPosition.netPositionUSD)} USD`);
-  console.log(`Mint Requests:      ${netPosition.mintCount}`);
-  console.log(`Redeem Requests:    ${netPosition.redeemCount}`);
-  console.log('─'.repeat(50));
-
-  // Determine action needed
-  if (netPosition.netPositionUSD > 0n) {
-    console.log('\n✅ NET MINT: Need to mint Kash tokens');
-    console.log(`   Deploy ${ethers.formatEther(netPosition.netPositionUSD)} USD of new capital`);
-  } else if (netPosition.netPositionUSD < 0n) {
-    console.log('\n❌ NET REDEEM: Need to redeem/burn Kash tokens');
-    console.log(`   Free up ${ethers.formatEther(-netPosition.netPositionUSD)} USD of capital`);
-  } else {
-    console.log('\n⚖️  BALANCED: No net change, only rebalancing if needed');
+  // Run the processor
+  try {
+    await processor.run();
+    console.log('\n✨ Bot execution complete!');
+  } catch (error: any) {
+    console.error('\n❌ Bot execution failed:', error.message);
+    process.exit(1);
   }
-
-  console.log('\n✨ Net position calculation complete!');
 }
 
 // Run if called directly
@@ -77,9 +67,9 @@ if (require.main === module) {
   main()
     .then(() => process.exit(0))
     .catch((error) => {
-      console.error('❌ Error:', error);
+      console.error('❌ Unhandled Error:', error);
       process.exit(1);
     });
 }
 
-export { calculateNetPosition, getYesterdayBatchCycle };
+export { BatchProcessor };
