@@ -194,7 +194,7 @@ export class ChainlinkAutomationManager {
     console.log('🤖 Chainlink Automation: Executing Batch Processor');
     
     // Import and run batch processor
-    const { BatchProcessor } = await import('./batchProcessor');
+    const { BatchProcessor } = await import('../batch/batchProcessor');
     const processor = new BatchProcessor(this.provider, this.signer);
     await processor.run();
   }
@@ -255,7 +255,7 @@ export class ChainlinkAutomationManager {
     console.log('🤖 Chainlink Automation: Executing Rebalancer');
     
     // Import and run rebalancer
-    const { default: RebalancerBot } = await import('./rebalancerBot');
+    const { default: RebalancerBot } = await import('../batch/rebalancerBot');
     const rebalancer = new RebalancerBot(this.provider, this.signer);
     await rebalancer.runScheduledCheck();
   }
@@ -312,7 +312,7 @@ export class ChainlinkAutomationManager {
     console.log('🤖 Chainlink Automation: Executing Liquidation Guard');
     
     // Import and run liquidation guard
-    const { default: LiquidationGuardBot } = await import('./liquidationGuardBot');
+    const { LiquidationGuardBot } = await import('../batch/liquidationGuardBot');
     const guard = new LiquidationGuardBot(this.provider, this.signer);
     await guard.runScheduledCheck();
   }
@@ -443,5 +443,4 @@ export class ChainlinkAutomationManager {
 }
 
 // Export for use in other modules
-export { ChainlinkAutomationManager };
 export default ChainlinkAutomationManager;

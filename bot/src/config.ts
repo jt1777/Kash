@@ -64,6 +64,12 @@ export const config = {
     USDC: process.env.USDC_ADDRESS || '0x15BB91b9e63EA29863678B1dcBcB01dE31bD8Ab5',
   },
 
+  // Aave V3 Pool (Arbitrum Sepolia)
+  aavePoolAddress: process.env.AAVE_POOL_ADDRESS || '0xBfC91D59fdAA134A4ED45f7B584cAf96D7792Eff',
+
+  // Aave user address (defaults to kashYieldAddress if not set - for separate vault scenarios)
+  aaveUserAddress: process.env.AAVE_USER_ADDRESS || '',
+
   // Chainlink Oracles (Arbitrum Sepolia)
   // Can be overridden via environment variables
   oracles: {

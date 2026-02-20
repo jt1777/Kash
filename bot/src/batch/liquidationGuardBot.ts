@@ -20,8 +20,8 @@ const AAVE_POOL_ABI = [
   },
 ];
 
-// Aave V3 Pool address (Arbitrum Mainnet)
-const AAVE_POOL_ADDRESS = '0x794a61358D6845594F94dc1DB02A252b5b4814aD';
+// Aave V3 Pool address from config (Arbitrum Sepolia)
+const AAVE_POOL_ADDRESS = config.aavePoolAddress;
 
 interface HealthFactorStatus {
   healthFactor: number;
@@ -101,11 +101,11 @@ export class LiquidationGuardBot {
     console.log('🛡️  Checking Aave health factor...\n');
 
     try {
-      // Get vault address (this is the Aave user)
-      const vaultAddress = config.kashYieldAddress;
+      // Get Aave user address (defaults to kashYieldAddress, can be overridden for separate vault)
+      const aaveUserAddress = config.aaveUserAddress || config.kashYieldAddress;
 
       // Query Aave for account data
-      const accountData = await this.aavePool.getUserAccountData(vaultAddress);
+      const accountData = await this.aavePool.getUserAccountData(aaveUserAddress);
 
       const status: HealthFactorStatus = {
         healthFactor: Number(accountData.healthFactor) / 1e18,
@@ -294,7 +294,8 @@ export class LiquidationGuardBot {
    * Get current health factor
    */
   private async getCurrentHealthFactor(): Promise<number> {
-    const accountData = await this.aavePool.getUserAccountData(config.kashYieldAddress);
+    const aaveUserAddress = config.aaveUserAddress || config.kashYieldAddress;
+    const accountData = await this.aavePool.getUserAccountData(aaveUserAddress);
     return Number(accountData.healthFactor) / 1e18;
   }
 

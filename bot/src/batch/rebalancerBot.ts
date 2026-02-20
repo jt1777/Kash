@@ -2,13 +2,13 @@ import { ethers } from 'ethers';
 import { kashYieldABI } from '../contracts/kashYieldABI';
 import { config } from '../config';
 
-// Token addresses (Arbitrum Mainnet)
+// Token addresses from config (Arbitrum Sepolia)
 const TOKEN_ADDRESSES = {
-  ETH: ethers.ZeroAddress,
-  WETH: '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1',
-  WBTC: '0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f',
-  USDT: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9',
-  USDC: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+  ETH: config.tokens.ETH,
+  WETH: config.tokens.WETH,
+  WBTC: config.tokens.WBTC,
+  USDT: config.tokens.USDT,
+  USDC: config.tokens.USDC,
 };
 
 // Target allocation (must sum to 100%)

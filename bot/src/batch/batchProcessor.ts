@@ -1,18 +1,19 @@
 import { ethers } from 'ethers';
 import { kashYieldABI } from '../contracts/kashYieldABI';
 import { config } from '../config';
+import { calculateNetPosition } from './calculateNetPosition';
 
-// Token addresses (Arbitrum Mainnet)
+// Token addresses from config (Arbitrum Sepolia)
 const TOKEN_ADDRESSES = {
-  ETH: ethers.ZeroAddress,
-  WETH: '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1',
-  WBTC: '0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f',
-  USDT: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9',
-  USDC: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+  ETH: config.tokens.ETH,
+  WETH: config.tokens.WETH,
+  WBTC: config.tokens.WBTC,
+  USDT: config.tokens.USDT,
+  USDC: config.tokens.USDC,
 };
 
-// Aave V3 Pool address (Arbitrum Mainnet)
-const AAVE_POOL_ADDRESS = '0x794a61358D6845594F94dc1DB02A252b5b4814aD';
+// Aave V3 Pool address from config (Arbitrum Sepolia)
+const AAVE_POOL_ADDRESS = config.aavePoolAddress;
 
 /**
  * Batch Processor - Handles daily batch processing and capital deployment
@@ -27,7 +28,6 @@ export class BatchProcessor {
   private provider: ethers.Provider;
   private signer: ethers.Signer;
   private kashYield: ethers.Contract;
-  private wallet: ethers.Wallet;
 
   constructor(provider: ethers.Provider, signer: ethers.Signer) {
     this.provider = provider;
@@ -67,14 +67,27 @@ export class BatchProcessor {
       return;
     }
 
-    // Check net position before processing
+    // Show estimated net position if batch not yet processed
+    if (!batchInfo.processed) {
+      const mintCount = Number(batchInfo.mintUsersCount);
+      const redeemCount = Number(batchInfo.redeemUsersCount);
+      
+      if (mintCount > 0 || redeemCount > 0) {
+        try {
+          const estimatedPosition = await calculateNetPosition(this.provider, batchCycle);
+          console.log(`📊 Estimated Net Position (pending): ${ethers.formatEther(estimatedPosition.netPositionUSD)} USD`);
+          console.log(`   Mints: ${estimatedPosition.mintCount} users, ${ethers.formatEther(estimatedPosition.totalMintUSD)} USD`);
+          console.log(`   Redeems: ${estimatedPosition.redeemCount} users, ${ethers.formatEther(estimatedPosition.totalRedeemUSD)} USD\n`);
+        } catch (error: any) {
+          console.log(`⚠️  Could not calculate estimated position: ${error.message}\n`);
+        }
+      }
+    }
+
     const netPositionUSD = BigInt(batchInfo.totalMintUSD.toString()) - BigInt(batchInfo.totalRedeemUSD.toString());
-    console.log(`📊 Net Position: ${ethers.formatEther(netPositionUSD)} USD`);
+    console.log(`📊 Stored Net Position: ${ethers.formatEther(netPositionUSD)} USD`);
     console.log(`   Mints: ${ethers.formatEther(batchInfo.totalMintUSD)} USD`);
     console.log(`   Redeems: ${ethers.formatEther(batchInfo.totalRedeemUSD)} USD\n`);
-
-    // Set up event listener for ProtocolInteraction
-    this.setupEventListener();
 
     // Call processBatch
     try {
@@ -85,8 +98,8 @@ export class BatchProcessor {
       const receipt = await tx.wait();
       console.log(`   ✅ Batch processed in block ${receipt.blockNumber}\n`);
 
-      // Wait a bit for events to be processed
-      await new Promise(resolve => setTimeout(resolve, 5000));
+      // Parse ProtocolInteraction events from receipt (primary path)
+      await this.handleEventsFromReceipt(receipt);
 
     } catch (error: any) {
       console.error('❌ Failed to process batch:', error.message);
@@ -115,13 +128,67 @@ export class BatchProcessor {
   }
 
   /**
-   * Set up listener for ProtocolInteraction events
+   * Parse ProtocolInteraction events from transaction receipt
+   * This is the primary path for handling events (more reliable than listener)
+   */
+  private async handleEventsFromReceipt(receipt: ethers.TransactionReceipt): Promise<void> {
+    console.log('📡 Parsing ProtocolInteraction events from receipt...\n');
+
+    // Create interface for decoding logs
+    const iface = new ethers.Interface(kashYieldABI);
+    
+    let eventsFound = 0;
+
+    for (const log of receipt.logs) {
+      try {
+        // Only process logs from our contract
+        if (log.address.toLowerCase() !== config.kashYieldAddress.toLowerCase()) {
+          continue;
+        }
+
+        const parsedLog = iface.parseLog({
+          topics: log.topics as string[],
+          data: log.data
+        });
+
+        if (parsedLog && parsedLog.name === 'ProtocolInteraction') {
+          eventsFound++;
+          const action = parsedLog.args[0] as string;
+          const asset = parsedLog.args[1] as string;
+          const amount = parsedLog.args[2] as bigint;
+
+          console.log(`📡 ProtocolInteraction Event:`);
+          console.log(`   Action: ${action}`);
+          console.log(`   Asset: ${asset}`);
+          console.log(`   Amount: ${ethers.formatEther(amount)}\n`);
+
+          if (action === 'NET_MINT') {
+            await this.handleNetMint(amount, asset);
+          } else if (action === 'NET_REDEEM') {
+            await this.handleNetRedeem(amount, asset);
+          }
+        }
+      } catch (error) {
+        // Log might not be from our contract or not decodable
+        continue;
+      }
+    }
+
+    if (eventsFound === 0) {
+      console.log('⚠️  No ProtocolInteraction events found in receipt\n');
+    } else {
+      console.log(`✅ Processed ${eventsFound} ProtocolInteraction event(s)\n`);
+    }
+  }
+
+  /**
+   * Set up listener for ProtocolInteraction events (fallback for long-running mode)
    */
   private setupEventListener(): void {
-    console.log('👂 Listening for ProtocolInteraction events...\n');
+    console.log('👂 Setting up ProtocolInteraction event listener (fallback mode)...\n');
 
     this.kashYield.on('ProtocolInteraction', async (action: string, asset: string, amount: bigint, event: any) => {
-      console.log(`📡 ProtocolInteraction Event:`);
+      console.log(`📡 ProtocolInteraction Event (from listener):`);
       console.log(`   Action: ${action}`);
       console.log(`   Asset: ${asset}`);
       console.log(`   Amount: ${ethers.formatEther(amount)}\n`);
@@ -157,32 +224,26 @@ export class BatchProcessor {
       console.log(`   Asset: ${assetSymbol}`);
 
       // Step 1: Deposit to Aave (40% of capital)
-      // Note: In a real implementation, you'd wrap ETH to wETH first if needed
       const depositAmount = (amount * 40n) / 100n; // 40%
       console.log(`   Step 1: Deposit ${ethers.formatEther(depositAmount)} USD to Aave (40%)`);
       
-      // For ETH deposits, we need to convert to wETH first
-      if (asset === ethers.ZeroAddress || asset === TOKEN_ADDRESSES.WETH) {
-        // This would require wrapping ETH to wETH first
-        console.log(`   ⚠️  Need to wrap ETH to wETH before depositing to Aave`);
-        // await this.depositToAave(TOKEN_ADDRESSES.WETH, depositAmount);
-      } else {
-        // await this.depositToAave(asset, depositAmount);
-      }
+      // For ETH deposits, use WETH address
+      const depositAsset = (asset === ethers.ZeroAddress) ? TOKEN_ADDRESSES.WETH : asset;
+      await this.depositToAave(depositAsset, depositAmount);
 
       // Step 2: Borrow USDC (70% LTV of deposited amount)
       const borrowAmount = (depositAmount * 70n) / 100n;
       console.log(`   Step 2: Borrow ${ethers.formatEther(borrowAmount)} USDC (70% LTV)`);
-      // await this.borrowFromAave(TOKEN_ADDRESSES.USDC, borrowAmount);
+      await this.borrowFromAave(TOKEN_ADDRESSES.USDC, borrowAmount);
 
       // Step 3: Send USDC to Hyperliquid
       console.log(`   Step 3: Transfer USDC to Hyperliquid as collateral`);
-      // await this.depositToHyperliquid(borrowAmount);
+      await this.depositToHyperliquid(borrowAmount);
 
       // Step 4: Open 1.7x ETH short on Hyperliquid
       const shortAmount = (amount * 35n) / 100n; // 35% of total
       console.log(`   Step 4: Open ${ethers.formatEther(shortAmount)} USD ETH short on Hyperliquid (35%)`);
-      // await this.openShortOnHyperliquid(shortAmount);
+      await this.openShortOnHyperliquid(shortAmount);
 
       console.log('   ✅ NET_MINT capital deployment complete!\n');
 
@@ -224,25 +285,26 @@ export class BatchProcessor {
       // Step 1: Close Hyperliquid short position (proportional to redeem amount)
       const shortToClose = (amount * 35n) / 100n;
       console.log(`   Step 1: Close ${ethers.formatEther(shortToClose)} USD ETH short on Hyperliquid`);
-      // await this.closeShortOnHyperliquid(shortToClose);
+      await this.closeShortOnHyperliquid(shortToClose);
 
       // Step 2: Withdraw USDC from Hyperliquid
       const usdcToWithdraw = (amount * 70n) / 100n;
       console.log(`   Step 2: Withdraw ${ethers.formatEther(usdcToWithdraw)} USDC from Hyperliquid`);
-      // await this.withdrawFromHyperliquid(usdcToWithdraw);
+      await this.withdrawFromHyperliquid(usdcToWithdraw);
 
       // Step 3: Repay Aave borrow
       console.log(`   Step 3: Repay ${ethers.formatEther(usdcToWithdraw)} USDC to Aave`);
-      // await this.repayToAave(TOKEN_ADDRESSES.USDC, usdcToWithdraw);
+      await this.repayToAave(TOKEN_ADDRESSES.USDC, usdcToWithdraw);
 
       // Step 4: Withdraw wETH from Aave
       const wethToWithdraw = (amount * 40n) / 100n;
       console.log(`   Step 4: Withdraw ${ethers.formatEther(wethToWithdraw)} USD worth of wETH from Aave`);
-      // await this.withdrawFromAave(TOKEN_ADDRESSES.WETH, wethToWithdraw);
+      await this.withdrawFromAave(TOKEN_ADDRESSES.WETH, wethToWithdraw);
 
       // Step 5: If needed, unwrap wETH to ETH for redemption
       if (asset === ethers.ZeroAddress) {
         console.log(`   Step 5: Unwrap wETH to ETH for redemption`);
+        // Note: Contract handles unwrapping internally if needed
       }
 
       console.log('   ✅ NET_REDEEM capital withdrawal complete!\n');
@@ -318,46 +380,83 @@ export class BatchProcessor {
    */
   private async depositToHyperliquid(amount: bigint): Promise<void> {
     // Check if hyperliquidAddress is set
-    const hlAddress = await this.kashYield.hyperliquidAddress?.().catch(() => ethers.ZeroAddress);
+    let hlAddress: string;
+    try {
+      hlAddress = await this.kashYield.hyperliquidAddress();
+    } catch (error) {
+      console.log(`   ⚠️  Hyperliquid address not set on contract. Skipping HL deposit.`);
+      return;
+    }
+    
     if (!hlAddress || hlAddress === ethers.ZeroAddress) {
       console.log(`   ⚠️  Hyperliquid address not set on contract. Skipping HL deposit.`);
       return;
     }
     
-    console.log(`   → Depositing ${ethers.formatEther(amount)} to Hyperliquid`);
-    // This would call the contract's depositToHyperliquid function
-    // const tx = await this.kashYield.depositToHyperliquid(amount);
-    // await tx.wait();
-    console.log(`   ✅ Deposited to Hyperliquid`);
+    try {
+      console.log(`   → Depositing ${ethers.formatEther(amount)} to Hyperliquid`);
+      const tx = await this.kashYield.depositToHyperliquid(amount);
+      await tx.wait();
+      console.log(`   ✅ Deposited to Hyperliquid`);
+    } catch (error: any) {
+      console.error(`   ❌ Failed to deposit to Hyperliquid: ${error.message}`);
+      throw error;
+    }
   }
 
   /**
    * Withdraw from Hyperliquid
    */
   private async withdrawFromHyperliquid(amount: bigint): Promise<void> {
-    console.log(`   → Withdrawing ${ethers.formatEther(amount)} from Hyperliquid`);
-    // const tx = await this.kashYield.withdrawFromHyperliquid(amount);
-    // await tx.wait();
-    console.log(`   ✅ Withdrawn from Hyperliquid`);
+    try {
+      console.log(`   → Withdrawing ${ethers.formatEther(amount)} from Hyperliquid`);
+      const tx = await this.kashYield.withdrawFromHyperliquid(amount);
+      await tx.wait();
+      console.log(`   ✅ Withdrawn from Hyperliquid`);
+    } catch (error: any) {
+      console.error(`   ❌ Failed to withdraw from Hyperliquid: ${error.message}`);
+      throw error;
+    }
   }
 
   /**
    * Open short position on Hyperliquid
+   * Contract expects openShort(string symbol, uint256 size)
    */
   private async openShortOnHyperliquid(amount: bigint): Promise<void> {
-    console.log(`   → Opening ${ethers.formatEther(amount)} short on Hyperliquid`);
-    // const tx = await this.kashYield.openShort(amount);
-    // await tx.wait();
-    console.log(`   ✅ Opened short on Hyperliquid`);
+    try {
+      console.log(`   → Opening ${ethers.formatEther(amount)} USD ETH short on Hyperliquid`);
+      
+      // Get current ETH price to calculate size in ETH terms
+      const ethPrice = await this.kashYield.getLatestPrice(TOKEN_ADDRESSES.WETH);
+      const ethPriceBigInt = BigInt(ethPrice.toString());
+      
+      // size = amount / price (both in 18 decimals)
+      // size in ETH = amountUSD / pricePerETH
+      const size = (amount * (10n ** 18n)) / ethPriceBigInt;
+      
+      const tx = await this.kashYield.openShort("ETH", size);
+      await tx.wait();
+      console.log(`   ✅ Opened ${ethers.formatEther(size)} ETH short on Hyperliquid`);
+    } catch (error: any) {
+      console.error(`   ❌ Failed to open short on Hyperliquid: ${error.message}`);
+      throw error;
+    }
   }
 
   /**
    * Close short position on Hyperliquid
+   * Contract expects closeShort(string symbol)
    */
   private async closeShortOnHyperliquid(amount: bigint): Promise<void> {
-    console.log(`   → Closing ${ethers.formatEther(amount)} short on Hyperliquid`);
-    // const tx = await this.kashYield.closeShort(amount);
-    // await tx.wait();
-    console.log(`   ✅ Closed short on Hyperliquid`);
+    try {
+      console.log(`   → Closing ETH short on Hyperliquid (amount: ${ethers.formatEther(amount)} USD)`);
+      const tx = await this.kashYield.closeShort("ETH");
+      await tx.wait();
+      console.log(`   ✅ Closed ETH short on Hyperliquid`);
+    } catch (error: any) {
+      console.error(`   ❌ Failed to close short on Hyperliquid: ${error.message}`);
+      throw error;
+    }
   }
 }
