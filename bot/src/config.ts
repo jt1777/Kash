@@ -82,4 +82,15 @@ export const config = {
   // Configuration
   batchProcessingTime: process.env.BATCH_PROCESSING_TIME || '23:50',
   logLevel: process.env.LOG_LEVEL || 'info',
+
+  // Strategy allocation (NET_MINT / NET_REDEEM)
+  // Override via .env: AAVE_DEPOSIT_PCT=100, BORROW_LTV_PCT=70, SHORT_LEVERAGE=1.7
+  strategy: {
+    /** % of net mint sent to Aave (100 = 100%) */
+    aaveDepositPct: parseInt(process.env.AAVE_DEPOSIT_PCT || '100', 10),
+    /** % of deposit value borrowed as USDC and sent to Hyperliquid (70 = 70% LTV) */
+    borrowLtvPct: parseInt(process.env.BORROW_LTV_PCT || '70', 10),
+    /** Short notional as multiple of net mint (1.7 = 1.7x) */
+    shortLeverage: parseFloat(process.env.SHORT_LEVERAGE || '1.7'),
+  },
 };

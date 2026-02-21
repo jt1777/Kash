@@ -1,11 +1,15 @@
 'use client';
 
-import { useState } from 'react';
-import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadContract } from 'wagmi';
-import { CONTRACTS } from '@/lib/contracts/addresses';
+import { useState, useMemo } from 'react';
+import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadContract, useEstimateFeesPerGas } from 'wagmi';
+import { CONTRACTS, ARBITRUM_SEPOLIA_BLOCK_EXPLORER } from '@/lib/contracts/addresses';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 import { kashTokenABI } from '@/lib/contracts/kashTokenABI';
 import { parseEther, formatEther, zeroAddress } from 'viem';
+
+const MIN_MAX_FEE_GWEI = 30n;
+const GWEI = 10n ** 9n;
+const FEE_BUFFER_PERCENT = 120n;
 
 const TOKENS = [
   { symbol: 'ETH', address: zeroAddress },
@@ -17,6 +21,18 @@ export function RedeemForm() {
   const { address } = useAccount();
   const [selectedToken, setSelectedToken] = useState(TOKENS[0]);
   const [amount, setAmount] = useState('');
+
+  const { data: feesPerGas } = useEstimateFeesPerGas();
+  const gasOptions = useMemo(() => {
+    const raw = feesPerGas?.maxFeePerGas ?? MIN_MAX_FEE_GWEI * GWEI;
+    const withBuffer = (raw * FEE_BUFFER_PERCENT) / 100n;
+    const minFee = MIN_MAX_FEE_GWEI * GWEI;
+    const maxFeePerGas = withBuffer > minFee ? withBuffer : minFee;
+    return {
+      maxFeePerGas,
+      maxPriorityFeePerGas: feesPerGas?.maxPriorityFeePerGas,
+    };
+  }, [feesPerGas?.maxFeePerGas, feesPerGas?.maxPriorityFeePerGas]);
 
   const { data: kashBalance } = useReadContract({
     address: CONTRACTS.kashToken,
@@ -43,12 +59,13 @@ export function RedeemForm() {
 
   const handleApprove = async () => {
     if (!parsedAmount) return;
-    
+
     approve({
       address: CONTRACTS.kashToken,
       abi: kashTokenABI,
       functionName: 'approve',
       args: [CONTRACTS.kashYield, parsedAmount],
+      ...gasOptions,
     });
   };
 
@@ -60,6 +77,7 @@ export function RedeemForm() {
       abi: kashYieldABI,
       functionName: 'requestRedeem',
       args: [parsedAmount, selectedToken.address as `0x${string}`],
+      ...gasOptions,
     });
   };
 
@@ -69,7 +87,8 @@ export function RedeemForm() {
     }
   };
 
-  if (isRedeemSuccess) {
+  if (isRedeemSuccess && amount && redeemHash) {
+    const txUrl = `${ARBITRUM_SEPOLIA_BLOCK_EXPLORER}/tx/${redeemHash}`;
     return (
       <div className="text-center py-8">
         <div className="w-16 h-16 bg-purple-100 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -81,10 +100,28 @@ export function RedeemForm() {
         <p className="text-sm text-gray-600 mb-4">
           Your request will be processed in the next batch cycle (23:50 UTC).
         </p>
+
+        <div className="rounded-xl p-4 mb-6 border border-gray-200 bg-purple-50 shadow-md text-left space-y-2">
+          <p className="text-sm font-medium text-gray-700">Request summary</p>
+          <p className="text-sm text-gray-600">
+            You requested to redeem <span className="font-semibold text-purple-600">{amount} KASH</span> for {selectedToken.symbol}
+          </p>
+          <p className="text-sm text-gray-600">
+            Transaction:{' '}
+            <a
+              href={txUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-purple-600 hover:text-purple-700 font-mono text-xs break-all transition-colors"
+            >
+              {redeemHash.slice(0, 10)}…{redeemHash.slice(-8)}
+            </a>
+            <span className="text-gray-500 ml-1">(opens block explorer)</span>
+          </p>
+        </div>
+
         <button
-          onClick={() => {
-            setAmount('');
-          }}
+          onClick={() => setAmount('')}
           className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
         >
           Make Another Request

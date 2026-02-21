@@ -37,3 +37,15 @@ export interface TokenPrice {
   price: bigint; // 18 decimals
   decimals: number;
 }
+
+/** Daily fees/earnings: Aave supply interest, Aave borrow cost, Hyperliquid funding. Net = earned - cost + funding (funding can be negative). */
+export interface DailyYield {
+  /** Interest earned on Aave deposits (supply), USD 18 decimals */
+  aaveSupplyEarned: bigint;
+  /** Interest/cost paid on Aave borrows, USD 18 decimals */
+  aaveBorrowCost: bigint;
+  /** Funding rate from Hyperliquid short (positive = we receive, negative = we pay), USD 18 decimals */
+  hlFunding: bigint;
+  /** Net: aaveSupplyEarned - aaveBorrowCost + hlFunding */
+  netYield: bigint;
+}

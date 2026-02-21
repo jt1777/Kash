@@ -17,3 +17,4 @@ export const CONTRACTS = {
 } as const;
 
 export const ARBITRUM_SEPOLIA_CHAIN_ID = 421614;
+export const ARBITRUM_SEPOLIA_BLOCK_EXPLORER = 'https://sepolia.arbiscan.io';

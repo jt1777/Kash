@@ -183,6 +183,21 @@ contract MockAaveV3 {
         return borrowedAmounts[user];
     }
 
+    /// @notice Accrued supply yield in ETH (18 decimals). For bot: aaveSupplyEarned in USD = this * ethPriceInUsd / 1e18.
+    function getAccruedSupplyYieldEth(address user) external view returns (uint256) {
+        uint256 aToken = this.getATokenBalance(address(0), user);
+        uint256 principal = suppliedAmounts[user];
+        return aToken > principal ? aToken - principal : 0;
+    }
+
+    /// @notice Estimated borrow interest over one day (86400 seconds) in USD 18 decimals. Uses current debt and interestRatePerSecond.
+    function getEstimatedDailyBorrowInterestUsd(address user) external view returns (uint256) {
+        if (borrowedAmounts[user] == 0) return 0;
+        // interest (USDT 6 dec) = (borrowed * rate * 86400) / 1e18; USD 18 = interest * 1e12
+        uint256 interestUsdt6 = (borrowedAmounts[user] * interestRatePerSecond * 86400) / 10**18;
+        return interestUsdt6 * 10**12;
+    }
+
     // Get the user's ETH balance (supplied amount) for testing purposes
     function getUserEthBalance(address user) external view returns (uint256) {
         return suppliedAmounts[user];

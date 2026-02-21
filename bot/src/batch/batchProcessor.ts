@@ -2,6 +2,7 @@ import { ethers } from 'ethers';
 import { kashYieldABI } from '../contracts/kashYieldABI';
 import { config } from '../config';
 import { calculateNetPosition } from './calculateNetPosition';
+import { getDailyYield } from './dailyYield';
 
 // Token addresses from config (Arbitrum Sepolia)
 const TOKEN_ADDRESSES = {
@@ -88,6 +89,19 @@ export class BatchProcessor {
     console.log(`📊 Stored Net Position: ${ethers.formatEther(netPositionUSD)} USD`);
     console.log(`   Mints: ${ethers.formatEther(batchInfo.totalMintUSD)} USD`);
     console.log(`   Redeems: ${ethers.formatEther(batchInfo.totalRedeemUSD)} USD\n`);
+
+    // Daily yield: Aave supply earned, Aave borrow cost, HL funding → net (used to update NAV before redeems)
+    const dailyYield = await getDailyYield(this.provider, {
+      kashYield: this.kashYield,
+      aavePoolAddress: AAVE_POOL_ADDRESS,
+      aaveUserAddress: config.aaveUserAddress || config.kashYieldAddress,
+    });
+    console.log(`📈 Daily yield (net used for NAV before redeem):`);
+    console.log(`   Aave supply earned: ${ethers.formatEther(dailyYield.aaveSupplyEarned)} USD`);
+    console.log(`   Aave borrow cost:   ${ethers.formatEther(dailyYield.aaveBorrowCost)} USD`);
+    console.log(`   HL funding:        ${ethers.formatEther(dailyYield.hlFunding)} USD (positive = we receive)`);
+    console.log(`   Net yield:         ${ethers.formatEther(dailyYield.netYield)} USD\n`);
+    // To reflect this in redeems: compute newNAV = (portfolioValueUSD + netYield) / totalKashSupply and call updateNAV(newNAV) before processBatch.
 
     // Call processBatch
     try {
@@ -203,56 +217,51 @@ export class BatchProcessor {
 
   /**
    * Handle NET_MINT - Deploy capital to earn yield
-   * 
-   * Strategy:
-   * 1. Take net ETH amount X to be minted
-   * 2. Send wETH to Aave
-   * 3. Borrow 70% of X total worth of minted ETH as USDC
-   * 4. Send USDC to Hyperliquid to be used as collateral for a 1.7X short of wETH to earn funding
-   * 5. Same for wBTC
-   * 
+   *
+   * Strategy (net mints vs redemptions):
+   * 1. Send the actual net-deposited asset to Aave (ETH→wETH, wETH, or wBTC). No conversion to USDC.
+   * 2. Borrow 70% of that deposit’s USD value as USDC and send to Hyperliquid as collateral.
+   * 3. Open a 1.7x short on Hyperliquid in the same asset (ETH or wBTC) as was minted.
+   *
    * @param amount Net mint amount in USD (18 decimals)
-   * @param asset Asset address (ETH, wETH, or wBTC)
+   * @param asset Asset address (ETH=0x0, wETH, or wBTC) – contract may emit 0x0; we treat as ETH/wETH
    */
   private async handleNetMint(amount: bigint, asset: string): Promise<void> {
     console.log('💰 Handling NET_MINT - Deploying capital...');
-    console.log(`   Amount: ${ethers.formatEther(amount)} USD\n`);
+    console.log(`   Net amount: ${ethers.formatEther(amount)} USD\n`);
 
     try {
-      // Determine which asset we're working with
       const assetSymbol = await this.getAssetSymbol(asset);
       console.log(`   Asset: ${assetSymbol}`);
 
-      // Step 1: Deposit to Aave (40% of capital)
-      const depositAmount = (amount * 40n) / 100n; // 40%
-      console.log(`   Step 1: Deposit ${ethers.formatEther(depositAmount)} USD to Aave (40%)`);
-      
-      // For ETH deposits, use WETH address
+      // Step 1: Deposit configured % of net to Aave (default 100%) in same asset. No conversion to USDC.
+      const pct = BigInt(config.strategy.aaveDepositPct);
+      const depositAmountUSD = (amount * pct) / 100n;
       const depositAsset = (asset === ethers.ZeroAddress) ? TOKEN_ADDRESSES.WETH : asset;
-      await this.depositToAave(depositAsset, depositAmount);
+      const depositTokenAmount = await this.usdToTokenAmount(depositAsset, depositAmountUSD);
+      console.log(`   Step 1: Deposit ${config.strategy.aaveDepositPct}% (${ethers.formatEther(depositAmountUSD)} USD) of ${assetSymbol} to Aave`);
+      await this.depositToAave(depositAsset, depositTokenAmount);
 
-      // Step 2: Borrow USDC (70% LTV of deposited amount)
-      const borrowAmount = (depositAmount * 70n) / 100n;
-      console.log(`   Step 2: Borrow ${ethers.formatEther(borrowAmount)} USDC (70% LTV)`);
-      await this.borrowFromAave(TOKEN_ADDRESSES.USDC, borrowAmount);
+      // Step 2: Borrow 70% of deposit’s USD value as USDC, send to Hyperliquid as collateral
+      const ltv = BigInt(config.strategy.borrowLtvPct);
+      const borrowAmountUSD = (depositAmountUSD * ltv) / 100n;
+      const borrowTokenAmount = await this.usdToTokenAmount(TOKEN_ADDRESSES.USDC, borrowAmountUSD);
+      console.log(`   Step 2: Borrow ${config.strategy.borrowLtvPct}% (${ethers.formatEther(borrowAmountUSD)} USD) as USDC, send to Hyperliquid`);
+      await this.borrowFromAave(TOKEN_ADDRESSES.USDC, borrowTokenAmount);
+      await this.depositToHyperliquid(borrowTokenAmount);
 
-      // Step 3: Send USDC to Hyperliquid
-      console.log(`   Step 3: Transfer USDC to Hyperliquid as collateral`);
-      await this.depositToHyperliquid(borrowAmount);
-
-      // Step 4: Open 1.7x ETH short on Hyperliquid
-      const shortAmount = (amount * 35n) / 100n; // 35% of total
-      console.log(`   Step 4: Open ${ethers.formatEther(shortAmount)} USD ETH short on Hyperliquid (35%)`);
-      await this.openShortOnHyperliquid(shortAmount);
+      // Step 3: Open short on Hyperliquid: notional = configured leverage × net mint (default 1.7x)
+      const leverageScaled = BigInt(Math.round(config.strategy.shortLeverage * 100));
+      const shortSizeUSD = (amount * leverageScaled) / 100n;
+      console.log(`   Step 3: Open ${config.strategy.shortLeverage}x short: ${ethers.formatEther(shortSizeUSD)} USD notional in ${assetSymbol}`);
+      await this.openShortOnHyperliquid(shortSizeUSD, asset);
 
       console.log('   ✅ NET_MINT capital deployment complete!\n');
 
-      // Log the target allocation
-      console.log('📊 Target Allocation:');
-      console.log(`   Aave Deposit: ${ethers.formatEther(depositAmount)} USD (40%)`);
-      console.log(`   Hyperliquid Short: ${ethers.formatEther(shortAmount)} USD (35%)`);
-      console.log(`   Stablecoin Reserve: ${ethers.formatEther((amount * 20n) / 100n)} USD (20%)`);
-      console.log(`   Operational Buffer: ${ethers.formatEther((amount * 5n) / 100n)} USD (5%)\n`);
+      console.log('📊 Summary:');
+      console.log(`   Aave: ${config.strategy.aaveDepositPct}% = ${ethers.formatEther(depositAmountUSD)} USD in ${assetSymbol}`);
+      console.log(`   Borrow ${config.strategy.borrowLtvPct}% → USDC to Hyperliquid`);
+      console.log(`   Short ${config.strategy.shortLeverage}x: ${ethers.formatEther(shortSizeUSD)} USD in ${assetSymbol}\n`);
 
     } catch (error: any) {
       console.error('❌ Failed to handle NET_MINT:', error.message);
@@ -262,50 +271,44 @@ export class BatchProcessor {
 
   /**
    * Handle NET_REDEEM - Withdraw capital to fulfill redemptions
-   * 
-   * Strategy (reverse of NET_MINT):
-   * 1. Close Hyperliquid short position
-   * 2. Withdraw USDC from Hyperliquid
-   * 3. Repay Aave borrow
-   * 4. Withdraw wETH from Aave
-   * 5. Payout original amount plus yield
-   * 6. Same for wBTC
-   * 
+   *
+   * Strategy (reverse of NET_MINT). Order matters:
+   * 1. Close Hyperliquid short in same asset (ETH or BTC).
+   * 2. Withdraw collateral (USDC) from Hyperliquid.
+   * 3. Repay Aave borrow with that USDC. Only after the borrow is repaid can we withdraw collateral from Aave.
+   * 4. Withdraw the original asset (wETH or wBTC) from Aave so the contract can redeem users.
+   *
    * @param amount Net redeem amount in USD (18 decimals)
-   * @param asset Asset address (ETH, wETH, or wBTC)
+   * @param asset Asset address (ETH=0x0, wETH, or wBTC)
    */
   private async handleNetRedeem(amount: bigint, asset: string): Promise<void> {
     console.log('💸 Handling NET_REDEEM - Withdrawing capital...');
-    console.log(`   Amount: ${ethers.formatEther(amount)} USD\n`);
+    console.log(`   Net amount: ${ethers.formatEther(amount)} USD\n`);
 
     try {
       const assetSymbol = await this.getAssetSymbol(asset);
       console.log(`   Asset: ${assetSymbol}`);
 
-      // Step 1: Close Hyperliquid short position (proportional to redeem amount)
-      const shortToClose = (amount * 35n) / 100n;
-      console.log(`   Step 1: Close ${ethers.formatEther(shortToClose)} USD ETH short on Hyperliquid`);
-      await this.closeShortOnHyperliquid(shortToClose);
+      // Step 1: Close Hyperliquid short in same asset (ETH or BTC)
+      console.log(`   Step 1: Close ${assetSymbol} short on Hyperliquid`);
+      await this.closeShortOnHyperliquid(asset);
 
-      // Step 2: Withdraw USDC from Hyperliquid
-      const usdcToWithdraw = (amount * 70n) / 100n;
-      console.log(`   Step 2: Withdraw ${ethers.formatEther(usdcToWithdraw)} USDC from Hyperliquid`);
-      await this.withdrawFromHyperliquid(usdcToWithdraw);
+      // Step 2: Withdraw collateral (USDC) from Hyperliquid (same % as borrow LTV)
+      const ltv = BigInt(config.strategy.borrowLtvPct);
+      const usdcToWithdrawUSD = (amount * ltv) / 100n;
+      const usdcWithdrawAmount = await this.usdToTokenAmount(TOKEN_ADDRESSES.USDC, usdcToWithdrawUSD);
+      console.log(`   Step 2: Withdraw collateral (USDC) from Hyperliquid: ${ethers.formatEther(usdcToWithdrawUSD)} USD (${usdcWithdrawAmount} USDC units)`);
+      await this.withdrawFromHyperliquid(usdcWithdrawAmount);
 
-      // Step 3: Repay Aave borrow
-      console.log(`   Step 3: Repay ${ethers.formatEther(usdcToWithdraw)} USDC to Aave`);
-      await this.repayToAave(TOKEN_ADDRESSES.USDC, usdcToWithdraw);
+      // Step 3: Repay Aave borrow with that USDC (must be done before withdrawing our collateral from Aave)
+      console.log(`   Step 3: Repay Aave borrow with USDC`);
+      await this.repayToAave(TOKEN_ADDRESSES.USDC, usdcWithdrawAmount);
 
-      // Step 4: Withdraw wETH from Aave
-      const wethToWithdraw = (amount * 40n) / 100n;
-      console.log(`   Step 4: Withdraw ${ethers.formatEther(wethToWithdraw)} USD worth of wETH from Aave`);
-      await this.withdrawFromAave(TOKEN_ADDRESSES.WETH, wethToWithdraw);
-
-      // Step 5: If needed, unwrap wETH to ETH for redemption
-      if (asset === ethers.ZeroAddress) {
-        console.log(`   Step 5: Unwrap wETH to ETH for redemption`);
-        // Note: Contract handles unwrapping internally if needed
-      }
+      // Step 4: Withdraw original asset from Aave (only after borrow is repaid)
+      const withdrawAsset = (asset === ethers.ZeroAddress) ? TOKEN_ADDRESSES.WETH : asset;
+      const withdrawTokenAmount = await this.usdToTokenAmount(withdrawAsset, amount);
+      console.log(`   Step 4: Withdraw ${ethers.formatEther(amount)} USD worth of ${assetSymbol} from Aave (redeem users)`);
+      await this.withdrawFromAave(withdrawAsset, withdrawTokenAmount);
 
       console.log('   ✅ NET_REDEEM capital withdrawal complete!\n');
 
@@ -319,7 +322,7 @@ export class BatchProcessor {
   }
 
   /**
-   * Get the symbol for an asset address
+   * Get the symbol for an asset address (for display)
    */
   private async getAssetSymbol(asset: string): Promise<string> {
     if (asset === ethers.ZeroAddress) return 'ETH';
@@ -330,15 +333,34 @@ export class BatchProcessor {
     return 'UNKNOWN';
   }
 
+  /**
+   * Map asset address to Hyperliquid perp symbol (same asset as deposit: ETH or BTC)
+   */
+  private getShortSymbol(asset: string): string {
+    if (asset === ethers.ZeroAddress) return 'ETH';
+    if (asset.toLowerCase() === TOKEN_ADDRESSES.WETH.toLowerCase()) return 'ETH';
+    if (asset.toLowerCase() === TOKEN_ADDRESSES.WBTC.toLowerCase()) return 'BTC';
+    return 'ETH'; // default when contract emits address(0)
+  }
+
+  /**
+   * Convert USD (18 decimals) to token amount using contract oracle
+   */
+  private async usdToTokenAmount(token: string, usdAmount: bigint): Promise<bigint> {
+    if (usdAmount === 0n) return 0n;
+    const tokenAmount = await this.kashYield.calculateTokenAmount(token, usdAmount);
+    return BigInt(tokenAmount.toString());
+  }
+
   // ============================================================================
-  // Protocol Interaction Functions (to be implemented when addresses are set)
+  // Protocol Interaction Functions (contract expects token amounts, not USD)
   // ============================================================================
 
   /**
-   * Deposit asset to Aave
+   * Deposit asset to Aave (amount in token units, e.g. wei for WETH)
    */
   private async depositToAave(asset: string, amount: bigint): Promise<void> {
-    console.log(`   → Calling depositToAave(${asset}, ${ethers.formatEther(amount)})`);
+    console.log(`   → Calling depositToAave(${asset}, ${ethers.formatEther(amount)} token units)`);
     const tx = await this.kashYield.depositToAave(asset, amount);
     await tx.wait();
     console.log(`   ✅ Deposited to Aave`);
@@ -348,27 +370,27 @@ export class BatchProcessor {
    * Withdraw asset from Aave
    */
   private async withdrawFromAave(asset: string, amount: bigint): Promise<void> {
-    console.log(`   → Calling withdrawFromAave(${asset}, ${ethers.formatEther(amount)})`);
+    console.log(`   → Calling withdrawFromAave(${asset}, ${amount} token units)`);
     const tx = await this.kashYield.withdrawFromAave(asset, amount);
     await tx.wait();
     console.log(`   ✅ Withdrawn from Aave`);
   }
 
   /**
-   * Borrow asset from Aave
+   * Borrow asset from Aave (amount in token units)
    */
   private async borrowFromAave(asset: string, amount: bigint): Promise<void> {
-    console.log(`   → Calling borrowFromAave(${asset}, ${ethers.formatEther(amount)})`);
+    console.log(`   → Calling borrowFromAave(${asset}, ${amount} token units)`);
     const tx = await this.kashYield.borrowFromAave(asset, amount);
     await tx.wait();
     console.log(`   ✅ Borrowed from Aave`);
   }
 
   /**
-   * Repay borrowed asset to Aave
+   * Repay borrowed asset to Aave (amount in token units)
    */
   private async repayToAave(asset: string, amount: bigint): Promise<void> {
-    console.log(`   → Calling repayToAave(${asset}, ${ethers.formatEther(amount)})`);
+    console.log(`   → Calling repayToAave(${asset}, ${amount} token units)`);
     const tx = await this.kashYield.repayToAave(asset, amount);
     await tx.wait();
     console.log(`   ✅ Repaid to Aave`);
@@ -376,7 +398,7 @@ export class BatchProcessor {
 
   /**
    * Deposit to Hyperliquid (via contract)
-   * Note: This requires hyperliquidAddress to be set on the contract
+   * Amount must be in USDC token units (6 decimals). Requires hyperliquidAddress to be set.
    */
   private async depositToHyperliquid(amount: bigint): Promise<void> {
     // Check if hyperliquidAddress is set
@@ -394,7 +416,7 @@ export class BatchProcessor {
     }
     
     try {
-      console.log(`   → Depositing ${ethers.formatEther(amount)} to Hyperliquid`);
+      console.log(`   → Depositing ${amount} USDC units to Hyperliquid`);
       const tx = await this.kashYield.depositToHyperliquid(amount);
       await tx.wait();
       console.log(`   ✅ Deposited to Hyperliquid`);
@@ -405,11 +427,11 @@ export class BatchProcessor {
   }
 
   /**
-   * Withdraw from Hyperliquid
+   * Withdraw from Hyperliquid (amount in USDC token units, 6 decimals)
    */
   private async withdrawFromHyperliquid(amount: bigint): Promise<void> {
     try {
-      console.log(`   → Withdrawing ${ethers.formatEther(amount)} from Hyperliquid`);
+      console.log(`   → Withdrawing ${amount} USDC units from Hyperliquid`);
       const tx = await this.kashYield.withdrawFromHyperliquid(amount);
       await tx.wait();
       console.log(`   ✅ Withdrawn from Hyperliquid`);
@@ -420,24 +442,26 @@ export class BatchProcessor {
   }
 
   /**
-   * Open short position on Hyperliquid
-   * Contract expects openShort(string symbol, uint256 size)
+   * Open short position on Hyperliquid in the same asset as the mint (ETH or BTC).
+   * Size = 1.7x net mint in USD; we convert to notional in asset units.
+   * Contract expects openShort(string symbol, uint256 size) with size in 18 decimals.
    */
-  private async openShortOnHyperliquid(amount: bigint): Promise<void> {
+  private async openShortOnHyperliquid(amountUSD: bigint, asset: string): Promise<void> {
     try {
-      console.log(`   → Opening ${ethers.formatEther(amount)} USD ETH short on Hyperliquid`);
-      
-      // Get current ETH price to calculate size in ETH terms
-      const ethPrice = await this.kashYield.getLatestPrice(TOKEN_ADDRESSES.WETH);
-      const ethPriceBigInt = BigInt(ethPrice.toString());
-      
-      // size = amount / price (both in 18 decimals)
-      // size in ETH = amountUSD / pricePerETH
-      const size = (amount * (10n ** 18n)) / ethPriceBigInt;
-      
-      const tx = await this.kashYield.openShort("ETH", size);
+      const symbol = this.getShortSymbol(asset);
+      const priceToken = symbol === 'BTC' ? TOKEN_ADDRESSES.WBTC : TOKEN_ADDRESSES.WETH;
+      const oneUnit = symbol === 'BTC' ? 10n ** 8n : 10n ** 18n; // WBTC 8 decimals, WETH 18
+
+      const priceUSD = await this.kashYield.getTokenUSD(priceToken, oneUnit);
+      const priceBigInt = BigInt(priceUSD.toString());
+      if (priceBigInt === 0n) throw new Error(`${symbol} price is zero`);
+
+      const size = (amountUSD * (10n ** 18n)) / priceBigInt; // size in 18 decimals for contract
+
+      console.log(`   → Opening ${ethers.formatEther(amountUSD)} USD (${ethers.formatEther(size)} ${symbol}) short on Hyperliquid`);
+      const tx = await this.kashYield.openShort(symbol, size);
       await tx.wait();
-      console.log(`   ✅ Opened ${ethers.formatEther(size)} ETH short on Hyperliquid`);
+      console.log(`   ✅ Opened 1.7x ${symbol} short on Hyperliquid`);
     } catch (error: any) {
       console.error(`   ❌ Failed to open short on Hyperliquid: ${error.message}`);
       throw error;
@@ -445,15 +469,15 @@ export class BatchProcessor {
   }
 
   /**
-   * Close short position on Hyperliquid
-   * Contract expects closeShort(string symbol)
+   * Close short position on Hyperliquid in the same asset (ETH or BTC).
    */
-  private async closeShortOnHyperliquid(amount: bigint): Promise<void> {
+  private async closeShortOnHyperliquid(asset: string): Promise<void> {
     try {
-      console.log(`   → Closing ETH short on Hyperliquid (amount: ${ethers.formatEther(amount)} USD)`);
-      const tx = await this.kashYield.closeShort("ETH");
+      const symbol = this.getShortSymbol(asset);
+      console.log(`   → Closing ${symbol} short on Hyperliquid`);
+      const tx = await this.kashYield.closeShort(symbol);
       await tx.wait();
-      console.log(`   ✅ Closed ETH short on Hyperliquid`);
+      console.log(`   ✅ Closed ${symbol} short on Hyperliquid`);
     } catch (error: any) {
       console.error(`   ❌ Failed to close short on Hyperliquid: ${error.message}`);
       throw error;

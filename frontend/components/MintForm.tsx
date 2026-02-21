@@ -1,11 +1,16 @@
 'use client';
 
-import { useState } from 'react';
-import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadContract } from 'wagmi';
-import { CONTRACTS } from '@/lib/contracts/addresses';
+import { useState, useMemo } from 'react';
+import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadContract, useEstimateFeesPerGas } from 'wagmi';
+import { CONTRACTS, ARBITRUM_SEPOLIA_BLOCK_EXPLORER } from '@/lib/contracts/addresses';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 import { kashTokenABI } from '@/lib/contracts/kashTokenABI';
 import { parseEther, parseUnits, zeroAddress } from 'viem';
+
+// Minimum and buffer so maxFeePerGas is always above block base fee (avoids "max fee per gas less than block base fee")
+const MIN_MAX_FEE_GWEI = 30n;
+const GWEI = 10n ** 9n;
+const FEE_BUFFER_PERCENT = 120n; // 20% buffer over estimated
 
 const TOKENS = [
   { symbol: 'ETH', address: zeroAddress, decimals: 18 },
@@ -17,6 +22,18 @@ export function MintForm() {
   const { address } = useAccount();
   const [selectedToken, setSelectedToken] = useState(TOKENS[0]);
   const [amount, setAmount] = useState('');
+
+  const { data: feesPerGas } = useEstimateFeesPerGas();
+  const gasOptions = useMemo(() => {
+    const raw = feesPerGas?.maxFeePerGas ?? MIN_MAX_FEE_GWEI * GWEI;
+    const withBuffer = (raw * FEE_BUFFER_PERCENT) / 100n;
+    const minFee = MIN_MAX_FEE_GWEI * GWEI;
+    const maxFeePerGas = withBuffer > minFee ? withBuffer : minFee;
+    return {
+      maxFeePerGas,
+      maxPriorityFeePerGas: feesPerGas?.maxPriorityFeePerGas,
+    };
+  }, [feesPerGas?.maxFeePerGas, feesPerGas?.maxPriorityFeePerGas]);
 
   const { data: allowance } = useReadContract({
     address: selectedToken.address as `0x${string}`,
@@ -51,12 +68,13 @@ export function MintForm() {
 
   const handleApprove = async () => {
     if (!parsedAmount) return;
-    
+
     approve({
       address: selectedToken.address as `0x${string}`,
       abi: kashTokenABI,
       functionName: 'approve',
       args: [CONTRACTS.kashYield, parsedAmount],
+      ...gasOptions,
     });
   };
 
@@ -71,6 +89,7 @@ export function MintForm() {
           functionName: 'requestMint',
           args: [zeroAddress, BigInt(0)],
           value: parsedAmount,
+          ...gasOptions,
         });
       } else {
         mint({
@@ -78,6 +97,7 @@ export function MintForm() {
           abi: kashYieldABI,
           functionName: 'requestMint',
           args: [selectedToken.address as `0x${string}`, parsedAmount],
+          ...gasOptions,
         });
       }
     } catch (error) {
@@ -85,7 +105,8 @@ export function MintForm() {
     }
   };
 
-  if (isMintSuccess) {
+  if (isMintSuccess && amount && mintHash) {
+    const txUrl = `${ARBITRUM_SEPOLIA_BLOCK_EXPLORER}/tx/${mintHash}`;
     return (
       <div className="text-center py-8">
         <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -97,10 +118,28 @@ export function MintForm() {
         <p className="text-sm text-gray-600 mb-4">
           Your request will be processed in the next batch cycle (23:50 UTC).
         </p>
+
+        <div className="rounded-xl p-4 mb-6 border border-gray-200 bg-indigo-50 shadow-md text-left space-y-2">
+          <p className="text-sm font-medium text-gray-700">Deposit summary</p>
+          <p className="text-sm text-gray-600">
+            You deposited <span className="font-semibold text-indigo-600">{amount} {selectedToken.symbol}</span>
+          </p>
+          <p className="text-sm text-gray-600">
+            Transaction:{' '}
+            <a
+              href={txUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-indigo-600 hover:text-indigo-700 font-mono text-xs break-all transition-colors"
+            >
+              {mintHash.slice(0, 10)}…{mintHash.slice(-8)}
+            </a>
+            <span className="text-gray-500 ml-1">(opens block explorer)</span>
+          </p>
+        </div>
+
         <button
-          onClick={() => {
-            setAmount('');
-          }}
+          onClick={() => setAmount('')}
           className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
         >
           Make Another Request
@@ -173,12 +212,7 @@ export function MintForm() {
           </p>
           {mintError?.cause !== undefined && mintError.cause !== null && (
             <p className="text-xs text-red-500 mt-1">
-              {(() => {
-                const cause = mintError.cause;
-                if (cause instanceof Error) return cause.message;
-                if (typeof cause === 'string') return cause;
-                return 'Unknown error';
-              })()}
+              {renderErrorCause(mintError)}
             </p>
           )}
         </div>

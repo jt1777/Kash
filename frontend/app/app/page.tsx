@@ -3,11 +3,98 @@
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { MintForm } from '@/components/MintForm';
 import { RedeemForm } from '@/components/RedeemForm';
+import { RecentActivity } from '@/components/RecentActivity';
 import { StatsCard } from '@/components/StatsCard';
 import { StatusIndicator } from '@/components/StatusIndicator';
 import { ClientOnly } from '@/components/ClientOnly';
 import { useAccount } from 'wagmi';
 import Link from 'next/link';
+
+function CustomWalletButton() {
+  return (
+    <ConnectButton.Custom>
+      {({
+        account,
+        chain,
+        openAccountModal,
+        openChainModal,
+        openConnectModal,
+        authenticationStatus,
+        mounted,
+      }) => {
+        const ready = mounted && authenticationStatus !== 'loading';
+        const connected =
+          ready &&
+          account &&
+          chain &&
+          (!authenticationStatus || authenticationStatus === 'authenticated');
+
+        if (!ready) {
+          return (
+            <div aria-hidden style={{ opacity: 0, pointerEvents: 'none', userSelect: 'none' }}>
+              <div className="h-10 w-32 rounded-full bg-white/10" />
+            </div>
+          );
+        }
+        if (!connected) {
+          return (
+            <button
+              onClick={openConnectModal}
+              type="button"
+              className="rounded-full px-4 py-2 text-sm font-medium bg-indigo-600 hover:bg-indigo-700 text-white transition"
+            >
+              Connect Wallet
+            </button>
+          );
+        }
+        if (chain.unsupported) {
+          return (
+            <button
+              onClick={() => openChainModal?.()}
+              type="button"
+              className="rounded-full px-4 py-2 text-sm font-medium bg-amber-500 hover:bg-amber-600 text-white"
+            >
+              Wrong network
+            </button>
+          );
+        }
+        return (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => openChainModal?.()}
+              type="button"
+              className="flex items-center gap-1.5 rounded-full px-3 py-2 text-sm font-medium text-gray-700 hover:text-gray-900 bg-white/10 hover:bg-white/15 border border-white/20 transition"
+            >
+              {chain.hasIcon && chain.iconUrl && (
+                <span
+                  className="flex h-5 w-5 rounded-full overflow-hidden shrink-0"
+                  style={{ background: chain.iconBackground }}
+                >
+                  <img src={chain.iconUrl} alt={chain.name ?? 'Chain'} className="h-5 w-5" />
+                </span>
+              )}
+              <span className="text-white">{chain.name ?? 'Unknown'}</span>
+            </button>
+            <button
+              onClick={openAccountModal}
+              type="button"
+              className="flex items-center gap-2 rounded-full pl-1 pr-3 py-1.5 text-sm font-medium text-gray-700 hover:text-gray-900 bg-white/10 hover:bg-white/15 border border-white/20 transition"
+            >
+              {account.ensAvatar ? (
+                <img src={account.ensAvatar} alt="" className="h-6 w-6 rounded-full" />
+              ) : (
+                <div className="h-6 w-6 rounded-full bg-indigo-500 flex items-center justify-center text-white text-xs font-bold">
+                  {account.address.slice(-2).toUpperCase()}
+                </div>
+              )}
+              <span className="text-white">{account.displayName}</span>
+            </button>
+          </div>
+        );
+      }}
+    </ConnectButton.Custom>
+  );
+}
 
 function AppContent() {
   const { isConnected } = useAccount();
@@ -117,7 +204,7 @@ function AppContent() {
               <Link href="/" className="nav-link">Home</Link>
               <Link href="#features" className="nav-link">Features</Link>
               <a href="https://github.com/jt1777/yieldproduct" className="nav-link" target="_blank" rel="noopener noreferrer">GitHub</a>
-              <ConnectButton />
+              <CustomWalletButton />
             </div>
           </div>
         </nav>
@@ -130,7 +217,7 @@ function AppContent() {
               </div>
               <div>
                 <h1 className="text-2xl font-bold app-title">KashYield</h1>
-                <p className="text-xs app-subtitle">Arbitrum Sepolia</p>
+                <p className="text-xs app-subtitle">Arbitrum Sepolia - change this</p>
               </div>
             </Link>
           </header>
@@ -141,37 +228,41 @@ function AppContent() {
           </div>
 
           {isConnected ? (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <div className="rounded-2xl p-6 border bg-white shadow-xl" style={{ borderColor: 'rgba(0, 255, 255, 0.2)' }}>
-                <div className="flex items-center space-x-2 mb-6">
-                  <div className="w-8 h-8 bg-green-100 rounded-lg flex items-center justify-center">
-                    <svg className="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                    </svg>
+            <>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="rounded-2xl p-6 border bg-white shadow-xl" style={{ borderColor: 'rgba(0, 255, 255, 0.2)' }}>
+                  <div className="flex items-center space-x-2 mb-6">
+                    <div className="w-8 h-8 bg-green-100 rounded-lg flex items-center justify-center">
+                      <svg className="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                      </svg>
+                    </div>
+                    <h2 className="text-2xl font-bold text-gray-900">Mint KASH</h2>
                   </div>
-                  <h2 className="text-2xl font-bold text-gray-900">Mint KASH</h2>
+                  <p className="text-gray-600 mb-6">
+                    Deposit your assets to receive KASH tokens at the daily NAV
+                  </p>
+                  <MintForm />
                 </div>
-                <p className="text-gray-600 mb-6">
-                  Deposit your assets to receive KASH tokens at the daily NAV
-                </p>
-                <MintForm />
+
+                <div className="rounded-2xl p-6 border bg-white shadow-xl" style={{ borderColor: 'rgba(0, 255, 255, 0.2)' }}>
+                  <div className="flex items-center space-x-2 mb-6">
+                    <div className="w-8 h-8 bg-purple-100 rounded-lg flex items-center justify-center">
+                      <svg className="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
+                      </svg>
+                    </div>
+                    <h2 className="text-2xl font-bold text-gray-900">Redeem Assets</h2>
+                  </div>
+                  <p className="text-gray-600 mb-6">
+                    Redeem your KASH tokens for your preferred asset
+                  </p>
+                  <RedeemForm />
+                </div>
               </div>
 
-              <div className="rounded-2xl p-6 border bg-white shadow-xl" style={{ borderColor: 'rgba(0, 255, 255, 0.2)' }}>
-                <div className="flex items-center space-x-2 mb-6">
-                  <div className="w-8 h-8 bg-purple-100 rounded-lg flex items-center justify-center">
-                    <svg className="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
-                    </svg>
-                  </div>
-                  <h2 className="text-2xl font-bold text-gray-900">Redeem Assets</h2>
-                </div>
-                <p className="text-gray-600 mb-6">
-                  Redeem your KASH tokens for your preferred asset
-                </p>
-                <RedeemForm />
-              </div>
-            </div>
+              <RecentActivity />
+            </>
           ) : (
             <div className="rounded-2xl p-12 text-center border bg-white shadow-xl" style={{ borderColor: 'rgba(0, 255, 255, 0.2)' }}>
               <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 bg-indigo-100">
@@ -184,7 +275,7 @@ function AppContent() {
                 Connect your wallet to start minting and redeeming KASH tokens
               </p>
               <div className="inline-block">
-                <ConnectButton />
+                <CustomWalletButton />
               </div>
             </div>
           )}

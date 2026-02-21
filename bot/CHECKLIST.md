@@ -85,15 +85,27 @@ Concrete tasks to get the bot production-ready for Arbitrum Sepolia (and keep it
 
 ---
 
-## 8. Quick validation before going live
+## 8. Daily yield and NAV before redeem (fees / funding)
+
+**Goal:** Track Aave supply interest (earned), Aave borrow cost, and Hyperliquid short funding (positive or negative); compute net and update NAV before processBatch so redeems reflect the net of these three.
+
+| # | File | What to do |
+|---|------|------------|
+| 8.1 | `src/types.ts` | Define `DailyYield`: `aaveSupplyEarned`, `aaveBorrowCost`, `hlFunding`, `netYield` (all USD 18 decimals). Net = earned − cost + funding. |
+| 8.2 | `src/batch/dailyYield.ts` | Add `getDailyYield(provider)` returning DailyYield. Implement: (1) Aave supply interest (e.g. aToken balance growth or reserve liquidityIndex), (2) Aave borrow cost (variableDebt growth or variableBorrowIndex), (3) HL funding from API or events. Stub with zeros until Aave/HL data sources are wired. |
+| 8.3 | `src/batch/batchProcessor.ts` | Before `processBatch()`, call `getDailyYield(provider)`, log the three components and net. Optionally: get portfolio value USD and total KASH supply, compute `newNAV = (portfolioValue + netYield) / totalSupply`, call `updateNAV(newNAV)` so redeems use this NAV. |
+
+---
+
+## 9. Quick validation before going live
 
 | # | What to do |
 |---|------------|
-| 8.1 | Set `PRIVATE_KEY` to the **contract owner** wallet (the deployer of KashYield). |
-| 8.2 | Set `KASH_YIELD_ADDRESS` to your deployed KashYield on Arbitrum Sepolia. |
-| 8.3 | Ensure KashYield has Aave pool set (`setAavePool.js`) and, if using HL, Hyperliquid set (`setHyperliquid.js` with MockHyperliquid address). |
-| 8.4 | Run `npm run build` and `npm start` once in the processing window and confirm: processBatch() is sent, receipt is received, and (after 4.1) NET_MINT/NET_REDEEM handlers run. |
-| 8.5 | If you enabled Aave/HL calls (section 3), do a dry run on testnet with small amounts and verify Aave/HL state changes. |
+| 9.1 | Set `PRIVATE_KEY` to the **contract owner** wallet (the deployer of KashYield). |
+| 9.2 | Set `KASH_YIELD_ADDRESS` to your deployed KashYield on Arbitrum Sepolia. |
+| 9.3 | Ensure KashYield has Aave pool set (`setAavePool.js`) and, if using HL, Hyperliquid set (`setHyperliquid.js` with MockHyperliquid address). |
+| 9.4 | Run `npm run build` and `npm start` once in the processing window and confirm: processBatch() is sent, receipt is received, and (after 4.1) NET_MINT/NET_REDEEM handlers run. |
+| 9.5 | If you enabled Aave/HL calls (section 3), do a dry run on testnet with small amounts and verify Aave/HL state changes. |
 
 ---
 
@@ -104,6 +116,7 @@ Concrete tasks to get the bot production-ready for Arbitrum Sepolia (and keep it
 3. **6** – Aave user address in config (if you ever use a separate vault).
 4. **5** – Optional better logging for pending net position.
 5. **7** – Documentation / Chainlink clarity.
-6. **8** – Final validation before production.
+6. **8** – Daily yield tracking and NAV update before redeem.
+7. **9** – Final validation before production.
 
 You can copy this into a tracking doc or tick items directly in this file.

@@ -208,6 +208,16 @@ export const kashYieldABI = [
     type: "function",
   },
   {
+    inputs: [
+      { name: "token", type: "address" },
+      { name: "usdValue", type: "uint256" },
+    ],
+    name: "calculateTokenAmount",
+    outputs: [{ name: "", type: "uint256" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
     inputs: [{ name: "token", type: "address" }],
     name: "tokenOracles",
     outputs: [{ name: "", type: "address" }],

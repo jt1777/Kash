@@ -30,9 +30,13 @@ contract MockHyperliquid {
         uint256 size;       // Position size in asset units (18 decimals)
         uint256 collateral; // Collateral in stablecoin units (6 decimals)
         uint256 entryPrice; // Entry price in USD (18 decimals)
+        uint256 openTimestamp; // When position was opened (for funding)
         bool isLong;
         bool isActive;
     }
+
+    // Funding rate per day in basis points. Positive = shorts receive funding. E.g. 10 = 0.1% per day.
+    int256 public fundingRatePerDayBps = 10;
 
     event SpotDeposited(address indexed user, address token, uint256 amount);
     event SpotWithdrawn(address indexed user, address token, uint256 amount);
@@ -159,6 +163,7 @@ contract MockHyperliquid {
             size: size,
             collateral: collateralStable,
             entryPrice: price,
+            openTimestamp: block.timestamp,
             isLong: isLong,
             isActive: true
         });
@@ -223,6 +228,26 @@ contract MockHyperliquid {
         uint256 assetId = symHash == keccak256("ETH") ? 0 : 1;
         Position storage pos = perpPositions[user][assetId];
         return (pos.size, pos.collateral, pos.entryPrice, pos.isLong, pos.isActive);
+    }
+
+    /// @notice Accrued funding in USD (18 decimals). Positive = we receive. For shorts: positive fundingRatePerDayBps => we receive.
+    function getAccruedFundingUsd(address user, string calldata symbol) external view returns (int256) {
+        bytes32 symHash = keccak256(bytes(symbol));
+        if (symHash != keccak256("ETH") && symHash != keccak256("BTC")) return 0;
+        uint256 assetId = symHash == keccak256("ETH") ? 0 : 1;
+        Position storage pos = perpPositions[user][assetId];
+        if (!pos.isActive || pos.openTimestamp == 0) return 0;
+        uint256 positionSizeUsd = (pos.size * pos.entryPrice) / 10**18;
+        uint256 daysElapsed = (block.timestamp - pos.openTimestamp) / 86400;
+        if (daysElapsed == 0) return 0;
+        // Shorts: positive rate => we receive (positive return). Longs: negative rate => we pay.
+        int256 rate = pos.isLong ? -fundingRatePerDayBps : fundingRatePerDayBps;
+        int256 fundingUsd = (int256(positionSizeUsd) * rate * int256(daysElapsed)) / 10000;
+        return fundingUsd;
+    }
+
+    function setFundingRatePerDayBps(int256 _bps) external {
+        fundingRatePerDayBps = _bps;
     }
 
     /// @notice No-op for mock (no order book). Real HL uses API for cancel.
