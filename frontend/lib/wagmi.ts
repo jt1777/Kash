@@ -1,5 +1,5 @@
 import { getDefaultConfig } from '@rainbow-me/rainbowkit';
-import { arbitrumSepolia, arbitrum } from 'wagmi/chains';
+import { arbitrumSepolia, arbitrum, mainnet } from 'wagmi/chains';
 import type { Config } from 'wagmi';
 
 // localStorage shim for SSR
@@ -22,7 +22,7 @@ export function getConfig(): Config {
     config = getDefaultConfig({
       appName: 'KashYield',
       projectId: process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || 'YOUR_PROJECT_ID',
-      chains: [arbitrumSepolia, arbitrum],
+      chains: [arbitrumSepolia, arbitrum, mainnet],
       ssr: false,
     });
   }

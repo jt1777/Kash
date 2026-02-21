@@ -1,6 +1,9 @@
 'use client';
 
 import { ConnectButton } from '@rainbow-me/rainbowkit';
+import { useEnsAvatar, useEnsName } from 'wagmi';
+import { normalize } from 'viem/ens';
+import { mainnet } from 'wagmi/chains';
 import { MintForm } from '@/components/MintForm';
 import { RedeemForm } from '@/components/RedeemForm';
 import { RecentActivity } from '@/components/RecentActivity';
@@ -9,6 +12,47 @@ import { StatusIndicator } from '@/components/StatusIndicator';
 import { ClientOnly } from '@/components/ClientOnly';
 import { useAccount } from 'wagmi';
 import Link from 'next/link';
+
+function WalletAvatar({ address, fallbackUrl, size = 24 }: { address: `0x${string}`; fallbackUrl?: string; size?: number }) {
+  const { data: ensName } = useEnsName({ address, chainId: mainnet.id });
+  const { data: ensAvatar } = useEnsAvatar({
+    name: ensName ? normalize(ensName) : undefined,
+    chainId: mainnet.id,
+    query: { enabled: !!ensName },
+  });
+  const avatarUrl = ensAvatar ?? fallbackUrl;
+  if (avatarUrl) {
+    return (
+      <img
+        src={avatarUrl}
+        alt=""
+        className="rounded-full shrink-0"
+        width={size}
+        height={size}
+        style={{ width: size, height: size }}
+      />
+    );
+  }
+  const hue = parseInt(address.slice(2, 8), 16) % 360;
+  return (
+    <div
+      className="rounded-full shrink-0 flex items-center justify-center"
+      style={{
+        width: size,
+        height: size,
+        background: `linear-gradient(135deg, hsl(${hue}, 65%, 55%), hsl(${hue}, 55%, 40%))`,
+        color: 'white',
+      }}
+      title={address}
+    >
+      <svg width={size * 0.55} height={size * 0.55} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M21 12V7H5a2 2 0 0 1 0-4h14v4" />
+        <path d="M3 5v14a2 2 0 0 0 2 2h16v-5" />
+        <path d="M18 12a2 2 0 0 0 0 4h4v-4h-4z" />
+      </svg>
+    </div>
+  );
+}
 
 function CustomWalletButton() {
   return (
@@ -80,13 +124,7 @@ function CustomWalletButton() {
               type="button"
               className="flex items-center gap-2 rounded-full pl-1 pr-3 py-1.5 text-sm font-medium text-gray-700 hover:text-gray-900 bg-white/10 hover:bg-white/15 border border-white/20 transition"
             >
-              {account.ensAvatar ? (
-                <img src={account.ensAvatar} alt="" className="h-6 w-6 rounded-full" />
-              ) : (
-                <div className="h-6 w-6 rounded-full bg-indigo-500 flex items-center justify-center text-white text-xs font-bold">
-                  {account.address.slice(-2).toUpperCase()}
-                </div>
-              )}
+              <WalletAvatar address={account.address as `0x${string}`} fallbackUrl={account.ensAvatar} size={24} />
               <span className="text-white">{account.displayName}</span>
             </button>
           </div>
@@ -216,8 +254,8 @@ function AppContent() {
                 <span className="font-bold text-xl app-title">K</span>
               </div>
               <div>
-                <h1 className="text-2xl font-bold app-title">KashYield</h1>
-                <p className="text-xs app-subtitle">Arbitrum Sepolia - change this</p>
+                <h1 className="text-2xl font-bold app-title">Kash - Enhanced Yield Product</h1>
+                <p className="text-xs app-subtitle">Indicative Yields: wBTC 13%/wETH 10%</p>
               </div>
             </Link>
           </header>
@@ -240,7 +278,7 @@ function AppContent() {
                     <h2 className="text-2xl font-bold text-gray-900">Mint KASH</h2>
                   </div>
                   <p className="text-gray-600 mb-6">
-                    Deposit your assets to receive KASH tokens at the daily NAV
+                    Deposit selected asset to receive KASH tokens
                   </p>
                   <MintForm />
                 </div>
@@ -255,7 +293,7 @@ function AppContent() {
                     <h2 className="text-2xl font-bold text-gray-900">Redeem Assets</h2>
                   </div>
                   <p className="text-gray-600 mb-6">
-                    Redeem your KASH tokens for your preferred asset
+                    Redeem KASH tokens for your deposited asset
                   </p>
                   <RedeemForm />
                 </div>
@@ -281,6 +319,18 @@ function AppContent() {
           )}
 
           <div id="features" className="mt-12 grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="rounded-xl p-6 border bg-white" style={{ borderColor: 'rgba(0, 255, 255, 0.2)' }}>
+              <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center mb-4">
+                <svg className="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+              </div>
+              <h3 className="font-semibold text-gray-900 mb-2">Enhanced Yield</h3>
+              <p className="text-sm text-gray-600">
+                Innovative process provides additional yield on top of normal funding rates.
+              </p>
+            </div>          
+            
             <div className="rounded-xl p-6 border bg-white" style={{ borderColor: 'rgba(0, 255, 255, 0.2)' }}>
               <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center mb-4">
                 <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -303,19 +353,7 @@ function AppContent() {
               <p className="text-sm text-gray-600">
                 Only 0.03% (3 bps) fee on all transactions. No hidden costs.
               </p>
-            </div>
-
-            <div className="rounded-xl p-6 border bg-white" style={{ borderColor: 'rgba(0, 255, 255, 0.2)' }}>
-              <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center mb-4">
-                <svg className="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                </svg>
-              </div>
-              <h3 className="font-semibold text-gray-900 mb-2">Multi-Asset Support</h3>
-              <p className="text-sm text-gray-600">
-                Deposit and withdraw in ETH, wETH, or wBTC.
-              </p>
-            </div>
+            </div>            
           </div>
         </main>
 
@@ -323,10 +361,10 @@ function AppContent() {
           <div className="container">
             <div className="flex flex-col md:flex-row justify-between items-center space-y-4 md:space-y-0">
               <div className="text-sm app-subtitle">
-                © 2025 KashYield. All rights reserved.
+                © 2026 KashYield. All rights reserved.
               </div>
               <div className="flex space-x-6">
-                <a href="https://sepolia.arbiscan.io/address/0xc4aF7357c36DE37da8183ACeebe8519d4cd1e310"
+                <a href="https://sepolia.arbiscan.io/address/0x4C3910E93aB0c5983c6DEE003749485E525E5Db7"
                    target="_blank"
                    rel="noopener noreferrer"
                    className="text-sm app-subtitle hover:text-[#00FFFF] transition-colors">
