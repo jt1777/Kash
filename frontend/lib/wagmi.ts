@@ -20,7 +20,7 @@ let config: Config | null = null;
 export function getConfig(): Config {
   if (!config) {
     config = getDefaultConfig({
-      appName: 'KashYield',
+      appName: 'KashYieldETH',
       projectId: process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || 'YOUR_PROJECT_ID',
       chains: [arbitrumSepolia, arbitrum, mainnet],
       ssr: false,

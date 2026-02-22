@@ -12,15 +12,16 @@ const MIN_MAX_FEE_GWEI = 30n;
 const GWEI = 10n ** 9n;
 const FEE_BUFFER_PERCENT = 120n; // 20% buffer over estimated
 
-const TOKENS = [
+// ETH product only until KashYieldBTC is deployed; then add wBTC to this list.
+const MINT_TOKENS_ETH = [
   { symbol: 'ETH', address: zeroAddress, decimals: 18 },
   { symbol: 'wETH', address: CONTRACTS.tokens.weth, decimals: 18 },
-  { symbol: 'wBTC', address: CONTRACTS.tokens.wbtc, decimals: 8 },
 ];
+const TOKENS = MINT_TOKENS_ETH;
 
 export function MintForm() {
   const { address } = useAccount();
-  const [selectedToken, setSelectedToken] = useState(TOKENS[0]);
+  const [selectedToken, setSelectedToken] = useState(MINT_TOKENS_ETH[0]);
   const [amount, setAmount] = useState('');
 
   const { data: feesPerGas } = useEstimateFeesPerGas();
@@ -39,7 +40,7 @@ export function MintForm() {
     address: selectedToken.address as `0x${string}`,
     abi: kashTokenABI,
     functionName: 'allowance',
-    args: address && selectedToken.symbol !== 'ETH' ? [address, CONTRACTS.kashYield] : undefined,
+    args: address && selectedToken.symbol !== 'ETH' ? [address, CONTRACTS.kashYieldEth] : undefined,
   });
 
   const { writeContract: approve, data: approveHash, isPending: isApprovePending, error: approveError } = useWriteContract();
@@ -73,7 +74,7 @@ export function MintForm() {
       address: selectedToken.address as `0x${string}`,
       abi: kashTokenABI,
       functionName: 'approve',
-      args: [CONTRACTS.kashYield, parsedAmount],
+      args: [CONTRACTS.kashYieldEth, parsedAmount],
       ...gasOptions,
     });
   };
@@ -84,7 +85,7 @@ export function MintForm() {
     try {
       if (selectedToken.symbol === 'ETH') {
         mint({
-          address: CONTRACTS.kashYield,
+          address: CONTRACTS.kashYieldEth,
           abi: kashYieldABI,
           functionName: 'requestMint',
           args: [zeroAddress, BigInt(0)],
@@ -93,7 +94,7 @@ export function MintForm() {
         });
       } else {
         mint({
-          address: CONTRACTS.kashYield,
+          address: CONTRACTS.kashYieldEth,
           abi: kashYieldABI,
           functionName: 'requestMint',
           args: [selectedToken.address as `0x${string}`, parsedAmount],
@@ -152,9 +153,9 @@ export function MintForm() {
     <div className="space-y-4">
       {/* Token Selector */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-2">Select Token</label>
-        <div className="grid grid-cols-3 gap-2">
-          {TOKENS.map((token) => (
+        <label className="block text-sm font-medium text-gray-700 mb-2">Select Token (ETH product → KASH_ETH)</label>
+        <div className="grid grid-cols-2 gap-2">
+          {MINT_TOKENS_ETH.map((token) => (
             <button
               key={token.symbol}
               onClick={() => setSelectedToken(token)}
@@ -168,6 +169,7 @@ export function MintForm() {
             </button>
           ))}
         </div>
+        <p className="text-xs text-gray-500 mt-1.5">wBTC (KASH_BTC) coming soon when BTC product is deployed.</p>
       </div>
 
       {/* Amount Input */}

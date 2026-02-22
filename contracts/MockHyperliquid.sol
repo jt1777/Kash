@@ -22,6 +22,8 @@ contract MockHyperliquid {
 
     // Spot balances: total stablecoin balance per user (6 decimals, USDT/USDC combined)
     mapping(address => uint256) public spotBalances;
+    mapping(address => uint256) public ethBalance; // 18 decimals, from spot buy
+    mapping(address => uint256) public btcBalance;
 
     // Perp positions: user => assetId (0=ETH, 1=BTC) => Position
     mapping(address => mapping(uint256 => Position)) public perpPositions;
@@ -82,13 +84,9 @@ contract MockHyperliquid {
     // ========================
 
     /**
-     * @notice Trade spot using either USDC or USDT as quote
-     * @param tokenIn  Input: address(0)=ETH, wbtcAddress, usdcAddress, or usdtAddress
-     * @param tokenOut Output
-     * @param amountIn Amount of tokenIn
-     * @return amountOut Amount received
+     * @notice Trade spot. Payable when selling ETH (send value). Buy credits internal eth/btc balance.
      */
-    function tradeSpot(address tokenIn, address tokenOut, uint256 amountIn) external returns (uint256 amountOut) {
+    function tradeSpot(address tokenIn, address tokenOut, uint256 amountIn) external payable returns (uint256 amountOut) {
         require(amountIn > 0, "Amount must be > 0");
 
         bool isStableIn = (tokenIn == usdcAddress || tokenIn == usdtAddress);
@@ -101,39 +99,33 @@ contract MockHyperliquid {
         uint256 price = (tokenIn == address(0) || tokenOut == address(0)) ? ethPriceUsd : btcPriceUsd;
 
         if (isStableIn) {
-            // Buying ETH or wBTC with stablecoin
             require(spotBalances[msg.sender] >= amountIn, "Insufficient stable balance");
             spotBalances[msg.sender] -= amountIn;
-
             uint256 usdValue18 = amountIn * 10**12;
             amountOut = (usdValue18 * 10**18) / price;
-
             if (tokenOut == address(0)) {
-                payable(msg.sender).transfer(amountOut);
+                ethBalance[msg.sender] += amountOut;
+            } else {
+                btcBalance[msg.sender] += amountOut;
             }
-            // For wBTC: would transfer mock wBTC if implemented
         } else {
-            // Selling ETH or wBTC for stablecoin
+            if (tokenIn == address(0)) {
+                require(ethBalance[msg.sender] >= amountIn || msg.value >= amountIn, "Insufficient ETH");
+                if (ethBalance[msg.sender] >= amountIn) {
+                    ethBalance[msg.sender] -= amountIn;
+                } else {
+                    require(msg.value >= amountIn, "ETH amount must match");
+                    if (msg.value > amountIn) {
+                        payable(msg.sender).transfer(msg.value - amountIn);
+                    }
+                }
+            } else {
+                require(btcBalance[msg.sender] >= amountIn, "Insufficient BTC balance");
+                btcBalance[msg.sender] -= amountIn;
+            }
             uint256 usdValue18 = (amountIn * price) / 10**18;
             amountOut = usdValue18 / 10**12;
-
             spotBalances[msg.sender] += amountOut;
-
-            // Choose which stable to return (prefer USDC if available, else USDT)
-            address returnToken = (tokenOut == usdcAddress) ? usdcAddress : usdtAddress;
-            // In real impl, could let user choose — here fixed to tokenOut if specified
-
-            // If tokenOut is specific stable, use it; else default to USDC
-            if (tokenOut != usdcAddress && tokenOut != usdtAddress) {
-                returnToken = usdcAddress;
-            } else {
-                returnToken = tokenOut;
-            }
-
-            // Contract receives ETH when selling ETH
-            if (tokenIn == address(0)) {
-                // In tests: send ETH to contract before calling
-            }
         }
 
         emit SpotSwapped(msg.sender, tokenIn, tokenOut, amountIn, amountOut);
@@ -153,11 +145,25 @@ contract MockHyperliquid {
         require(!perpPositions[msg.sender][assetId].isActive, "Position active");
 
         uint256 price = assetId == 0 ? ethPriceUsd : btcPriceUsd;
-        uint256 collateralUsd18 = (size * price) / 10**18 / 10; // ~10x leverage
+        uint256 collateralUsd18 = (size * price) / 10**18 / 10;
         uint256 collateralStable = collateralUsd18 / 10**12;
+        uint256 collateralAsset = size / 10;
 
-        require(spotBalances[msg.sender] >= collateralStable, "Insufficient collateral");
-        spotBalances[msg.sender] -= collateralStable;
+        if (assetId == 0) {
+            if (ethBalance[msg.sender] >= collateralAsset) {
+                ethBalance[msg.sender] -= collateralAsset;
+            } else {
+                require(spotBalances[msg.sender] >= collateralStable, "Insufficient collateral");
+                spotBalances[msg.sender] -= collateralStable;
+            }
+        } else {
+            if (btcBalance[msg.sender] >= collateralAsset) {
+                btcBalance[msg.sender] -= collateralAsset;
+            } else {
+                require(spotBalances[msg.sender] >= collateralStable, "Insufficient collateral");
+                spotBalances[msg.sender] -= collateralStable;
+            }
+        }
 
         perpPositions[msg.sender][assetId] = Position({
             size: size,
@@ -189,10 +195,17 @@ contract MockHyperliquid {
         int256 finalCollateral = int256(pos.collateral) + pnlStable;
         require(finalCollateral >= 0, "Liquidated");
 
-        uint256 returnStable = uint256(finalCollateral);
-        spotBalances[msg.sender] += returnStable;
+        uint256 collateralAsset = pos.size / 10;
+        if (assetId == 0) {
+            ethBalance[msg.sender] += collateralAsset;
+        } else {
+            btcBalance[msg.sender] += collateralAsset;
+        }
+        if (pnlStable > 0) {
+            spotBalances[msg.sender] += uint256(pnlStable);
+        }
 
-        emit PerpPositionClosed(msg.sender, symbol, pnlStable, returnStable);
+        emit PerpPositionClosed(msg.sender, symbol, pnlStable, uint256(finalCollateral));
 
         pos.isActive = false;
     }
@@ -213,7 +226,7 @@ contract MockHyperliquid {
         return spotBalances[user];
     }
 
-    /// @notice Get perp position for a user and symbol (for KashYield / adapter interface).
+    /// @notice Get perp position for a user and symbol (for KashYieldETH / adapter interface).
     function getPosition(address user, string calldata symbol) external view returns (
         uint256 size,
         uint256 collateral,

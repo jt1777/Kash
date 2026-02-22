@@ -20,7 +20,7 @@ export function StatsCard() {
   const publicClient = usePublicClient();
 
   const { data: nav } = useReadContract({
-    address: CONTRACTS.kashYield,
+    address: CONTRACTS.kashYieldEth,
     abi: kashYieldABI,
     functionName: 'currentNAV',
   });
@@ -30,7 +30,7 @@ export function StatsCard() {
     queryFn: async () => {
       if (!publicClient || !address) return [];
       const logs = await publicClient.getContractEvents({
-        address: CONTRACTS.kashYield,
+        address: CONTRACTS.kashYieldEth,
         abi: kashYieldABI,
         eventName: 'MintRequested',
         args: { user: address as `0x${string}` },
@@ -41,7 +41,7 @@ export function StatsCard() {
   });
 
   const { data: kashBalance } = useReadContract({
-    address: CONTRACTS.kashToken,
+    address: CONTRACTS.kashTokenEth,
     abi: kashTokenABI,
     functionName: 'balanceOf',
     args: address ? [address] : undefined,

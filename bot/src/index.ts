@@ -4,7 +4,7 @@ import { BatchProcessor } from './batch/batchProcessor';
 import { validateConfig, verifyContract } from './utils/validateConfig';
 
 async function main() {
-  console.log('🚀 KashYield Bot - Starting...\n');
+  console.log('🚀 KashYieldETH Bot - Starting...\n');
 
   // Validate configuration
   try {

@@ -361,7 +361,7 @@ function AppContent() {
           <div className="container">
             <div className="flex flex-col md:flex-row justify-between items-center space-y-4 md:space-y-0">
               <div className="text-sm app-subtitle">
-                © 2026 KashYield. All rights reserved.
+                © 2026 KashYieldETH. All rights reserved.
               </div>
               <div className="flex space-x-6">
                 <a href="https://sepolia.arbiscan.io/address/0x4C3910E93aB0c5983c6DEE003749485E525E5Db7"

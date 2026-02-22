@@ -1,5 +1,5 @@
 // scripts/setHyperliquid.js
-// Sets the Hyperliquid adapter/bridge address on the deployed KashYield contract.
+// Sets the Hyperliquid adapter/bridge address on the deployed KashYieldETH contract.
 // Usage: npx hardhat run scripts/setHyperliquid.js --network arbitrumSepolia
 //
 // What to put for HYPERLIQUID_ADDRESS:
@@ -40,23 +40,23 @@ async function main() {
   }
 
   console.log("Network:", hre.network.name);
-  console.log("KashYield:", KASH_YIELD_ADDRESS);
+  console.log("KashYieldETH:", KASH_YIELD_ADDRESS);
   console.log("Hyperliquid address:", HYPERLIQUID_ADDRESS);
-  console.log("\nConnecting to KashYield...");
-  const KashYield = await hre.ethers.getContractAt("KashYield", KASH_YIELD_ADDRESS);
+  console.log("\nConnecting to KashYieldETH...");
+  const KashYieldETH = await hre.ethers.getContractAt("KashYieldETH", KASH_YIELD_ADDRESS);
 
-  const owner = await KashYield.owner();
+  const owner = await KashYieldETH.owner();
   const [signer] = await hre.ethers.getSigners();
   if (signer.address.toLowerCase() !== owner.toLowerCase()) {
     throw new Error(`Signer ${signer.address} is not the contract owner (${owner})`);
   }
-  console.log("Current Hyperliquid address:", await KashYield.hyperliquidAddress());
+  console.log("Current Hyperliquid address:", await KashYieldETH.hyperliquidAddress());
   console.log("Setting Hyperliquid address...");
-  const tx = await KashYield.setHyperliquid(HYPERLIQUID_ADDRESS);
+  const tx = await KashYieldETH.setHyperliquid(HYPERLIQUID_ADDRESS);
   console.log("Transaction sent:", tx.hash);
   await tx.wait();
   console.log("✅ Hyperliquid address updated!");
-  console.log("New Hyperliquid address:", await KashYield.hyperliquidAddress());
+  console.log("New Hyperliquid address:", await KashYieldETH.hyperliquidAddress());
 }
 
 main()

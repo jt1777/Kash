@@ -35,17 +35,17 @@ export function RedeemForm() {
   }, [feesPerGas?.maxFeePerGas, feesPerGas?.maxPriorityFeePerGas]);
 
   const { data: kashBalance } = useReadContract({
-    address: CONTRACTS.kashToken,
+    address: CONTRACTS.kashTokenEth,
     abi: kashTokenABI,
     functionName: 'balanceOf',
     args: address ? [address] : undefined,
   });
 
   const { data: allowance } = useReadContract({
-    address: CONTRACTS.kashToken,
+    address: CONTRACTS.kashTokenEth,
     abi: kashTokenABI,
     functionName: 'allowance',
-    args: address ? [address, CONTRACTS.kashYield] : undefined,
+    args: address ? [address, CONTRACTS.kashYieldEth] : undefined,
   });
 
   const { writeContract: approve, data: approveHash, isPending: isApprovePending } = useWriteContract();
@@ -61,10 +61,10 @@ export function RedeemForm() {
     if (!parsedAmount) return;
 
     approve({
-      address: CONTRACTS.kashToken,
+      address: CONTRACTS.kashTokenEth,
       abi: kashTokenABI,
       functionName: 'approve',
-      args: [CONTRACTS.kashYield, parsedAmount],
+      args: [CONTRACTS.kashYieldEth, parsedAmount],
       ...gasOptions,
     });
   };
@@ -73,7 +73,7 @@ export function RedeemForm() {
     if (!parsedAmount) return;
 
     redeem({
-      address: CONTRACTS.kashYield,
+      address: CONTRACTS.kashYieldEth,
       abi: kashYieldABI,
       functionName: 'requestRedeem',
       args: [parsedAmount, selectedToken.address as `0x${string}`],

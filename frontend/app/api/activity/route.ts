@@ -6,7 +6,7 @@ import { ARBITRUM_SEPOLIA_CHAIN_ID } from '@/lib/contracts/addresses';
 
 // Etherscan API V2 (required; V1 deprecated). Same key works for all chains.
 const ETHERSCAN_V2_API = 'https://api.etherscan.io/v2/api';
-const KASH_YIELD_LOWER = (CONTRACTS.kashYield as string).toLowerCase();
+const KASH_YIELD_LOWER = (CONTRACTS.kashYieldEth as string).toLowerCase();
 
 function getEtherscanApiKey(): string {
   let key =

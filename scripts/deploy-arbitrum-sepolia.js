@@ -1,5 +1,5 @@
 // scripts/deploy-arbitrum-sepolia.js
-// Deploys KashYield to Arbitrum Sepolia. Uses built-in Sepolia addresses (Aave, tokens, oracles).
+// Deploys KashYieldETH (ETH product) to Arbitrum Sepolia. Uses built-in Sepolia addresses (Aave, tokens, oracles).
 // No mocks; intended for testnet with real protocols.
 //
 // Prerequisites:
@@ -30,26 +30,24 @@ async function main() {
   }
 
   // ============================================
-  // 1. Deploy KashYield (no constructor args)
+  // 1. Deploy KashYieldETH (no constructor args)
   // ============================================
-  // Contract already has Arbitrum Sepolia addresses for:
-  //   aavePoolAddress, weth, wbtc, usdt, usdc, token oracles
-  console.log("Deploying KashYield...");
-  const KashYield = await hre.ethers.getContractFactory("KashYield");
-  const kashYield = await KashYield.deploy();
-  await kashYield.waitForDeployment();
+  console.log("Deploying KashYieldETH...");
+  const KashYieldETH = await hre.ethers.getContractFactory("KashYieldETH");
+  const kashYieldEth = await KashYieldETH.deploy();
+  await kashYieldEth.waitForDeployment();
 
-  const kashYieldAddress = await kashYield.getAddress();
-  const kashTokenAddress = await kashYield.kashToken();
-  console.log("✅ KashYield:", kashYieldAddress);
-  console.log("✅ KashToken:", kashTokenAddress);
+  const kashYieldEthAddress = await kashYieldEth.getAddress();
+  const kashTokenEthAddress = await kashYieldEth.kashTokenEth();
+  console.log("✅ KashYieldETH:", kashYieldEthAddress);
+  console.log("✅ KashTokenEth:", kashTokenEthAddress);
 
   // ============================================
   // 2. Optional: set Hyperliquid adapter
   // ============================================
   const hyperliquidAddress = process.env.HYPERLIQUID_ADDRESS || "";
   if (hyperliquidAddress && hre.ethers.isAddress(hyperliquidAddress)) {
-    const tx = await kashYield.setHyperliquid(hyperliquidAddress);
+    const tx = await kashYieldEth.setHyperliquid(hyperliquidAddress);
     await tx.wait();
     console.log("✅ Hyperliquid address set:", hyperliquidAddress);
   } else if (hyperliquidAddress) {
@@ -62,9 +60,9 @@ async function main() {
   const fundAmount = process.env.FUND_KASHYIELD_ETH || "0";
   if (fundAmount !== "0") {
     const wei = hre.ethers.parseEther(fundAmount);
-    const tx = await deployer.sendTransaction({ to: kashYieldAddress, value: wei });
+    const tx = await deployer.sendTransaction({ to: kashYieldEthAddress, value: wei });
     await tx.wait();
-    console.log("✅ Funded KashYield with", fundAmount, "ETH");
+    console.log("✅ Funded KashYieldETH with", fundAmount, "ETH");
   }
 
   // ============================================
@@ -73,12 +71,12 @@ async function main() {
   console.log("\n====================================");
   console.log("📋 ARBITRUM SEPOLIA DEPLOYMENT");
   console.log("====================================");
-  console.log("  KashYield:", kashYieldAddress);
-  console.log("  KashToken:", kashTokenAddress);
-  console.log("  Aave pool (built-in):", await kashYield.aavePoolAddress());
-  console.log("  Initial NAV:", hre.ethers.formatEther(await kashYield.currentNAV()), "USD");
-  console.log("  Fee (bps):", await kashYield.feeBps());
-  console.log("  Paused:", await kashYield.paused());
+  console.log("  KashYieldETH:", kashYieldEthAddress);
+  console.log("  KashTokenEth:", kashTokenEthAddress);
+  console.log("  Aave pool (built-in):", await kashYieldEth.aavePoolAddress());
+  console.log("  Initial NAV:", hre.ethers.formatEther(await kashYieldEth.currentNAV()), "USD");
+  console.log("  Fee (bps):", await kashYieldEth.feeBps());
+  console.log("  Paused:", await kashYieldEth.paused());
   console.log("====================================\n");
 
   // ============================================
@@ -95,15 +93,15 @@ async function main() {
     timestamp: new Date().toISOString(),
     deployer: deployer.address,
     contracts: {
-      kashYield: kashYieldAddress,
-      kashToken: kashTokenAddress,
+      kashYieldEth: kashYieldEthAddress,
+      kashTokenEth: kashTokenEthAddress,
     },
     builtInAddresses: {
-      aavePool: await kashYield.aavePoolAddress(),
-      weth: await kashYield.wethAddress(),
-      wbtc: await kashYield.wbtcAddress(),
-      usdt: await kashYield.usdtAddress(),
-      usdc: await kashYield.usdcAddress(),
+      aavePool: await kashYieldEth.aavePoolAddress(),
+      weth: await kashYieldEth.wethAddress(),
+      wbtc: await kashYieldEth.wbtcAddress(),
+      usdt: await kashYieldEth.usdtAddress(),
+      usdc: await kashYieldEth.usdcAddress(),
     },
     ...(hyperliquidAddress && hre.ethers.isAddress(hyperliquidAddress)
       ? { hyperliquidAddress }
@@ -116,7 +114,7 @@ async function main() {
   console.log("💾 Saved:", filepath);
 
   console.log("\nVerify on Arbiscan (optional):");
-  console.log("  npx hardhat verify --network arbitrumSepolia", kashYieldAddress);
+  console.log("  npx hardhat verify --network arbitrumSepolia", kashYieldEthAddress);
   console.log("\n✅ Done.");
 }
 

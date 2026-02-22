@@ -20,19 +20,19 @@ export function StatusIndicator() {
     return () => clearInterval(t);
   }, []);
   const { data: isUserWindow } = useReadContract({
-    address: CONTRACTS.kashYield,
+    address: CONTRACTS.kashYieldEth,
     abi: kashYieldABI,
     functionName: 'isUserWindow',
   });
 
   const { data: isProcessingWindow } = useReadContract({
-    address: CONTRACTS.kashYield,
+    address: CONTRACTS.kashYieldEth,
     abi: kashYieldABI,
     functionName: 'isProcessingWindow',
   });
 
   const { data: isPaused } = useReadContract({
-    address: CONTRACTS.kashYield,
+    address: CONTRACTS.kashYieldEth,
     abi: kashYieldABI,
     functionName: 'paused',
   });

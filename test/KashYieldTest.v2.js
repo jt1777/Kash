@@ -48,8 +48,8 @@ async function moveToNextDayProcessingWindow() {
   await time.increase(timeUntilNextDay + PROCESSING_WINDOW_START + 60); // Next day 23:51
 }
 
-describe("KashYield - Final Version", function () {
-  let kashYield, kashToken;
+describe("KashYieldETH - Final Version", function () {
+  let kashYieldEth, kashTokenEth;
   let owner, user1, user2, bot;
   let mockAavePool, mockUsdc, mockUsdt, mockWeth, mockWbtc;
   let mockEthFeed, mockBtcFeed, mockUsdcFeed, mockUsdtFeed;
@@ -94,35 +94,33 @@ describe("KashYield - Final Version", function () {
     mockHyperliquid = await MockHyper.deploy(mockUsdc.target, mockUsdt.target, mockWbtc.target);
     await mockHyperliquid.waitForDeployment();
 
-    // Deploy KashYield (constructor has no args now)
-    const KashYield = await ethers.getContractFactory("KashYield");
-    kashYield = await KashYield.deploy();
-    await kashYield.waitForDeployment();
+    // Deploy KashYieldETH (constructor has no args)
+    const KashYieldETH = await ethers.getContractFactory("KashYieldETH");
+    kashYieldEth = await KashYieldETH.deploy();
+    await kashYieldEth.waitForDeployment();
 
-    const kashTokenAddr = await kashYield.kashToken();
-    kashToken = await ethers.getContractAt("Kash", kashTokenAddr);
+    const kashTokenEthAddr = await kashYieldEth.kashTokenEth();
+    kashTokenEth = await ethers.getContractAt("KashTokenEth", kashTokenEthAddr);
 
-    // Configure KashYield with mock addresses
-    await kashYield.setAavePool(mockAavePool.target);
-    await kashYield.setTokenAddresses(
+    // Configure KashYieldETH with mock addresses
+    await kashYieldEth.setAavePool(mockAavePool.target);
+    await kashYieldEth.setTokenAddresses(
       mockWeth.target,
       mockWbtc.target,
       mockUsdt.target,
       mockUsdc.target
     );
 
-    // Set oracles for all supported tokens
-    await kashYield.setOracle(ethers.ZeroAddress, mockEthFeed.target); // ETH
-    await kashYield.setOracle(mockWeth.target, mockEthFeed.target);
-    await kashYield.setOracle(mockWbtc.target, mockBtcFeed.target);
-    await kashYield.setOracle(mockUsdt.target, mockUsdtFeed.target);
-    await kashYield.setOracle(mockUsdc.target, mockUsdcFeed.target);
+    await kashYieldEth.setOracle(ethers.ZeroAddress, mockEthFeed.target);
+    await kashYieldEth.setOracle(mockWeth.target, mockEthFeed.target);
+    await kashYieldEth.setOracle(mockWbtc.target, mockBtcFeed.target);
+    await kashYieldEth.setOracle(mockUsdt.target, mockUsdtFeed.target);
+    await kashYieldEth.setOracle(mockUsdc.target, mockUsdcFeed.target);
 
-    // Set token decimals (all mock tokens use 6 decimals)
-    await kashYield.setTokenDecimals(mockWeth.target, 6);
-    await kashYield.setTokenDecimals(mockWbtc.target, 6);
-    await kashYield.setTokenDecimals(mockUsdt.target, 6);
-    await kashYield.setTokenDecimals(mockUsdc.target, 6);
+    await kashYieldEth.setTokenDecimals(mockWeth.target, 6);
+    await kashYieldEth.setTokenDecimals(mockWbtc.target, 6);
+    await kashYieldEth.setTokenDecimals(mockUsdt.target, 6);
+    await kashYieldEth.setTokenDecimals(mockUsdc.target, 6);
 
     // Mint tokens to users
     await mockUsdc.mint(user1.address, ethers.parseUnits("10000", 6));
@@ -132,15 +130,15 @@ describe("KashYield - Final Version", function () {
     // Pre-fund Aave mock with USDT for borrows (if testing borrow)
     await mockUsdt.mint(mockAavePool.target, ethers.parseUnits("50000", 6));
 
-    // Pre-fund KashYield contract with ETH for redemptions
+    // Pre-fund KashYieldETH contract with ETH for redemptions
     await owner.sendTransaction({ 
-      to: kashYield.target, 
+      to: kashYieldEth.target, 
       value: ethers.parseEther("100") 
     });
 
     return {
-      kashYield,
-      kashToken,
+      kashYieldEth,
+      kashTokenEth,
       mockAavePool,
       mockUsdc,
       mockUsdt,
@@ -162,19 +160,19 @@ describe("KashYield - Final Version", function () {
 
   describe("Deployment & Initial State", function () {
     it("Should set correct initial values", async function () {
-      expect(await kashYield.owner()).to.equal(owner.address);
-      expect(await kashYield.currentNAV()).to.equal(ethers.parseEther("1"));
-      expect(await kashYield.feeBps()).to.equal(3);
-      expect(await kashYield.paused()).to.be.false;
-      expect(await kashToken.totalSupply()).to.equal(0);
+      expect(await kashYieldEth.owner()).to.equal(owner.address);
+      expect(await kashYieldEth.currentNAV()).to.equal(ethers.parseEther("1"));
+      expect(await kashYieldEth.feeBps()).to.equal(3);
+      expect(await kashYieldEth.paused()).to.be.false;
+      expect(await kashTokenEth.totalSupply()).to.equal(0);
     });
 
     it("Should recognize supported tokens", async function () {
-      expect(await kashYield.isSupportedToken(ethers.ZeroAddress)).to.be.true; // ETH
-      expect(await kashYield.isSupportedToken(mockUsdc.target)).to.be.true;
-      expect(await kashYield.isSupportedToken(mockUsdt.target)).to.be.true;
-      expect(await kashYield.isSupportedToken(mockWeth.target)).to.be.true;
-      expect(await kashYield.isSupportedToken(mockWbtc.target)).to.be.true;
+      expect(await kashYieldEth.isSupportedToken(ethers.ZeroAddress)).to.be.true; // ETH
+      expect(await kashYieldEth.isSupportedToken(mockUsdc.target)).to.be.true;
+      expect(await kashYieldEth.isSupportedToken(mockUsdt.target)).to.be.true;
+      expect(await kashYieldEth.isSupportedToken(mockWeth.target)).to.be.true;
+      expect(await kashYieldEth.isSupportedToken(mockWbtc.target)).to.be.true;
     });
   });
 
@@ -182,15 +180,15 @@ describe("KashYield - Final Version", function () {
     it("Should allow requests in user window", async function () {
       await moveToUserWindow();
 
-      expect(await kashYield.isUserWindow()).to.be.true;
-      expect(await kashYield.isProcessingWindow()).to.be.false;
+      expect(await kashYieldEth.isUserWindow()).to.be.true;
+      expect(await kashYieldEth.isProcessingWindow()).to.be.false;
     });
 
     it("Should allow processBatch in processing window", async function () {
       await moveToProcessingWindow();
 
-      expect(await kashYield.isUserWindow()).to.be.false;
-      expect(await kashYield.isProcessingWindow()).to.be.true;
+      expect(await kashYieldEth.isUserWindow()).to.be.false;
+      expect(await kashYieldEth.isProcessingWindow()).to.be.true;
     });
   });
 
@@ -199,8 +197,8 @@ describe("KashYield - Final Version", function () {
       await moveToUserWindow();
 
       const amount = ethers.parseEther("2");
-      await expect(kashYield.connect(user1).requestMint(ethers.ZeroAddress, 0, { value: amount }))
-        .to.emit(kashYield, "MintRequested")
+      await expect(kashYieldEth.connect(user1).requestMint(ethers.ZeroAddress, 0, { value: amount }))
+        .to.emit(kashYieldEth, "MintRequested")
         .withArgs(user1.address, ethers.ZeroAddress, amount, anyValue);
     });
 
@@ -208,10 +206,10 @@ describe("KashYield - Final Version", function () {
       await moveToUserWindow();
 
       const amount = ethers.parseUnits("1000", 6);
-      await mockUsdc.connect(user1).approve(kashYield.target, amount);
+      await mockUsdc.connect(user1).approve(kashYieldEth.target, amount);
 
-      await expect(kashYield.connect(user1).requestMint(mockUsdc.target, amount))
-        .to.emit(kashYield, "MintRequested")
+      await expect(kashYieldEth.connect(user1).requestMint(mockUsdc.target, amount))
+        .to.emit(kashYieldEth, "MintRequested")
         .withArgs(user1.address, mockUsdc.target, amount, anyValue);
     });
 
@@ -219,7 +217,7 @@ describe("KashYield - Final Version", function () {
       await moveToProcessingWindow();
 
       await expect(
-        kashYield.connect(user1).requestMint(ethers.ZeroAddress, 0, { value: ethers.parseEther("1") })
+        kashYieldEth.connect(user1).requestMint(ethers.ZeroAddress, 0, { value: ethers.parseEther("1") })
       ).to.be.revertedWith("User window closed (23:50-23:59)");
     });
   });
@@ -227,15 +225,15 @@ describe("KashYield - Final Version", function () {
   describe("Redeem Requests", function () {
     it("Should accept redeem request", async function () {
       // First give user Kash via test helper
-      await kashYield.testMintKash(user1.address, ethers.parseEther("1000"));
+      await kashYieldEth.testMintKashEth(user1.address, ethers.parseEther("1000"));
 
       await moveToUserWindow();
 
       const amount = ethers.parseEther("400");
-      await kashToken.connect(user1).approve(kashYield.target, amount);
+      await kashTokenEth.connect(user1).approve(kashYieldEth.target, amount);
 
-      await expect(kashYield.connect(user1).requestRedeem(amount, ethers.ZeroAddress))
-        .to.emit(kashYield, "RedeemRequested")
+      await expect(kashYieldEth.connect(user1).requestRedeem(amount, ethers.ZeroAddress))
+        .to.emit(kashYieldEth, "RedeemRequested")
         .withArgs(user1.address, amount, ethers.ZeroAddress, anyValue);
     });
   });
@@ -245,43 +243,43 @@ describe("KashYield - Final Version", function () {
       // User1 deposits 2 ETH
       await moveToUserWindow();
 
-      await kashYield.connect(user1).requestMint(ethers.ZeroAddress, 0, { value: ethers.parseEther("2") });
+      await kashYieldEth.connect(user1).requestMint(ethers.ZeroAddress, 0, { value: ethers.parseEther("2") });
 
       // User2 deposits 1000 USDC
       const usdcAmount = ethers.parseUnits("1000", 6);
-      await mockUsdc.connect(user2).approve(kashYield.target, usdcAmount);
-      await kashYield.connect(user2).requestMint(mockUsdc.target, usdcAmount);
+      await mockUsdc.connect(user2).approve(kashYieldEth.target, usdcAmount);
+      await kashYieldEth.connect(user2).requestMint(mockUsdc.target, usdcAmount);
 
       // User1 redeems 500 Kash (simulate prior mint)
-      await kashYield.testMintKash(user1.address, ethers.parseEther("1000"));
-      await kashToken.connect(user1).approve(kashYield.target, ethers.parseEther("500"));
-      await kashYield.connect(user1).requestRedeem(ethers.parseEther("500"), ethers.ZeroAddress);
+      await kashYieldEth.testMintKashEth(user1.address, ethers.parseEther("1000"));
+      await kashTokenEth.connect(user1).approve(kashYieldEth.target, ethers.parseEther("500"));
+      await kashYieldEth.connect(user1).requestRedeem(ethers.parseEther("500"), ethers.ZeroAddress);
 
       // Move to processing window (next day)
       await moveToNextDayProcessingWindow();
 
-      const balanceBefore1 = await kashToken.balanceOf(user1.address);
-      const balanceBefore2 = await kashToken.balanceOf(user2.address);
+      const balanceBefore1 = await kashTokenEth.balanceOf(user1.address);
+      const balanceBefore2 = await kashTokenEth.balanceOf(user2.address);
 
-      await expect(kashYield.processBatch())
-        .to.emit(kashYield, "BatchProcessed")
-        .to.emit(kashYield, "ProtocolInteraction")
+      await expect(kashYieldEth.processBatch())
+        .to.emit(kashYieldEth, "BatchProcessed")
+        .to.emit(kashYieldEth, "ProtocolInteraction")
         .withArgs("NET_MINT", ethers.ZeroAddress, anyValue); // Should be net mint
 
       // User2 should get ~1000 * 0.9997 Kash (after 3 bps fee)
-      expect(await kashToken.balanceOf(user2.address)).to.be.closeTo(
+      expect(await kashTokenEth.balanceOf(user2.address)).to.be.closeTo(
         ethers.parseEther("999.7"),
         ethers.parseEther("1")
       );
 
       // User1 balance: 500 (remaining from pre-mint) + ~5998 (from 2 ETH @ $3000 after fee) = ~6498
-      expect(await kashToken.balanceOf(user1.address)).to.be.closeTo(
+      expect(await kashTokenEth.balanceOf(user1.address)).to.be.closeTo(
         ethers.parseEther("6498"),
         ethers.parseEther("10")
       );
       
       // Total supply = user1 (~6498) + user2 (~1000) = ~7498 Kash
-      expect(await kashToken.totalSupply()).to.be.closeTo(
+      expect(await kashTokenEth.totalSupply()).to.be.closeTo(
         ethers.parseEther("7498"),
         ethers.parseEther("10")
       );
@@ -290,7 +288,7 @@ describe("KashYield - Final Version", function () {
     it("Should support Chainlink Automation checkUpkeep", async function () {
       await moveToProcessingWindow();
 
-      const [upkeepNeeded] = await kashYield.checkUpkeep("0x");
+      const [upkeepNeeded] = await kashYieldEth.checkUpkeep("0x");
       expect(upkeepNeeded).to.be.true;
     });
   });
@@ -300,25 +298,25 @@ describe("KashYield - Final Version", function () {
       await moveToUserWindow();
 
       const deposit = ethers.parseUnits("10000", 6);
-      await mockUsdc.connect(user1).approve(kashYield.target, deposit);
-      await kashYield.connect(user1).requestMint(mockUsdc.target, deposit);
+      await mockUsdc.connect(user1).approve(kashYieldEth.target, deposit);
+      await kashYieldEth.connect(user1).requestMint(mockUsdc.target, deposit);
 
       await moveToNextDayProcessingWindow();
 
-      await kashYield.processBatch();
+      await kashYieldEth.processBatch();
 
       const expectedKash = ethers.parseEther("10000") * 9997n / 10000n; // 0.03% fee
-      expect(await kashToken.balanceOf(user1.address)).to.equal(expectedKash);
+      expect(await kashTokenEth.balanceOf(user1.address)).to.equal(expectedKash);
     });
   });
 
   describe("Pause & Emergency Withdraw", function () {
     it("Should reject operations when paused", async function () {
-      await kashYield.connect(owner).pause();
+      await kashYieldEth.connect(owner).pause();
 
       // User deposits during pause → should fail
       await expect(
-        kashYield.connect(user1).requestMint(ethers.ZeroAddress, 0, { value: ethers.parseEther("1") })
+        kashYieldEth.connect(user1).requestMint(ethers.ZeroAddress, 0, { value: ethers.parseEther("1") })
       ).to.be.revertedWith("Contract paused");
     });
 
@@ -326,14 +324,14 @@ describe("KashYield - Final Version", function () {
       // User deposits before pause
       const deposit = ethers.parseEther("1");
       await moveToUserWindow();
-      await kashYield.connect(user1).requestMint(ethers.ZeroAddress, 0, { value: deposit });
+      await kashYieldEth.connect(user1).requestMint(ethers.ZeroAddress, 0, { value: deposit });
 
       // Then pause the contract
-      await kashYield.connect(owner).pause();
+      await kashYieldEth.connect(owner).pause();
 
       // User should be able to emergency withdraw
       const balanceBefore = await ethers.provider.getBalance(user1.address);
-      const tx = await kashYield.connect(user1).emergencyWithdrawMint(await kashYield.getCurrentBatchCycle());
+      const tx = await kashYieldEth.connect(user1).emergencyWithdrawMint(await kashYieldEth.getCurrentBatchCycle());
       const receipt = await tx.wait();
       const gasUsed = receipt.gasUsed * receipt.gasPrice;
 
@@ -346,12 +344,12 @@ describe("KashYield - Final Version", function () {
     it("Should emit NET_MINT or NET_REDEEM for bot to act on Hyperliquid", async function () {
       await moveToUserWindow();
 
-      await kashYield.connect(user1).requestMint(ethers.ZeroAddress, 0, { value: ethers.parseEther("5") });
+      await kashYieldEth.connect(user1).requestMint(ethers.ZeroAddress, 0, { value: ethers.parseEther("5") });
 
       await moveToNextDayProcessingWindow();
 
-      await expect(kashYield.processBatch())
-        .to.emit(kashYield, "ProtocolInteraction")
+      await expect(kashYieldEth.processBatch())
+        .to.emit(kashYieldEth, "ProtocolInteraction")
         .withArgs("NET_MINT", ethers.ZeroAddress, anyValue);
     });
   });

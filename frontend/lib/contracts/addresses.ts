@@ -1,7 +1,7 @@
-// Deployed contract addresses on Arbitrum Sepolia
+// Deployed contract addresses on Arbitrum Sepolia (ETH product)
 export const CONTRACTS = {
-  kashYield: "0x4C3910E93aB0c5983c6DEE003749485E525E5Db7" as `0x${string}`,
-  kashToken: "0x3461e725Fb77ead9a4FD22A10e0f0c9373156297" as `0x${string}`,
+  kashYieldEth: "0x4C3910E93aB0c5983c6DEE003749485E525E5Db7" as `0x${string}`,
+  kashTokenEth: "0x3461e725Fb77ead9a4FD22A10e0f0c9373156297" as `0x${string}`,
   tokens: {
     weth: "0x89c8C8AD33c4a9539361a2Cf1A908C4300F258D9" as `0x${string}`,
     wbtc: "0x4D8b720b94D341F54df948696747B05998c5FbD5" as `0x${string}`,

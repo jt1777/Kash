@@ -1,4 +1,4 @@
-// ABI for KashYield contract - extracted from contract interface
+// ABI for KashYieldETH contract (ETH product) - same interface as KashYield
 export const kashYieldABI = [
   // Read functions
   {
@@ -265,6 +265,57 @@ export const kashYieldABI = [
     type: "function",
   },
   {
+    inputs: [{ name: "amount", type: "uint256" }],
+    name: "depositToHyperliquid",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [{ name: "amount", type: "uint256" }],
+    name: "withdrawFromHyperliquid",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [
+      { name: "tokenOut", type: "address" },
+      { name: "usdcAmount", type: "uint256" },
+    ],
+    name: "spotBuyOnHyperliquid",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [
+      { name: "tokenIn", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    name: "spotSellOnHyperliquid",
+    outputs: [],
+    stateMutability: "payable",
+    type: "function",
+  },
+  {
+    inputs: [
+      { name: "symbol", type: "string" },
+      { name: "size", type: "uint256" },
+    ],
+    name: "openShort",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [{ name: "symbol", type: "string" }],
+    name: "closeShort",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
     inputs: [],
     name: "aavePoolAddress",
     outputs: [{ name: "", type: "address" }],
@@ -290,6 +341,27 @@ export const kashYieldABI = [
     name: "updateNAV",
     outputs: [],
     stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "processBatch",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "hyperliquidAddress",
+    outputs: [{ name: "", type: "address" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "currentNAV",
+    outputs: [{ name: "", type: "uint256" }],
+    stateMutability: "view",
     type: "function",
   },
   // Events

@@ -98,18 +98,17 @@ async function main() {
   // 5. Deploy KashYield Main Contract
   // ============================================
   
-  console.log("Deploying KashYield...");
+  console.log("Deploying KashYieldETH...");
   
-  const KashYield = await ethers.getContractFactory("KashYield");
-  const kashYield = await KashYield.deploy(); // No constructor args
-  await kashYield.waitForDeployment();
+  const KashYieldETH = await ethers.getContractFactory("KashYieldETH");
+  const kashYieldEth = await KashYieldETH.deploy();
+  await kashYieldEth.waitForDeployment();
   
-  const kashYieldAddress = await kashYield.getAddress();
-  console.log("✅ KashYield deployed to:", kashYieldAddress);
+  const kashYieldEthAddress = await kashYieldEth.getAddress();
+  console.log("✅ KashYieldETH deployed to:", kashYieldEthAddress);
 
-  // Get KashToken address (created by KashYield constructor)
-  const kashTokenAddress = await kashYield.kashToken();
-  console.log("✅ KashToken deployed to:", kashTokenAddress);
+  const kashTokenEthAddress = await kashYieldEth.kashTokenEth();
+  console.log("✅ KashTokenEth deployed to:", kashTokenEthAddress);
 
   console.log("\n");
 
@@ -117,14 +116,12 @@ async function main() {
   // 6. Configure KashYield
   // ============================================
   
-  console.log("Configuring KashYield...");
+  console.log("Configuring KashYieldETH...");
   
-  // Set Aave pool
-  await kashYield.setAavePool(await mockAave.getAddress());
+  await kashYieldEth.setAavePool(await mockAave.getAddress());
   console.log("✅ Set Aave pool address");
   
-  // Set token addresses
-  await kashYield.setTokenAddresses(
+  await kashYieldEth.setTokenAddresses(
     await weth.getAddress(),
     await wbtc.getAddress(),
     await usdt.getAddress(),
@@ -132,28 +129,25 @@ async function main() {
   );
   console.log("✅ Set token addresses");
   
-  // Set oracles
-  await kashYield.setOracle(ethers.ZeroAddress, await ethFeed.getAddress()); // ETH
-  await kashYield.setOracle(await weth.getAddress(), await ethFeed.getAddress());
-  await kashYield.setOracle(await wbtc.getAddress(), await btcFeed.getAddress());
-  await kashYield.setOracle(await usdt.getAddress(), await usdtFeed.getAddress());
-  await kashYield.setOracle(await usdc.getAddress(), await usdcFeed.getAddress());
+  await kashYieldEth.setOracle(ethers.ZeroAddress, await ethFeed.getAddress());
+  await kashYieldEth.setOracle(await weth.getAddress(), await ethFeed.getAddress());
+  await kashYieldEth.setOracle(await wbtc.getAddress(), await btcFeed.getAddress());
+  await kashYieldEth.setOracle(await usdt.getAddress(), await usdtFeed.getAddress());
+  await kashYieldEth.setOracle(await usdc.getAddress(), await usdcFeed.getAddress());
   console.log("✅ Set oracle addresses");
   
-  // Set token decimals (all mocks use 6 decimals)
-  await kashYield.setTokenDecimals(await weth.getAddress(), 6);
-  await kashYield.setTokenDecimals(await wbtc.getAddress(), 6);
-  await kashYield.setTokenDecimals(await usdt.getAddress(), 6);
-  await kashYield.setTokenDecimals(await usdc.getAddress(), 6);
+  await kashYieldEth.setTokenDecimals(await weth.getAddress(), 6);
+  await kashYieldEth.setTokenDecimals(await wbtc.getAddress(), 6);
+  await kashYieldEth.setTokenDecimals(await usdt.getAddress(), 6);
+  await kashYieldEth.setTokenDecimals(await usdc.getAddress(), 6);
   console.log("✅ Set token decimals");
   
-  // Fund KashYield with ETH for redemptions
   const fundTx = await deployer.sendTransaction({
-    to: kashYieldAddress,
+    to: kashYieldEthAddress,
     value: ethers.parseEther("0.01")
   });
   await fundTx.wait();
-  console.log("✅ Funded KashYield with 0.01 ETH");
+  console.log("✅ Funded KashYieldETH with 0.01 ETH");
 
   console.log("\n");
 
@@ -165,8 +159,8 @@ async function main() {
   console.log("📋 DEPLOYMENT SUMMARY");
   console.log("====================================");
   console.log("\nCore Contracts:");
-  console.log("  KashYield:", kashYieldAddress);
-  console.log("  KashToken:", kashTokenAddress);
+  console.log("  KashYieldETH:", kashYieldEthAddress);
+  console.log("  KashTokenEth:", kashTokenEthAddress);
   console.log("\nMock Protocols:");
   console.log("  Aave Pool:", await mockAave.getAddress());
   console.log("  Hyperliquid:", await mockHyperliquid.getAddress());

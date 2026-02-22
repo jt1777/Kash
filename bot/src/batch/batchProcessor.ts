@@ -250,6 +250,11 @@ export class BatchProcessor {
       await this.borrowFromAave(TOKEN_ADDRESSES.USDC, borrowTokenAmount);
       await this.depositToHyperliquid(borrowTokenAmount);
 
+      // Step 2b: Spot buy ETH or BTC on Hyperliquid (USDC → asset) so we can short that asset
+      const spotBuyTokenOut = this.getSpotAssetAddress(asset);
+      console.log(`   Step 2b: Spot buy ${assetSymbol} on Hyperliquid with borrowed USDC`);
+      await this.spotBuyOnHyperliquid(spotBuyTokenOut, borrowTokenAmount);
+
       // Step 3: Open short on Hyperliquid: notional = configured leverage × net mint (default 1.7x)
       const leverageScaled = BigInt(Math.round(config.strategy.shortLeverage * 100));
       const shortSizeUSD = (amount * leverageScaled) / 100n;
@@ -293,9 +298,18 @@ export class BatchProcessor {
       console.log(`   Step 1: Close ${assetSymbol} short on Hyperliquid`);
       await this.closeShortOnHyperliquid(asset);
 
-      // Step 2: Withdraw collateral (USDC) from Hyperliquid (same % as borrow LTV)
+      // Step 1b: Spot sell ETH or BTC on Hyperliquid (asset → USDC) before withdrawing USDC
       const ltv = BigInt(config.strategy.borrowLtvPct);
       const usdcToWithdrawUSD = (amount * ltv) / 100n;
+      const spotSellTokenIn = this.getSpotAssetAddress(asset);
+      const spotSellAmount = await this.usdToTokenAmount(
+        asset === ethers.ZeroAddress ? TOKEN_ADDRESSES.WETH : asset,
+        usdcToWithdrawUSD
+      );
+      console.log(`   Step 1b: Spot sell ${assetSymbol} to USDC on Hyperliquid: ${ethers.formatEther(spotSellAmount)} units`);
+      await this.spotSellOnHyperliquid(spotSellTokenIn, spotSellAmount);
+
+      // Step 2: Withdraw collateral (USDC) from Hyperliquid (same % as borrow LTV)
       const usdcWithdrawAmount = await this.usdToTokenAmount(TOKEN_ADDRESSES.USDC, usdcToWithdrawUSD);
       console.log(`   Step 2: Withdraw collateral (USDC) from Hyperliquid: ${ethers.formatEther(usdcToWithdrawUSD)} USD (${usdcWithdrawAmount} USDC units)`);
       await this.withdrawFromHyperliquid(usdcWithdrawAmount);
@@ -341,6 +355,16 @@ export class BatchProcessor {
     if (asset.toLowerCase() === TOKEN_ADDRESSES.WETH.toLowerCase()) return 'ETH';
     if (asset.toLowerCase() === TOKEN_ADDRESSES.WBTC.toLowerCase()) return 'BTC';
     return 'ETH'; // default when contract emits address(0)
+  }
+
+  /**
+   * Map asset to spot token address for HL: ETH = address(0), BTC = wBTC
+   */
+  private getSpotAssetAddress(asset: string): string {
+    if (asset === ethers.ZeroAddress) return ethers.ZeroAddress;
+    if (asset.toLowerCase() === TOKEN_ADDRESSES.WETH.toLowerCase()) return ethers.ZeroAddress;
+    if (asset.toLowerCase() === TOKEN_ADDRESSES.WBTC.toLowerCase()) return TOKEN_ADDRESSES.WBTC;
+    return ethers.ZeroAddress;
   }
 
   /**
@@ -422,6 +446,37 @@ export class BatchProcessor {
       console.log(`   ✅ Deposited to Hyperliquid`);
     } catch (error: any) {
       console.error(`   ❌ Failed to deposit to Hyperliquid: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Spot buy on Hyperliquid: USDC → ETH (address(0)) or wBTC. Call after depositToHyperliquid.
+   */
+  private async spotBuyOnHyperliquid(tokenOut: string, usdcAmount: bigint): Promise<void> {
+    try {
+      console.log(`   → Spot buy on Hyperliquid: ${usdcAmount} USDC → ${tokenOut === ethers.ZeroAddress ? 'ETH' : 'WBTC'}`);
+      const tx = await this.kashYield.spotBuyOnHyperliquid(tokenOut, usdcAmount);
+      await tx.wait();
+      console.log(`   ✅ Spot buy on Hyperliquid done`);
+    } catch (error: any) {
+      console.error(`   ❌ Failed to spot buy on Hyperliquid: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Spot sell on Hyperliquid: ETH or wBTC → USDC. For ETH, send value with the tx.
+   */
+  private async spotSellOnHyperliquid(tokenIn: string, amount: bigint): Promise<void> {
+    try {
+      const opts = tokenIn === ethers.ZeroAddress ? { value: amount } : {};
+      console.log(`   → Spot sell on Hyperliquid: ${ethers.formatEther(amount)} ${tokenIn === ethers.ZeroAddress ? 'ETH' : 'WBTC'} → USDC`);
+      const tx = await this.kashYield.spotSellOnHyperliquid(tokenIn, amount, opts);
+      await tx.wait();
+      console.log(`   ✅ Spot sell on Hyperliquid done`);
+    } catch (error: any) {
+      console.error(`   ❌ Failed to spot sell on Hyperliquid: ${error.message}`);
       throw error;
     }
   }
