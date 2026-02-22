@@ -223,6 +223,45 @@ contract KashYieldETH {
         emit RedeemRequested(msg.sender, kashAmount, tokenOut, batchCycle);
     }
 
+    /// @notice Cancel a pending mint request and get your deposited asset back. Only before the batch is processed.
+    function cancelMintRequest(uint256 batchCycle) external whenNotPaused {
+        require(!batchProcessed[batchCycle], "Batch already processed");
+        MintRequest storage req = userMintRequests[msg.sender][batchCycle];
+        require(req.amountIn > 0, "No mint request");
+
+        uint256 amount = req.amountIn;
+        address tokenIn = req.tokenIn;
+        batchMintsByToken[batchCycle][tokenIn] -= amount;
+        delete userMintRequests[msg.sender][batchCycle];
+
+        if (tokenIn == ETH_ADDRESS) {
+            payable(msg.sender).transfer(amount);
+        } else {
+            IERC20(tokenIn).safeTransfer(msg.sender, amount);
+        }
+        emit ProtocolInteraction("CANCEL_MINT", tokenIn, amount);
+    }
+
+    /// @notice Cancel a pending redeem request and get your KASH_ETH back. Only before the batch is processed.
+    function cancelRedeemRequest(uint256 batchCycle) external whenNotPaused {
+        require(!batchProcessed[batchCycle], "Batch already processed");
+        RedeemRequest storage req = userRedeemRequests[msg.sender][batchCycle];
+        require(req.kashAmount > 0, "No redeem request");
+
+        uint256 kashAmount = req.kashAmount;
+        uint256 usdEstimate = (kashAmount * currentNAV) / 1e18;
+        uint256 current = batchRedeemsByTokenUSD[batchCycle][req.tokenOut];
+        if (current >= usdEstimate) {
+            batchRedeemsByTokenUSD[batchCycle][req.tokenOut] = current - usdEstimate;
+        } else {
+            batchRedeemsByTokenUSD[batchCycle][req.tokenOut] = 0;
+        }
+        delete userRedeemRequests[msg.sender][batchCycle];
+
+        kashTokenEth.transfer(msg.sender, kashAmount);
+        emit ProtocolInteraction("CANCEL_REDEEM", address(kashTokenEth), kashAmount);
+    }
+
     function processBatch() public onlyProcessingWindow {
         uint256 batchCycle = (block.timestamp / 86400) - 1;
         require(!batchProcessed[batchCycle], "Batch already processed");

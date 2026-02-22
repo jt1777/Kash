@@ -5,21 +5,21 @@ import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadCont
 import { CONTRACTS, ARBITRUM_SEPOLIA_BLOCK_EXPLORER } from '@/lib/contracts/addresses';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 import { kashTokenABI } from '@/lib/contracts/kashTokenABI';
-import { parseEther, formatEther, zeroAddress } from 'viem';
+import { parseEther, formatEther } from 'viem';
 
 const MIN_MAX_FEE_GWEI = 30n;
 const GWEI = 10n ** 9n;
 const FEE_BUFFER_PERCENT = 120n;
 
-const TOKENS = [
-  { symbol: 'ETH', address: zeroAddress },
-  { symbol: 'wETH', address: CONTRACTS.tokens.weth },
-  { symbol: 'wBTC', address: CONTRACTS.tokens.wbtc },
+// KASH-ETH redeems to wETH; KASH-BTC disabled until BTC product.
+const REDEEM_TOKENS = [
+  { symbol: 'KASH-ETH', address: CONTRACTS.tokens.weth, disabled: false },
+  { symbol: 'KASH-BTC', address: CONTRACTS.tokens.wbtc, disabled: true },
 ];
 
 export function RedeemForm() {
   const { address } = useAccount();
-  const [selectedToken, setSelectedToken] = useState(TOKENS[0]);
+  const [selectedToken, setSelectedToken] = useState(REDEEM_TOKENS[0]!);
   const [amount, setAmount] = useState('');
 
   const { data: feesPerGas } = useEstimateFeesPerGas();
@@ -48,11 +48,43 @@ export function RedeemForm() {
     args: address ? [address, CONTRACTS.kashYieldEth] : undefined,
   });
 
+  const { data: currentBatchCycle } = useReadContract({
+    address: CONTRACTS.kashYieldEth,
+    abi: kashYieldABI,
+    functionName: 'getCurrentBatchCycle',
+  });
+
+  const { data: batchInfo } = useReadContract({
+    address: CONTRACTS.kashYieldEth,
+    abi: kashYieldABI,
+    functionName: 'getBatchInfo',
+    args: currentBatchCycle !== undefined ? [currentBatchCycle] : undefined,
+  });
+
+  const { data: pendingRedeemRequest } = useReadContract({
+    address: CONTRACTS.kashYieldEth,
+    abi: kashYieldABI,
+    functionName: 'getPendingRedeemRequest',
+    args: address && currentBatchCycle !== undefined ? [address, currentBatchCycle] : undefined,
+  });
+
+  const batchProcessed = batchInfo ? (batchInfo as readonly [bigint, bigint, boolean, bigint, bigint])[2] : true;
+  const canCancelRedeem = Boolean(
+    address &&
+    currentBatchCycle !== undefined &&
+    batchInfo &&
+    !batchProcessed &&
+    pendingRedeemRequest &&
+    pendingRedeemRequest.kashAmount > 0n
+  );
+
   const { writeContract: approve, data: approveHash, isPending: isApprovePending } = useWriteContract();
   const { writeContract: redeem, data: redeemHash, isPending: isRedeemPending } = useWriteContract();
+  const { writeContract: cancelRedeem, data: cancelRedeemHash, isPending: isCancelRedeemPending } = useWriteContract();
 
   const { isLoading: isApproveConfirming } = useWaitForTransactionReceipt({ hash: approveHash });
   const { isLoading: isRedeemConfirming, isSuccess: isRedeemSuccess } = useWaitForTransactionReceipt({ hash: redeemHash });
+  const { isLoading: isCancelRedeemConfirming } = useWaitForTransactionReceipt({ hash: cancelRedeemHash });
 
   const parsedAmount = amount ? parseEther(amount) : BigInt(0);
   const needsApproval = allowance !== undefined && parsedAmount > BigInt(0) && allowance < parsedAmount;
@@ -77,6 +109,17 @@ export function RedeemForm() {
       abi: kashYieldABI,
       functionName: 'requestRedeem',
       args: [parsedAmount, selectedToken.address as `0x${string}`],
+      ...gasOptions,
+    });
+  };
+
+  const handleCancelRedeem = () => {
+    if (currentBatchCycle === undefined) return;
+    cancelRedeem({
+      address: CONTRACTS.kashYieldEth,
+      abi: kashYieldABI,
+      functionName: 'cancelRedeemRequest',
+      args: [currentBatchCycle],
       ...gasOptions,
     });
   };
@@ -121,8 +164,9 @@ export function RedeemForm() {
         </div>
 
         <button
+          type="button"
           onClick={() => setAmount('')}
-          className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
+          className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors cursor-pointer"
         >
           Make Another Request
         </button>
@@ -134,22 +178,32 @@ export function RedeemForm() {
     <div className="space-y-4">
       {/* Token Selector */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-2">Receive Token</label>
-        <div className="grid grid-cols-3 gap-2">
-          {TOKENS.map((token) => (
-            <button
-              key={token.symbol}
-              onClick={() => setSelectedToken(token)}
-              className={`px-4 py-2 rounded-lg border-2 transition-all ${
-                selectedToken.symbol === token.symbol
-                  ? 'border-purple-600 bg-purple-50 text-purple-700'
-                  : 'border-gray-200 hover:border-gray-300 text-gray-700'
-              }`}
-            >
-              {token.symbol}
-            </button>
-          ))}
+        <label className="block text-sm font-medium text-gray-700 mb-2">Redeem Token</label>
+        <div className="grid grid-cols-2 gap-2">
+          {REDEEM_TOKENS.map((token) => {
+            const isDisabled = token.disabled;
+            return (
+              <button
+                key={token.symbol}
+                type="button"
+                onClick={() => !isDisabled && setSelectedToken(token)}
+                disabled={isDisabled}
+                className={`px-4 py-2 rounded-lg border-2 transition-all ${
+                  isDisabled
+                    ? 'border-gray-200 bg-gray-200/60 text-gray-500 cursor-default'
+                    : selectedToken.symbol === token.symbol
+                      ? 'border-purple-600 bg-purple-50 text-purple-700 cursor-pointer'
+                      : 'border-gray-200 hover:border-gray-300 text-gray-700 cursor-pointer'
+                }`}
+              >
+                {token.symbol}
+              </button>
+            );
+          })}
         </div>
+        <p className="text-xs text-gray-500 mt-1.5">
+          KASH-ETH redeems to wETH. KASH-BTC coming soon.
+        </p>
       </div>
 
       {/* Amount Input */}
@@ -157,8 +211,9 @@ export function RedeemForm() {
         <div className="flex justify-between items-center mb-2">
           <label className="block text-sm font-medium text-gray-700">KASH Amount</label>
           <button
+            type="button"
             onClick={handleMaxClick}
-            className="text-xs text-purple-600 hover:text-purple-700 font-medium"
+            className="text-xs text-purple-600 hover:text-purple-700 font-medium cursor-pointer"
           >
             MAX: {kashBalance ? Number(formatEther(kashBalance)).toFixed(2) : '0.00'}
           </button>
@@ -170,24 +225,44 @@ export function RedeemForm() {
           placeholder="0.0"
           className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
         />
+        {amount && parsedAmount > BigInt(0) && kashBalance !== undefined && parsedAmount > kashBalance && (
+          <p className="text-sm text-red-600 mt-1.5">Insufficient KASH-ETH balance. Your balance: {Number(formatEther(kashBalance)).toFixed(4)}</p>
+        )}
       </div>
+
+      {/* Pending redeem: Cancel button */}
+      {canCancelRedeem && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+          <p className="text-sm text-amber-800 mb-2">You have a pending redeem request for this batch cycle.</p>
+          <button
+            type="button"
+            onClick={handleCancelRedeem}
+            disabled={isCancelRedeemPending || isCancelRedeemConfirming}
+            className="w-full px-4 py-2 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700 disabled:bg-gray-300 disabled:cursor-not-allowed cursor-pointer transition-colors"
+          >
+            {isCancelRedeemPending || isCancelRedeemConfirming ? 'Cancelling...' : 'Cancel Redeem Request'}
+          </button>
+        </div>
+      )}
 
       {/* Action Buttons */}
       <div className="space-y-2">
         {needsApproval && (
           <button
+            type="button"
             onClick={handleApprove}
             disabled={isApprovePending || isApproveConfirming || !amount}
-            className="w-full px-6 py-3 bg-purple-600 text-white rounded-lg font-medium hover:bg-purple-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+            className="w-full px-6 py-3 bg-purple-600 text-white rounded-lg font-medium hover:bg-purple-700 disabled:bg-gray-300 disabled:cursor-not-allowed cursor-pointer transition-colors"
           >
             {isApprovePending || isApproveConfirming ? 'Approving...' : 'Approve KASH'}
           </button>
         )}
         
         <button
+          type="button"
           onClick={handleRedeem}
           disabled={isRedeemPending || isRedeemConfirming || !amount || needsApproval || (kashBalance !== undefined && parsedAmount > kashBalance)}
-          className="w-full px-6 py-3 bg-linear-to-r from-purple-600 to-pink-600 text-white rounded-lg font-medium hover:from-purple-700 hover:to-pink-700 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed transition-all shadow-lg"
+          className="w-full px-6 py-3 bg-linear-to-r from-purple-600 to-pink-600 text-white rounded-lg font-medium hover:from-purple-700 hover:to-pink-700 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed cursor-pointer transition-all shadow-lg"
         >
           {isRedeemPending || isRedeemConfirming ? 'Processing...' : 'Submit Redeem Request'}
         </button>

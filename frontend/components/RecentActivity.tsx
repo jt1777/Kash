@@ -71,7 +71,7 @@ export function RecentActivity() {
           type="button"
           onClick={load}
           disabled={isLoading}
-          className="text-sm text-gray-500 hover:text-gray-700 transition disabled:opacity-50"
+          className="text-sm text-gray-500 hover:text-gray-700 transition disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
         >
           Refresh
         </button>

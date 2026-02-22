@@ -12,16 +12,16 @@ const MIN_MAX_FEE_GWEI = 30n;
 const GWEI = 10n ** 9n;
 const FEE_BUFFER_PERCENT = 120n; // 20% buffer over estimated
 
-// ETH product only until KashYieldBTC is deployed; then add wBTC to this list.
+// ETH product: single "ETH" option (native ETH; protocol wraps to wETH for Aave). wBTC shown but disabled until KashYieldBTC.
 const MINT_TOKENS_ETH = [
-  { symbol: 'ETH', address: zeroAddress, decimals: 18 },
-  { symbol: 'wETH', address: CONTRACTS.tokens.weth, decimals: 18 },
+  { symbol: 'ETH', address: zeroAddress, decimals: 18, disabled: false },
+  { symbol: 'wBTC', address: CONTRACTS.tokens.wbtc, decimals: 8, disabled: true },
 ];
 const TOKENS = MINT_TOKENS_ETH;
 
 export function MintForm() {
   const { address } = useAccount();
-  const [selectedToken, setSelectedToken] = useState(MINT_TOKENS_ETH[0]);
+  const [selectedToken, setSelectedToken] = useState(MINT_TOKENS_ETH[0]!);
   const [amount, setAmount] = useState('');
 
   const { data: feesPerGas } = useEstimateFeesPerGas();
@@ -43,11 +43,43 @@ export function MintForm() {
     args: address && selectedToken.symbol !== 'ETH' ? [address, CONTRACTS.kashYieldEth] : undefined,
   });
 
+  const { data: currentBatchCycle } = useReadContract({
+    address: CONTRACTS.kashYieldEth,
+    abi: kashYieldABI,
+    functionName: 'getCurrentBatchCycle',
+  });
+
+  const { data: batchInfo } = useReadContract({
+    address: CONTRACTS.kashYieldEth,
+    abi: kashYieldABI,
+    functionName: 'getBatchInfo',
+    args: currentBatchCycle !== undefined ? [currentBatchCycle] : undefined,
+  });
+
+  const { data: pendingMintRequest } = useReadContract({
+    address: CONTRACTS.kashYieldEth,
+    abi: kashYieldABI,
+    functionName: 'getPendingMintRequest',
+    args: address && currentBatchCycle !== undefined ? [address, currentBatchCycle] : undefined,
+  });
+
+  const batchProcessed = batchInfo ? (batchInfo as readonly [bigint, bigint, boolean, bigint, bigint])[2] : true;
+  const canCancelMint = Boolean(
+    address &&
+    currentBatchCycle !== undefined &&
+    batchInfo &&
+    !batchProcessed &&
+    pendingMintRequest &&
+    pendingMintRequest.amountIn > 0n
+  );
+
   const { writeContract: approve, data: approveHash, isPending: isApprovePending, error: approveError } = useWriteContract();
   const { writeContract: mint, data: mintHash, isPending: isMintPending, error: mintError } = useWriteContract();
+  const { writeContract: cancelMint, data: cancelMintHash, isPending: isCancelMintPending } = useWriteContract();
 
   const { isLoading: isApproveConfirming, isError: isApproveError } = useWaitForTransactionReceipt({ hash: approveHash });
   const { isLoading: isMintConfirming, isSuccess: isMintSuccess, isError: isMintError } = useWaitForTransactionReceipt({ hash: mintHash });
+  const { isLoading: isCancelMintConfirming } = useWaitForTransactionReceipt({ hash: cancelMintHash });
 
   // Helper to safely render error cause
   const renderErrorCause = (error: typeof mintError) => {
@@ -106,6 +138,17 @@ export function MintForm() {
     }
   };
 
+  const handleCancelMint = () => {
+    if (currentBatchCycle === undefined) return;
+    cancelMint({
+      address: CONTRACTS.kashYieldEth,
+      abi: kashYieldABI,
+      functionName: 'cancelMintRequest',
+      args: [currentBatchCycle],
+      ...gasOptions,
+    });
+  };
+
   if (isMintSuccess && amount && mintHash) {
     const txUrl = `${ARBITRUM_SEPOLIA_BLOCK_EXPLORER}/tx/${mintHash}`;
     return (
@@ -140,8 +183,9 @@ export function MintForm() {
         </div>
 
         <button
+          type="button"
           onClick={() => setAmount('')}
-          className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+          className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors cursor-pointer"
         >
           Make Another Request
         </button>
@@ -155,21 +199,30 @@ export function MintForm() {
       <div>
         <label className="block text-sm font-medium text-gray-700 mb-2">Select Token (ETH product → KASH_ETH)</label>
         <div className="grid grid-cols-2 gap-2">
-          {MINT_TOKENS_ETH.map((token) => (
-            <button
-              key={token.symbol}
-              onClick={() => setSelectedToken(token)}
-              className={`px-4 py-2 rounded-lg border-2 transition-all ${
-                selectedToken.symbol === token.symbol
-                  ? 'border-indigo-600 bg-indigo-50 text-indigo-700'
-                  : 'border-gray-200 hover:border-gray-300 text-gray-700'
-              }`}
-            >
-              {token.symbol}
-            </button>
-          ))}
+          {MINT_TOKENS_ETH.map((token) => {
+            const isDisabled = 'disabled' in token && token.disabled;
+            return (
+              <button
+                key={token.symbol}
+                type="button"
+                onClick={() => !isDisabled && setSelectedToken(token)}
+                disabled={isDisabled}
+                className={`px-4 py-2 rounded-lg border-2 transition-all ${
+                  isDisabled
+                    ? 'border-gray-200 bg-gray-200/60 text-gray-500 cursor-default'
+                    : selectedToken.symbol === token.symbol
+                      ? 'border-indigo-600 bg-indigo-50 text-indigo-700 cursor-pointer'
+                      : 'border-gray-200 hover:border-gray-300 text-gray-700 cursor-pointer'
+                }`}
+              >
+                {token.symbol}
+              </button>
+            );
+          })}
         </div>
-        <p className="text-xs text-gray-500 mt-1.5">wBTC (KASH_BTC) coming soon when BTC product is deployed.</p>
+        <p className="text-xs text-gray-500 mt-1.5">
+          Deposit native ETH (no approval). The protocol wraps ETH to wETH when supplying to Aave. wBTC (KASH_BTC) coming soon.
+        </p>
       </div>
 
       {/* Amount Input */}
@@ -184,22 +237,39 @@ export function MintForm() {
         />
       </div>
 
+      {/* Pending mint: Cancel button */}
+      {canCancelMint && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+          <p className="text-sm text-amber-800 mb-2">You have a pending mint request for this batch cycle.</p>
+          <button
+            type="button"
+            onClick={handleCancelMint}
+            disabled={isCancelMintPending || isCancelMintConfirming}
+            className="w-full px-4 py-2 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700 disabled:bg-gray-300 disabled:cursor-not-allowed cursor-pointer transition-colors"
+          >
+            {isCancelMintPending || isCancelMintConfirming ? 'Cancelling...' : 'Cancel Mint Request'}
+          </button>
+        </div>
+      )}
+
       {/* Action Buttons */}
       <div className="space-y-2">
         {needsApproval && (
           <button
+            type="button"
             onClick={handleApprove}
             disabled={isApprovePending || isApproveConfirming || !amount}
-            className="w-full px-6 py-3 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+            className="w-full px-6 py-3 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed cursor-pointer transition-colors"
           >
             {isApprovePending || isApproveConfirming ? 'Approving...' : `Approve ${selectedToken.symbol}`}
           </button>
         )}
         
         <button
+          type="button"
           onClick={handleMint}
           disabled={isMintPending || isMintConfirming || !amount || needsApproval}
-          className="w-full px-6 py-3 bg-linear-to-r from-indigo-600 to-purple-600 text-white rounded-lg font-medium hover:from-indigo-700 hover:to-purple-700 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed transition-all shadow-lg"
+          className="w-full px-6 py-3 bg-linear-to-r from-indigo-600 to-purple-600 text-white rounded-lg font-medium hover:from-indigo-700 hover:to-purple-700 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed cursor-pointer transition-all shadow-lg"
         >
           {isMintPending || isMintConfirming ? 'Processing...' : 'Submit Mint Request'}
         </button>

@@ -126,6 +126,20 @@ export const kashYieldABI = [
     stateMutability: "nonpayable",
     type: "function",
   },
+  {
+    inputs: [{ name: "batchCycle", type: "uint256" }],
+    name: "cancelMintRequest",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [{ name: "batchCycle", type: "uint256" }],
+    name: "cancelRedeemRequest",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
   // Events
   {
     anonymous: false,

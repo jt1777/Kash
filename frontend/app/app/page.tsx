@@ -107,7 +107,7 @@ function CustomWalletButton() {
             <button
               onClick={() => openChainModal?.()}
               type="button"
-              className="flex items-center gap-1.5 rounded-full px-3 py-2 text-sm font-medium text-gray-700 hover:text-gray-900 bg-white/10 hover:bg-white/15 border border-white/20 transition"
+              className="flex items-center gap-1.5 rounded-full px-3 py-2 text-sm font-medium text-gray-700 hover:text-gray-900 bg-white/10 hover:bg-white/15 border border-white/20 transition cursor-pointer"
             >
               {chain.hasIcon && chain.iconUrl && (
                 <span
@@ -122,7 +122,7 @@ function CustomWalletButton() {
             <button
               onClick={openAccountModal}
               type="button"
-              className="flex items-center gap-2 rounded-full pl-1 pr-3 py-1.5 text-sm font-medium text-gray-700 hover:text-gray-900 bg-white/10 hover:bg-white/15 border border-white/20 transition"
+              className="flex items-center gap-2 rounded-full pl-1 pr-3 py-1.5 text-sm font-medium text-gray-700 hover:text-gray-900 bg-white/10 hover:bg-white/15 border border-white/20 transition cursor-pointer"
             >
               <WalletAvatar address={account.address as `0x${string}`} fallbackUrl={account.ensAvatar} size={24} />
               <span className="text-white">{account.displayName}</span>

@@ -353,4 +353,101 @@ describe("KashYieldETH - Final Version", function () {
         .withArgs("NET_MINT", ethers.ZeroAddress, anyValue);
     });
   });
+
+  describe("Cancel Mint Request", function () {
+    it("Should refund ETH when user cancels mint before batch processed", async function () {
+      await moveToUserWindow();
+
+      const deposit = ethers.parseEther("1.5");
+      await kashYieldEth.connect(user1).requestMint(ethers.ZeroAddress, 0, { value: deposit });
+      const balanceBeforeCancel = await ethers.provider.getBalance(user1.address);
+      const batchCycle = await kashYieldEth.getCurrentBatchCycle();
+
+      const tx = await kashYieldEth.connect(user1).cancelMintRequest(batchCycle);
+      const receipt = await tx.wait();
+      const gasUsed = receipt.gasUsed * receipt.gasPrice;
+
+      const balanceAfter = await ethers.provider.getBalance(user1.address);
+      expect(balanceAfter - balanceBeforeCancel + gasUsed).to.equal(deposit);
+
+      const req = await kashYieldEth.getPendingMintRequest(user1.address, batchCycle);
+      expect(req.amountIn).to.equal(0);
+    });
+
+    it("Should refund ERC20 when user cancels mint before batch processed", async function () {
+      await moveToUserWindow();
+
+      const amount = ethers.parseUnits("500", 6);
+      await mockUsdc.connect(user1).approve(kashYieldEth.target, amount);
+      await kashYieldEth.connect(user1).requestMint(mockUsdc.target, amount);
+
+      const balanceBefore = await mockUsdc.balanceOf(user1.address);
+      const batchCycle = await kashYieldEth.getCurrentBatchCycle();
+      await kashYieldEth.connect(user1).cancelMintRequest(batchCycle);
+
+      expect(await mockUsdc.balanceOf(user1.address)).to.equal(balanceBefore + amount);
+    });
+
+    it("Should revert cancelMintRequest when batch already processed", async function () {
+      await moveToUserWindow();
+      await kashYieldEth.connect(user1).requestMint(ethers.ZeroAddress, 0, { value: ethers.parseEther("1") });
+      const batchCycle = await kashYieldEth.getCurrentBatchCycle();
+
+      await moveToNextDayProcessingWindow();
+      await kashYieldEth.processBatch();
+
+      await expect(kashYieldEth.connect(user1).cancelMintRequest(batchCycle))
+        .to.be.revertedWith("Batch already processed");
+    });
+
+    it("Should revert cancelMintRequest when no mint request", async function () {
+      await moveToUserWindow();
+      const batchCycle = await kashYieldEth.getCurrentBatchCycle();
+
+      await expect(kashYieldEth.connect(user1).cancelMintRequest(batchCycle))
+        .to.be.revertedWith("No mint request");
+    });
+  });
+
+  describe("Cancel Redeem Request", function () {
+    it("Should return KASH when user cancels redeem before batch processed", async function () {
+      await kashYieldEth.testMintKashEth(user1.address, ethers.parseEther("1000"));
+      await moveToUserWindow();
+
+      const redeemAmount = ethers.parseEther("300");
+      await kashTokenEth.connect(user1).approve(kashYieldEth.target, redeemAmount);
+      await kashYieldEth.connect(user1).requestRedeem(redeemAmount, ethers.ZeroAddress);
+
+      const balanceBefore = await kashTokenEth.balanceOf(user1.address);
+      const batchCycle = await kashYieldEth.getCurrentBatchCycle();
+      await kashYieldEth.connect(user1).cancelRedeemRequest(batchCycle);
+
+      expect(await kashTokenEth.balanceOf(user1.address)).to.equal(balanceBefore + redeemAmount);
+
+      const req = await kashYieldEth.getPendingRedeemRequest(user1.address, batchCycle);
+      expect(req.kashAmount).to.equal(0);
+    });
+
+    it("Should revert cancelRedeemRequest when batch already processed", async function () {
+      await kashYieldEth.testMintKashEth(user1.address, ethers.parseEther("500"));
+      await moveToUserWindow();
+      await kashTokenEth.connect(user1).approve(kashYieldEth.target, ethers.parseEther("200"));
+      await kashYieldEth.connect(user1).requestRedeem(ethers.parseEther("200"), ethers.ZeroAddress);
+      const batchCycle = await kashYieldEth.getCurrentBatchCycle();
+
+      await moveToNextDayProcessingWindow();
+      await kashYieldEth.processBatch();
+
+      await expect(kashYieldEth.connect(user1).cancelRedeemRequest(batchCycle))
+        .to.be.revertedWith("Batch already processed");
+    });
+
+    it("Should revert cancelRedeemRequest when no redeem request", async function () {
+      await moveToUserWindow();
+      const batchCycle = await kashYieldEth.getCurrentBatchCycle();
+
+      await expect(kashYieldEth.connect(user1).cancelRedeemRequest(batchCycle))
+        .to.be.revertedWith("No redeem request");
+    });
+  });
 });
