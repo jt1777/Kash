@@ -21,8 +21,7 @@ interface IWETH is IERC20 {
     function withdraw(uint256 amount) external;
 }
 
-// Minimal interface for Hyperliquid (or mock/adapter). Bot calls these via owner-only functions.
-// Real Hyperliquid: deposit = transfer USDC to bridge; trading/withdraw may be API-signed. Use an adapter if needed.
+// Minimal interface for Hyperliquid
 interface IHyperliquid {
     function depositToSpotWallet(address stableToken, uint256 amount) external;
     function withdrawFromSpotWallet(address stableToken, uint256 amount) external;
@@ -37,22 +36,22 @@ interface IHyperliquid {
         bool isLong,
         bool isActive
     );
-    // Optional: order book (mock can no-op; real HL uses API)
     function cancelOrder(bytes32 orderId) external;
     function getOpenOrderIds(address account) external view returns (bytes32[] memory);
 }
 
-// Events (kept from original)
-event MintRequested(address indexed user, address indexed tokenIn, uint256 amountIn, uint256 batchCycle);
-event RedeemRequested(address indexed user, uint256 kashAmount, address indexed tokenOut, uint256 batchCycle);
-event BatchProcessed(uint256 indexed batchCycle, uint256 totalMintValueUSD, uint256 totalRedeemValueUSD, uint256 batchNAV);
+// Events
+event MintRequested(address indexed user, uint256 amountIn, uint256 batchCycle);
+event RedeemRequested(address indexed user, uint256 kashAmount, uint256 batchCycle);
+event BatchPhaseUpdated(uint256 indexed batchCycle, uint8 phase, uint256 indicativeNAV);
+event BatchProcessed(uint256 indexed batchCycle, uint256 totalMintValueUSD, uint256 totalRedeemValueUSD, uint256 exactNAV);
 event TokensClaimed(address indexed user, address indexed token, uint256 amount, bool isMint);
 event NAVUpdateExecuted(uint256 newNAV, uint256 timestamp);
 event ProtocolInteraction(string action, address indexed asset, uint256 amount);
 
 /**
  * @title KashYieldETH
- * @dev ETH yield product: daily batch settlement on Arbitrum. Deposits in ETH/wETH receive KASH_ETH. Integrates Aave + Hyperliquid (short ETH funding).
+ * @dev ETH yield product: daily batch settlement on Arbitrum. Deposits in ETH/wETH receive KASH_ETH. Integrates Aave + Hyperliquid.
  */
 contract KashYieldETH {
     using SafeERC20 for IERC20;
@@ -60,21 +59,21 @@ contract KashYieldETH {
     // Core state
     address payable public owner;
     KashTokenEth public kashTokenEth;
-    uint256 public currentNAV; // 18 decimals, initialized at 1e18 ($1)
+    uint256 public currentNAV = 1e18; // 18 decimals, $1
 
     // Protocol addresses (Arbitrum Sepolia)
     address public aavePoolAddress = 0xBfC91D59fdAA134A4ED45f7B584cAf96D7792Eff;
     address public hyperliquidAddress;
+    address public keeperRegistry = 0x8194399B3f11fcA2E8cCEfc4c9A658c61B8Bf412; // Chainlink Automation on Arbitrum Sepolia
+    address public botAddress; // Set by owner
 
-    // Supported tokens (Arbitrum Sepolia addresses)
+    // Supported tokens: ETH/wETH for user flows; USDC for Hyperliquid (deposits/collateral)
     address public constant ETH_ADDRESS = address(0);
     address public wethAddress = 0x89c8C8AD33c4a9539361a2Cf1A908C4300F258D9;
-    address public wbtcAddress = 0x4D8b720b94D341F54df948696747B05998c5FbD5;
-    address public usdtAddress = 0x833EdA586220B1d0C25034E9bAb5ed4B4a5769a1;
-    address public usdcAddress = 0x15BB91b9e63EA29863678B1dcBcB01dE31bD8Ab5;
+    address public usdcAddress; // For Hyperliquid
 
-    mapping(address => address) public tokenOracles;
-    mapping(address => uint8) public tokenDecimals;
+    address public ethOracle = 0x1AdF01abD96C11AEE2f20a41a03fAD11b3D8d2b4; // ETH/USD oracle
+    uint8 public ethDecimals = 18;
 
     uint256 public feeBps = 3;
     uint256 public constant MAX_FEE_BPS = 100;
@@ -83,12 +82,13 @@ contract KashYieldETH {
 
     uint256 public currentBatchCycle;
     mapping(uint256 => bool) public batchProcessed;
-    mapping(uint256 => uint256) public batchNAV;
+    mapping(uint256 => uint256) public batchIndicativeNAV;
+    mapping(uint256 => uint256) public batchExactNAV;
+    mapping(uint256 => uint8) public batchPhase; // 0: unstarted, 1: indicative done, 2: ops done, 3: finalized
 
     struct MintRequest {
         address user;
-        address tokenIn;
-        uint256 amountIn;
+        uint256 amountIn; // ETH amount (wETH unwrapped)
         uint256 amountInUSD;
         uint256 batchCycle;
     }
@@ -96,7 +96,6 @@ contract KashYieldETH {
     struct RedeemRequest {
         address user;
         uint256 kashAmount;
-        address tokenOut;
         uint256 batchCycle;
     }
 
@@ -105,101 +104,100 @@ contract KashYieldETH {
 
     mapping(uint256 => uint256) public batchTotalMintValueUSD;
     mapping(uint256 => uint256) public batchTotalRedeemValueUSD;
-    mapping(uint256 => mapping(address => uint256)) public batchMintsByToken;
-    mapping(uint256 => mapping(address => uint256)) public batchRedeemsByTokenUSD;
+    mapping(uint256 => uint256) public batchTotalRedeemKash; // For recycling
+    mapping(uint256 => uint256) public batchTotalMintEth; // Deposited ETH
 
     mapping(uint256 => address[]) public batchMintUsers;
     mapping(uint256 => address[]) public batchRedeemUsers;
     mapping(uint256 => mapping(address => bool)) public isInBatchMint;
     mapping(uint256 => mapping(address => bool)) public isInBatchRedeem;
 
+    mapping(uint256 => uint256) public batchMintEthDeployedToAave;
+
     uint256 public constant USER_WINDOW_END = 23 * 3600 + 50 * 60;
     uint256 public constant PROCESSING_WINDOW_START = 23 * 3600 + 50 * 60;
     uint256 public constant PROCESSING_WINDOW_END = 24 * 3600;
 
     modifier onlyOwner() {
-        require(msg.sender == owner, "Only owner can call this function");
+        require(msg.sender == owner, "Only owner");
         _;
     }
 
     modifier onlyUserWindow() {
         uint256 timeOfDay = block.timestamp % 86400;
-        require(timeOfDay < USER_WINDOW_END, "User window closed (23:50-23:59)");
+        require(timeOfDay < USER_WINDOW_END, "User window closed");
         _;
     }
 
     modifier onlyProcessingWindow() {
         uint256 timeOfDay = block.timestamp % 86400;
-        require(timeOfDay >= PROCESSING_WINDOW_START && timeOfDay < PROCESSING_WINDOW_END, "Not in processing window (23:50-23:59)");
+        require(timeOfDay >= PROCESSING_WINDOW_START && timeOfDay < PROCESSING_WINDOW_END, "Not in processing window");
         _;
     }
 
     modifier whenNotPaused() {
-        require(!paused, "Contract paused");
+        require(!paused, "Paused");
         _;
     }
 
-    constructor() payable {
+    modifier onlyBotOrKeeper() {
+        require(msg.sender == botAddress || msg.sender == keeperRegistry, "Only bot or Chainlink Keeper");
+        _;
+    }
+
+    constructor(address _botAddress) payable {
         owner = payable(msg.sender);
+        botAddress = _botAddress; // Set bot address
 
         kashTokenEth = new KashTokenEth();
         kashTokenEth.transferOwnership(address(this));
 
-        currentNAV = 1e18;
         currentBatchCycle = block.timestamp / 86400;
-
-        tokenDecimals[ETH_ADDRESS] = 18;
-        tokenDecimals[wethAddress] = 18;
-        tokenDecimals[wbtcAddress] = 8;
-        tokenDecimals[usdtAddress] = 6;
-        tokenDecimals[usdcAddress] = 6;
-
-        tokenOracles[ETH_ADDRESS] = 0x1AdF01abD96C11AEE2f20a41a03fAD11b3D8d2b4;
-        tokenOracles[wethAddress] = 0x1AdF01abD96C11AEE2f20a41a03fAD11b3D8d2b4;
-        tokenOracles[wbtcAddress] = 0xBfFE5FE928F9597E2A21Ba8f2cDE7D2D10C09d27;
-        tokenOracles[usdtAddress] = 0x78a59DD416d0CE4AbfD2e27BFd2f6bFdceC446e3;
-        tokenOracles[usdcAddress] = 0xed45CBB45d34F53bf14C70e6FC2711bDd6454E76;
     }
 
     receive() external payable {}
 
-    function requestMint(address tokenIn, uint256 amount) external payable onlyUserWindow whenNotPaused {
-        require(isSupportedToken(tokenIn), "Token not supported");
+    function setBotAddress(address _botAddress) external onlyOwner {
+        botAddress = _botAddress;
+    }
 
+    function setKeeperRegistry(address _keeperRegistry) external onlyOwner {
+        keeperRegistry = _keeperRegistry;
+    }
+
+    function requestMint(uint256 amount) external payable onlyUserWindow whenNotPaused {
         uint256 actualAmount;
-        if (tokenIn == ETH_ADDRESS) {
-            require(msg.value > 0, "Must send ETH");
-            actualAmount = msg.value;
+        if (msg.value > 0) {
+            actualAmount = msg.value; // ETH
         } else {
-            require(amount > 0, "Amount must be greater than 0");
+            require(amount > 0, "Amount > 0");
+            IERC20(wethAddress).safeTransferFrom(msg.sender, address(this), amount);
+            IWETH(wethAddress).withdraw(amount); // Unwrap to ETH
             actualAmount = amount;
-            IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), actualAmount);
         }
 
         uint256 batchCycle = block.timestamp / 86400;
 
         userMintRequests[msg.sender][batchCycle] = MintRequest({
             user: msg.sender,
-            tokenIn: tokenIn,
             amountIn: actualAmount,
             amountInUSD: 0,
             batchCycle: batchCycle
         });
 
-        batchMintsByToken[batchCycle][tokenIn] += actualAmount;
+        batchTotalMintEth[batchCycle] += actualAmount;
 
         if (!isInBatchMint[batchCycle][msg.sender]) {
             batchMintUsers[batchCycle].push(msg.sender);
             isInBatchMint[batchCycle][msg.sender] = true;
         }
 
-        emit MintRequested(msg.sender, tokenIn, actualAmount, batchCycle);
+        emit MintRequested(msg.sender, actualAmount, batchCycle);
     }
 
-    function requestRedeem(uint256 kashAmount, address tokenOut) external onlyUserWindow whenNotPaused {
-        require(kashAmount > 0, "Amount must be greater than 0");
-        require(isSupportedToken(tokenOut), "Token not supported");
-        require(kashTokenEth.balanceOf(msg.sender) >= kashAmount, "Insufficient KASH_ETH balance");
+    function requestRedeem(uint256 kashAmount) external onlyUserWindow whenNotPaused {
+        require(kashAmount > 0, "Amount > 0");
+        require(kashTokenEth.balanceOf(msg.sender) >= kashAmount, "Insufficient KASH_ETH");
 
         kashTokenEth.transferFrom(msg.sender, address(this), kashAmount);
 
@@ -208,171 +206,211 @@ contract KashYieldETH {
         userRedeemRequests[msg.sender][batchCycle] = RedeemRequest({
             user: msg.sender,
             kashAmount: kashAmount,
-            tokenOut: tokenOut,
             batchCycle: batchCycle
         });
 
-        uint256 usdEstimate = (kashAmount * currentNAV) / 1e18;
-        batchRedeemsByTokenUSD[batchCycle][tokenOut] += usdEstimate;
+        batchTotalRedeemKash[batchCycle] += kashAmount;
 
         if (!isInBatchRedeem[batchCycle][msg.sender]) {
             batchRedeemUsers[batchCycle].push(msg.sender);
             isInBatchRedeem[batchCycle][msg.sender] = true;
         }
 
-        emit RedeemRequested(msg.sender, kashAmount, tokenOut, batchCycle);
+        emit RedeemRequested(msg.sender, kashAmount, batchCycle);
     }
 
-    /// @notice Cancel a pending mint request and get your deposited asset back. Only before the batch is processed.
+    // Cancel functions (simplified for ETH-only)
     function cancelMintRequest(uint256 batchCycle) external whenNotPaused {
-        require(!batchProcessed[batchCycle], "Batch already processed");
+        require(!batchProcessed[batchCycle], "Processed");
         MintRequest storage req = userMintRequests[msg.sender][batchCycle];
-        require(req.amountIn > 0, "No mint request");
+        require(req.amountIn > 0, "No request");
 
         uint256 amount = req.amountIn;
-        address tokenIn = req.tokenIn;
-        batchMintsByToken[batchCycle][tokenIn] -= amount;
+        batchTotalMintEth[batchCycle] -= amount;
         delete userMintRequests[msg.sender][batchCycle];
 
-        if (tokenIn == ETH_ADDRESS) {
-            payable(msg.sender).transfer(amount);
-        } else {
-            IERC20(tokenIn).safeTransfer(msg.sender, amount);
-        }
-        emit ProtocolInteraction("CANCEL_MINT", tokenIn, amount);
+        payable(msg.sender).transfer(amount);
+        emit ProtocolInteraction("CANCEL_MINT", ETH_ADDRESS, amount);
     }
 
-    /// @notice Cancel a pending redeem request and get your KASH_ETH back. Only before the batch is processed.
     function cancelRedeemRequest(uint256 batchCycle) external whenNotPaused {
-        require(!batchProcessed[batchCycle], "Batch already processed");
+        require(!batchProcessed[batchCycle], "Processed");
         RedeemRequest storage req = userRedeemRequests[msg.sender][batchCycle];
-        require(req.kashAmount > 0, "No redeem request");
+        require(req.kashAmount > 0, "No request");
 
         uint256 kashAmount = req.kashAmount;
-        uint256 usdEstimate = (kashAmount * currentNAV) / 1e18;
-        uint256 current = batchRedeemsByTokenUSD[batchCycle][req.tokenOut];
-        if (current >= usdEstimate) {
-            batchRedeemsByTokenUSD[batchCycle][req.tokenOut] = current - usdEstimate;
-        } else {
-            batchRedeemsByTokenUSD[batchCycle][req.tokenOut] = 0;
-        }
+        batchTotalRedeemKash[batchCycle] -= kashAmount;
         delete userRedeemRequests[msg.sender][batchCycle];
 
         kashTokenEth.transfer(msg.sender, kashAmount);
         emit ProtocolInteraction("CANCEL_REDEEM", address(kashTokenEth), kashAmount);
     }
 
-    function processBatch() public onlyProcessingWindow {
-        uint256 batchCycle = (block.timestamp / 86400) - 1;
-        require(!batchProcessed[batchCycle], "Batch already processed");
+    // Chainlink Upkeep
+    function checkUpkeep(bytes calldata /* checkData */) external view returns (bool upkeepNeeded, bytes memory performData) {
+        uint256 batchCycle = block.timestamp / 86400;
+        uint256 timeOfDay = block.timestamp % 86400;
+        upkeepNeeded = (timeOfDay >= PROCESSING_WINDOW_START && timeOfDay < PROCESSING_WINDOW_END) && !batchProcessed[batchCycle];
+        performData = "";
+    }
+
+    function performUpkeep(bytes calldata /* performData */) external onlyBotOrKeeper {
+        uint256 batchCycle = block.timestamp / 86400;
+        uint8 phase = batchPhase[batchCycle];
+        if (phase == 0) {
+            processBatchPhase1();
+        } else if (phase == 2) {
+            processBatchPhase2();
+        }
+    }
+
+    // Phase 1: Indicative calcs
+    function processBatchPhase1() internal onlyProcessingWindow {
+        uint256 batchCycle = block.timestamp / 86400;
+        require(batchPhase[batchCycle] == 0, "Phase started");
+
+        uint256 ethPrice = getEthPrice(); // Fixed price for batch
+        uint256 indicativeNAV = currentNAV;
 
         uint256 totalMintUSD = 0;
         address[] memory minters = batchMintUsers[batchCycle];
         for (uint256 i = 0; i < minters.length; i++) {
             MintRequest storage req = userMintRequests[minters[i]][batchCycle];
-            if (req.user != address(0)) {
-                req.amountInUSD = getTokenUSD(req.tokenIn, req.amountIn);
+            if (req.amountIn > 0) {
+                req.amountInUSD = (req.amountIn * ethPrice) / 1e18; // Assuming price 18 dec
                 totalMintUSD += req.amountInUSD;
             }
         }
         batchTotalMintValueUSD[batchCycle] = totalMintUSD;
 
         uint256 totalRedeemUSD = 0;
+        uint256 totalRedeemKash = 0;
         address[] memory redeemers = batchRedeemUsers[batchCycle];
         for (uint256 i = 0; i < redeemers.length; i++) {
             RedeemRequest memory req = userRedeemRequests[redeemers[i]][batchCycle];
-            if (req.user != address(0)) {
-                totalRedeemUSD += (req.kashAmount * currentNAV) / 1e18;
+            if (req.kashAmount > 0) {
+                totalRedeemUSD += (req.kashAmount * indicativeNAV) / 1e18;
+                totalRedeemKash += req.kashAmount;
             }
         }
         batchTotalRedeemValueUSD[batchCycle] = totalRedeemUSD;
+        batchTotalRedeemKash[batchCycle] = totalRedeemKash;
 
-        batchNAV[batchCycle] = currentNAV;
+        batchIndicativeNAV[batchCycle] = indicativeNAV;
 
         int256 netPositionUSD = int256(totalMintUSD) - int256(totalRedeemUSD);
-
         if (netPositionUSD > 0) {
-            emit ProtocolInteraction("NET_MINT", address(0), uint256(netPositionUSD));
+            emit ProtocolInteraction("NET_MINT", ETH_ADDRESS, uint256(netPositionUSD));
         } else if (netPositionUSD < 0) {
-            emit ProtocolInteraction("NET_REDEEM", address(0), uint256(-netPositionUSD));
+            emit ProtocolInteraction("NET_REDEEM", ETH_ADDRESS, uint256(-netPositionUSD));
         }
 
-        uint256 totalKashToBurn = 0;
-        for (uint256 i = 0; i < redeemers.length; i++) {
-            RedeemRequest memory req = userRedeemRequests[redeemers[i]][batchCycle];
-            if (req.user != address(0)) {
-                totalKashToBurn += req.kashAmount;
+        batchPhase[batchCycle] = 1;
+        emit BatchPhaseUpdated(batchCycle, 1, indicativeNAV);
+    }
+
+    // Owner marks ops done after Aave/Hyperliquid and updateNAV
+    function markBatchOpsDone(uint256 batchCycle) external onlyOwner {
+        require(batchPhase[batchCycle] == 1, "Wrong phase");
+        batchPhase[batchCycle] = 2;
+        emit BatchPhaseUpdated(batchCycle, 2, currentNAV); // Now exact
+    }
+
+    // Phase 2: Final distributions with exact NAV
+    function processBatchPhase2() internal onlyProcessingWindow {
+        uint256 batchCycle = block.timestamp / 86400;
+        require(batchPhase[batchCycle] == 2, "Ops not done");
+
+        uint256 exactNAV = currentNAV;
+        batchExactNAV[batchCycle] = exactNAV;
+
+        uint256 ethPrice = getEthPrice(); // Same as phase1, but refetch for exactness
+
+        // Calc total mint KASH needed (after fee)
+        uint256 totalMintKash = 0;
+        address[] memory minters = batchMintUsers[batchCycle];
+        for (uint256 i = 0; i < minters.length; i++) {
+            MintRequest memory req = userMintRequests[minters[i]][batchCycle];
+            if (req.amountInUSD > 0) {
+                uint256 amountAfterFee = req.amountInUSD * (10000 - feeBps) / 10000;
+                totalMintKash += (amountAfterFee * 1e18) / exactNAV;
             }
         }
-        if (totalKashToBurn > 0) {
-            kashTokenEth.burn(address(this), totalKashToBurn);
-        }
 
+        uint256 totalRedeemKash = batchTotalRedeemKash[batchCycle];
+
+        // Minters receive exactly totalMintKash (their entitlement). Recycled KASH covers what it can; rest is mint or burn.
+        int256 netKash = int256(totalMintKash) - int256(totalRedeemKash);
+        if (netKash > 0) {
+            kashTokenEth.mint(address(this), uint256(netKash)); // Mint shortfall so we have enough to distribute
+        } else if (netKash < 0) {
+            kashTokenEth.burn(address(this), uint256(-netKash)); // Burn excess: redeemers gave more KASH than minters need
+        }
+        // totalDistributableKash = totalMintKash (minters get exactly what they're entitled to)
+        uint256 totalDistributableKash = totalMintKash;
         for (uint256 i = 0; i < minters.length; i++) {
             address user = minters[i];
             MintRequest memory req = userMintRequests[user][batchCycle];
             if (req.amountInUSD > 0) {
-                uint256 amountAfterFee = req.amountInUSD * (10000 - feeBps) / 10000;
-                uint256 kashAmount = (amountAfterFee * 1e18) / currentNAV;
-                kashTokenEth.mint(user, kashAmount);
-                emit TokensClaimed(user, address(kashTokenEth), kashAmount, true);
+                uint256 userShare = (req.amountInUSD * totalDistributableKash) / batchTotalMintValueUSD[batchCycle];
+                kashTokenEth.transfer(user, userShare);
+                emit TokensClaimed(user, address(kashTokenEth), userShare, true);
             }
+        }
+
+        // Explicit ETH recycling: total ETH needed for redeem payouts vs mint deposits
+        address[] memory redeemers = batchRedeemUsers[batchCycle];
+        uint256 totalRedeemEthNeeded = 0;
+        for (uint256 i = 0; i < redeemers.length; i++) {
+            RedeemRequest memory req = userRedeemRequests[redeemers[i]][batchCycle];
+            if (req.kashAmount > 0) {
+                uint256 usdValue = (req.kashAmount * exactNAV) / 1e18;
+                uint256 usdAfterFee = usdValue * (10000 - feeBps) / 10000;
+                totalRedeemEthNeeded += (usdAfterFee * 1e18) / ethPrice;
+            }
+        }
+
+        require(address(this).balance >= totalRedeemEthNeeded, "Insufficient ETH for redeems");
+
+        uint256 availableDepositEth = batchTotalMintEth[batchCycle];
+        uint256 netEthNeeded = totalRedeemEthNeeded > availableDepositEth ? totalRedeemEthNeeded - availableDepositEth : 0;
+        if (netEthNeeded > 0) {
+            // Owner must have withdrawn netEthNeeded from Aave during ops before Phase 2 (no on-chain check)
+        }
+        uint256 excessMintEth = availableDepositEth > totalRedeemEthNeeded ? availableDepositEth - totalRedeemEthNeeded : 0;
+        if (excessMintEth > 0) {
+            emit ProtocolInteraction("NET_MINT_ETH_DEPLOY", ETH_ADDRESS, excessMintEth); // Signal for owner to deploy to Aave
         }
 
         for (uint256 i = 0; i < redeemers.length; i++) {
             address user = redeemers[i];
             RedeemRequest memory req = userRedeemRequests[user][batchCycle];
-            if (req.user != address(0)) {
-                uint256 usdValue = (req.kashAmount * currentNAV) / 1e18;
+            if (req.kashAmount > 0) {
+                uint256 usdValue = (req.kashAmount * exactNAV) / 1e18;
                 uint256 usdAfterFee = usdValue * (10000 - feeBps) / 10000;
-                uint256 tokenAmount = calculateTokenAmount(req.tokenOut, usdAfterFee);
-                if (req.tokenOut == ETH_ADDRESS) {
-                    payable(user).transfer(tokenAmount);
-                } else {
-                    IERC20(req.tokenOut).safeTransfer(user, tokenAmount);
-                }
-                emit TokensClaimed(user, req.tokenOut, tokenAmount, false);
+                uint256 ethAmount = (usdAfterFee * 1e18) / ethPrice;
+                payable(user).transfer(ethAmount);
+                emit TokensClaimed(user, ETH_ADDRESS, ethAmount, false);
             }
         }
 
         batchProcessed[batchCycle] = true;
+        batchPhase[batchCycle] = 3;
 
-        emit BatchProcessed(batchCycle, totalMintUSD, totalRedeemUSD, currentNAV);
+        emit BatchProcessed(batchCycle, batchTotalMintValueUSD[batchCycle], batchTotalRedeemValueUSD[batchCycle], exactNAV);
     }
 
-    function checkUpkeep(bytes calldata /* checkData */) external view returns (bool upkeepNeeded, bytes memory performData) {
-        uint256 batchCycle = (block.timestamp / 86400) - 1;
-        uint256 timeOfDay = block.timestamp % 86400;
-        upkeepNeeded = (timeOfDay >= PROCESSING_WINDOW_START && timeOfDay < PROCESSING_WINDOW_END) && !batchProcessed[batchCycle];
-        performData = "";
+    function depositToAave(uint256 amount) external onlyOwner {
+        IWETH(wethAddress).deposit{value: amount}();
+        IERC20(wethAddress).forceApprove(aavePoolAddress, amount);
+        IPool(aavePoolAddress).supply(wethAddress, amount, address(this), 0);
+        emit ProtocolInteraction("AAVE_DEPOSIT", wethAddress, amount);
     }
 
-    function performUpkeep(bytes calldata /* performData */) external {
-        processBatch();
-    }
-
-    function depositToAave(address asset, uint256 amount) external onlyOwner {
-        if (asset == ETH_ADDRESS) {
-            IWETH(wethAddress).deposit{value: amount}();
-            IERC20(wethAddress).forceApprove(aavePoolAddress, amount);
-            IPool(aavePoolAddress).supply(wethAddress, amount, address(this), 0);
-            emit ProtocolInteraction("AAVE_DEPOSIT", wethAddress, amount);
-        } else {
-            IERC20(asset).forceApprove(aavePoolAddress, amount);
-            IPool(aavePoolAddress).supply(asset, amount, address(this), 0);
-            emit ProtocolInteraction("AAVE_DEPOSIT", asset, amount);
-        }
-    }
-
-    function withdrawFromAave(address asset, uint256 amount) external onlyOwner {
-        if (asset == ETH_ADDRESS) {
-            IPool(aavePoolAddress).withdraw(wethAddress, amount, address(this));
-            IWETH(wethAddress).withdraw(amount);
-            emit ProtocolInteraction("AAVE_WITHDRAW", ETH_ADDRESS, amount);
-        } else {
-            IPool(aavePoolAddress).withdraw(asset, amount, address(this));
-            emit ProtocolInteraction("AAVE_WITHDRAW", asset, amount);
-        }
+    function withdrawFromAave(uint256 amount) external onlyOwner {
+        IPool(aavePoolAddress).withdraw(wethAddress, amount, address(this));
+        IWETH(wethAddress).withdraw(amount);
+        emit ProtocolInteraction("AAVE_WITHDRAW", ETH_ADDRESS, amount);
     }
 
     function borrowFromAave(address asset, uint256 amount) external onlyOwner {
@@ -386,12 +424,21 @@ contract KashYieldETH {
         emit ProtocolInteraction("AAVE_REPAY", asset, amount);
     }
 
+    function addCollateralToAave(uint256 amount) external onlyOwner {
+        IWETH(wethAddress).deposit{value: amount}();
+        IERC20(wethAddress).forceApprove(aavePoolAddress, amount);
+        IPool(aavePoolAddress).supply(wethAddress, amount, address(this), 0);
+        emit ProtocolInteraction("AAVE_ADD_COLLATERAL", wethAddress, amount);
+    }
+
+    // --- Hyperliquid ---
     function setHyperliquid(address _hyperliquidAddress) external onlyOwner {
         hyperliquidAddress = _hyperliquidAddress;
     }
 
     function depositToHyperliquid(uint256 amount) external onlyOwner {
         require(hyperliquidAddress != address(0), "Hyperliquid not set");
+        require(usdcAddress != address(0), "USDC not set");
         require(amount > 0, "Amount must be > 0");
         IERC20(usdcAddress).forceApprove(hyperliquidAddress, amount);
         IHyperliquid(hyperliquidAddress).depositToSpotWallet(usdcAddress, amount);
@@ -400,6 +447,7 @@ contract KashYieldETH {
 
     function withdrawFromHyperliquid(uint256 amount) external onlyOwner {
         require(hyperliquidAddress != address(0), "Hyperliquid not set");
+        require(usdcAddress != address(0), "USDC not set");
         require(amount > 0, "Amount must be > 0");
         IHyperliquid(hyperliquidAddress).withdrawFromSpotWallet(usdcAddress, amount);
         emit ProtocolInteraction("HL_WITHDRAW", usdcAddress, amount);
@@ -407,6 +455,7 @@ contract KashYieldETH {
 
     function addCollateralToHyperliquid(uint256 amount) external onlyOwner {
         require(hyperliquidAddress != address(0), "Hyperliquid not set");
+        require(usdcAddress != address(0), "USDC not set");
         require(amount > 0, "Amount must be > 0");
         IERC20(usdcAddress).forceApprove(hyperliquidAddress, amount);
         IHyperliquid(hyperliquidAddress).depositToSpotWallet(usdcAddress, amount);
@@ -417,38 +466,36 @@ contract KashYieldETH {
         require(hyperliquidAddress != address(0), "Hyperliquid not set");
         require(size > 0, "Size must be > 0");
         IHyperliquid(hyperliquidAddress).openPerpPosition(symbol, size, false);
-        emit ProtocolInteraction("HL_OPEN_SHORT", address(0), size);
+        emit ProtocolInteraction("HL_OPEN_SHORT", ETH_ADDRESS, size);
     }
 
     function closeShort(string calldata symbol) external onlyOwner {
         require(hyperliquidAddress != address(0), "Hyperliquid not set");
         IHyperliquid(hyperliquidAddress).closePerpPosition(symbol);
-        emit ProtocolInteraction("HL_CLOSE_SHORT", address(0), 0);
+        emit ProtocolInteraction("HL_CLOSE_SHORT", ETH_ADDRESS, 0);
     }
 
-    function spotBuyOnHyperliquid(address tokenOut, uint256 usdcAmount) external onlyOwner {
+    function spotBuyOnHyperliquid(uint256 usdcAmount) external onlyOwner {
         require(hyperliquidAddress != address(0), "Hyperliquid not set");
+        require(usdcAddress != address(0), "USDC not set");
         require(usdcAmount > 0, "Amount must be > 0");
-        require(tokenOut == ETH_ADDRESS || tokenOut == wbtcAddress, "tokenOut must be ETH or wBTC");
-        uint256 amountOut = IHyperliquid(hyperliquidAddress).tradeSpot(usdcAddress, tokenOut, usdcAmount);
-        emit ProtocolInteraction("HL_SPOT_BUY", tokenOut, amountOut);
+        uint256 amountOut = IHyperliquid(hyperliquidAddress).tradeSpot(usdcAddress, ETH_ADDRESS, usdcAmount);
+        emit ProtocolInteraction("HL_SPOT_BUY", ETH_ADDRESS, amountOut);
     }
 
-    function spotSellOnHyperliquid(address tokenIn, uint256 amount) external payable onlyOwner {
+    function spotSellOnHyperliquid(uint256 amount) external payable onlyOwner {
         require(hyperliquidAddress != address(0), "Hyperliquid not set");
+        require(usdcAddress != address(0), "USDC not set");
         require(amount > 0, "Amount must be > 0");
-        require(tokenIn == ETH_ADDRESS || tokenIn == wbtcAddress, "tokenIn must be ETH or wBTC");
-        if (tokenIn == ETH_ADDRESS) {
-            require(msg.value == amount, "ETH amount must match msg.value");
-        }
-        uint256 amountOut = IHyperliquid(hyperliquidAddress).tradeSpot{value: tokenIn == ETH_ADDRESS ? amount : 0}(tokenIn, usdcAddress, amount);
+        require(msg.value == amount, "ETH amount must match msg.value");
+        uint256 amountOut = IHyperliquid(hyperliquidAddress).tradeSpot{value: amount}(ETH_ADDRESS, usdcAddress, amount);
         emit ProtocolInteraction("HL_SPOT_SELL", usdcAddress, amountOut);
     }
 
     function cancelHyperliquidOrder(bytes32 orderId) external onlyOwner {
         require(hyperliquidAddress != address(0), "Hyperliquid not set");
         IHyperliquid(hyperliquidAddress).cancelOrder(orderId);
-        emit ProtocolInteraction("HL_CANCEL_ORDER", address(0), 0);
+        emit ProtocolInteraction("HL_CANCEL_ORDER", ETH_ADDRESS, 0);
     }
 
     function getHyperliquidSpotBalance() external view returns (uint256) {
@@ -472,6 +519,7 @@ contract KashYieldETH {
         return IHyperliquid(hyperliquidAddress).getOpenOrderIds(address(this));
     }
 
+    // --- Admin: NAV and config (call updateNAV after Aave/Hyperliquid ops, before markBatchOpsDone) ---
     function updateNAV(uint256 newNAV) external onlyOwner {
         require(newNAV > 0, "NAV must be greater than 0");
         currentNAV = newNAV;
@@ -488,26 +536,18 @@ contract KashYieldETH {
         aavePoolAddress = _aavePool;
     }
 
-    function setTokenAddresses(
-        address _weth,
-        address _wbtc,
-        address _usdt,
-        address _usdc
-    ) external onlyOwner {
-        require(_weth != address(0) && _wbtc != address(0) && _usdt != address(0) && _usdc != address(0), "Invalid address");
+    function setWethAddress(address _weth) external onlyOwner {
+        require(_weth != address(0), "Invalid address");
         wethAddress = _weth;
-        wbtcAddress = _wbtc;
-        usdtAddress = _usdt;
+    }
+
+    function setUsdcAddress(address _usdc) external onlyOwner {
         usdcAddress = _usdc;
     }
 
-    function setOracle(address token, address oracle) external onlyOwner {
-        require(oracle != address(0), "Invalid oracle address");
-        tokenOracles[token] = oracle;
-    }
-
-    function setTokenDecimals(address token, uint8 decimals) external onlyOwner {
-        tokenDecimals[token] = decimals;
+    function setEthOracle(address _oracle) external onlyOwner {
+        require(_oracle != address(0), "Invalid oracle address");
+        ethOracle = _oracle;
     }
 
     function pause() external onlyOwner {
@@ -518,10 +558,36 @@ contract KashYieldETH {
         paused = false;
     }
 
-    /// @notice Withdraw excess ETH from the contract to the owner (e.g. after redeploying or draining protocol).
-    /// Use with care: ensure no user redemptions are pending that need this ETH.
+    /// @notice Returns ETH reserved for users: unprocessed cycle (mint + redeem estimate), or if processed then mint ETH not yet deployed to Aave.
+    function getReservedEth() public view returns (uint256) {
+        uint256 currentCycle = block.timestamp / 86400;
+        uint256 reserved = 0;
+
+        if (!batchProcessed[currentCycle]) {
+            reserved += batchTotalMintEth[currentCycle];
+            uint256 redeemUsdEstimate = (batchTotalRedeemKash[currentCycle] * currentNAV) / 1e18;
+            uint256 redeemEthEstimate = (redeemUsdEstimate * (10000 - feeBps) / 10000 * 1e18) / getEthPrice();
+            reserved += redeemEthEstimate;
+        } else {
+            uint256 minted = batchTotalMintEth[currentCycle];
+            uint256 deployed = batchMintEthDeployedToAave[currentCycle];
+            if (minted > deployed) reserved += (minted - deployed);
+        }
+        return reserved;
+    }
+
+    /// @notice Call after depositing a cycle's mint ETH to Aave. Only owner.
+    function markMintEthDeployed(uint256 batchCycle, uint256 amount) external onlyOwner {
+        uint256 minted = batchTotalMintEth[batchCycle];
+        require(batchMintEthDeployedToAave[batchCycle] + amount <= minted, "Exceeds mint ETH for cycle");
+        batchMintEthDeployedToAave[batchCycle] += amount;
+        emit ProtocolInteraction("MINT_ETH_DEPLOYED", ETH_ADDRESS, amount);
+    }
+
+    /// @notice Withdraw only excess ETH to the owner. Cannot withdraw reserved ETH.
     function ownerWithdrawEth(uint256 amount) external onlyOwner {
-        require(amount <= address(this).balance, "Insufficient balance");
+        uint256 reserved = getReservedEth();
+        require(amount + reserved <= address(this).balance, "Insufficient excess ETH");
         payable(owner).transfer(amount);
         emit ProtocolInteraction("OWNER_WITHDRAW_ETH", ETH_ADDRESS, amount);
     }
@@ -530,11 +596,7 @@ contract KashYieldETH {
         require(paused, "Not paused");
         MintRequest storage req = userMintRequests[msg.sender][batchCycle];
         require(req.user == msg.sender && req.amountIn > 0 && req.amountInUSD == 0, "Invalid request");
-        if (req.tokenIn == ETH_ADDRESS) {
-            payable(msg.sender).transfer(req.amountIn);
-        } else {
-            IERC20(req.tokenIn).safeTransfer(msg.sender, req.amountIn);
-        }
+        payable(msg.sender).transfer(req.amountIn);
         delete userMintRequests[msg.sender][batchCycle];
     }
 
@@ -544,6 +606,13 @@ contract KashYieldETH {
         require(req.user == msg.sender && req.kashAmount > 0, "Invalid request");
         kashTokenEth.transfer(msg.sender, req.kashAmount);
         delete userRedeemRequests[msg.sender][batchCycle];
+    }
+
+    function getEthPrice() public view returns (uint256) {
+        (, int256 price,,,) = AggregatorV3Interface(ethOracle).latestRoundData();
+        require(price > 0, "Invalid price");
+        uint8 dec = AggregatorV3Interface(ethOracle).decimals();
+        return uint256(price) * 10 ** (18 - dec);
     }
 
     function getNAV() external view returns (uint256) {
@@ -584,41 +653,7 @@ contract KashYieldETH {
         );
     }
 
-    function isSupportedToken(address token) public view returns (bool) {
-        return token == ETH_ADDRESS ||
-               token == wethAddress ||
-               token == wbtcAddress ||
-               token == usdtAddress ||
-               token == usdcAddress;
-    }
-
-    function getTokenUSD(address token, uint256 amount) public view returns (uint256) {
-        if (amount == 0) return 0;
-        address oracle = tokenOracles[token];
-        require(oracle != address(0), "No oracle for token");
-        (, int256 price,,,) = AggregatorV3Interface(oracle).latestRoundData();
-        require(price > 0, "Invalid oracle price");
-        uint8 priceDec = 8;
-        uint8 tokDec = tokenDecimals[token];
-        return (amount * uint256(price) * 10**18) / (10**tokDec * 10**priceDec);
-    }
-
-    function calculateTokenAmount(address token, uint256 usdValue) public view returns (uint256) {
-        if (usdValue == 0) return 0;
-        address oracle = tokenOracles[token];
-        require(oracle != address(0), "No oracle for token");
-        (, int256 price,,,) = AggregatorV3Interface(oracle).latestRoundData();
-        require(price > 0, "Invalid oracle price");
-        uint8 priceDec = 8;
-        uint8 tokDec = tokenDecimals[token];
-        return (usdValue * 10**tokDec * 10**priceDec) / (uint256(price) * 10**18);
-    }
-
     function getCurrentBatchCycle() external view returns (uint256) {
         return block.timestamp / 86400;
-    }
-
-    function testMintKashEth(address to, uint256 amount) external onlyOwner {
-        kashTokenEth.mint(to, amount);
     }
 }

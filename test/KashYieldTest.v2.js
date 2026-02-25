@@ -255,8 +255,7 @@ describe("KashYieldETH - Final Version", function () {
       await kashTokenEth.connect(user1).approve(kashYieldEth.target, ethers.parseEther("500"));
       await kashYieldEth.connect(user1).requestRedeem(ethers.parseEther("500"), ethers.ZeroAddress);
 
-      // Move to processing window (next day)
-      await moveToNextDayProcessingWindow();
+      await moveToProcessingWindow();
 
       const balanceBefore1 = await kashTokenEth.balanceOf(user1.address);
       const balanceBefore2 = await kashTokenEth.balanceOf(user2.address);
@@ -301,7 +300,7 @@ describe("KashYieldETH - Final Version", function () {
       await mockUsdc.connect(user1).approve(kashYieldEth.target, deposit);
       await kashYieldEth.connect(user1).requestMint(mockUsdc.target, deposit);
 
-      await moveToNextDayProcessingWindow();
+      await moveToProcessingWindow();
 
       await kashYieldEth.processBatch();
 
@@ -340,13 +339,64 @@ describe("KashYieldETH - Final Version", function () {
     });
   });
 
+  describe("Owner withdraw ETH", function () {
+    it("Should not allow owner to withdraw ETH reserved for user mint", async function () {
+      await moveToUserWindow();
+      const userDeposit = ethers.parseEther("1");
+      await kashYieldEth.connect(user1).requestMint(ethers.ZeroAddress, 0, { value: userDeposit });
+
+      const reserved = await kashYieldEth.getReservedEth();
+      expect(reserved).to.equal(userDeposit);
+
+      const balance = await ethers.provider.getBalance(kashYieldEth.target);
+      await expect(kashYieldEth.connect(owner).ownerWithdrawEth(balance))
+        .to.be.revertedWith("Insufficient excess ETH");
+    });
+
+    it("Should allow owner to withdraw excess ETH after user cancels mint", async function () {
+      await moveToUserWindow();
+      const userDeposit = ethers.parseEther("0.5");
+      await kashYieldEth.connect(user1).requestMint(ethers.ZeroAddress, 0, { value: userDeposit });
+      const batchCycle = await kashYieldEth.getCurrentBatchCycle();
+      await kashYieldEth.connect(user1).cancelMintRequest(batchCycle);
+
+      const reserved = await kashYieldEth.getReservedEth();
+      expect(reserved).to.equal(0);
+      const balance = await ethers.provider.getBalance(kashYieldEth.target);
+      if (balance > 0n) {
+        await expect(kashYieldEth.connect(owner).ownerWithdrawEth(balance)).to.not.be.reverted;
+      }
+    });
+
+    it("Should reserve processed cycle mint ETH until markMintEthDeployed (23:50~00:00 window)", async function () {
+      await moveToUserWindow();
+      const userDeposit = ethers.parseEther("1");
+      await kashYieldEth.connect(user1).requestMint(ethers.ZeroAddress, 0, { value: userDeposit });
+      const batchCycle = await kashYieldEth.getCurrentBatchCycle();
+
+      await moveToProcessingWindow();
+      await kashYieldEth.processBatch();
+
+      const reservedAfterBatch = await kashYieldEth.getReservedEth();
+      expect(reservedAfterBatch).to.equal(userDeposit);
+
+      const balance = await ethers.provider.getBalance(kashYieldEth.target);
+      await expect(kashYieldEth.connect(owner).ownerWithdrawEth(balance))
+        .to.be.revertedWith("Insufficient excess ETH");
+
+      await kashYieldEth.connect(owner).markMintEthDeployed(batchCycle, userDeposit);
+      const reservedAfterMark = await kashYieldEth.getReservedEth();
+      expect(reservedAfterMark).to.equal(0);
+    });
+  });
+
   describe("Hyperliquid Events (for off-chain bot)", function () {
     it("Should emit NET_MINT or NET_REDEEM for bot to act on Hyperliquid", async function () {
       await moveToUserWindow();
 
       await kashYieldEth.connect(user1).requestMint(ethers.ZeroAddress, 0, { value: ethers.parseEther("5") });
 
-      await moveToNextDayProcessingWindow();
+      await moveToProcessingWindow();
 
       await expect(kashYieldEth.processBatch())
         .to.emit(kashYieldEth, "ProtocolInteraction")
@@ -393,7 +443,7 @@ describe("KashYieldETH - Final Version", function () {
       await kashYieldEth.connect(user1).requestMint(ethers.ZeroAddress, 0, { value: ethers.parseEther("1") });
       const batchCycle = await kashYieldEth.getCurrentBatchCycle();
 
-      await moveToNextDayProcessingWindow();
+      await moveToProcessingWindow();
       await kashYieldEth.processBatch();
 
       await expect(kashYieldEth.connect(user1).cancelMintRequest(batchCycle))
@@ -435,7 +485,7 @@ describe("KashYieldETH - Final Version", function () {
       await kashYieldEth.connect(user1).requestRedeem(ethers.parseEther("200"), ethers.ZeroAddress);
       const batchCycle = await kashYieldEth.getCurrentBatchCycle();
 
-      await moveToNextDayProcessingWindow();
+      await moveToProcessingWindow();
       await kashYieldEth.processBatch();
 
       await expect(kashYieldEth.connect(user1).cancelRedeemRequest(batchCycle))

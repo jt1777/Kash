@@ -150,37 +150,32 @@ export class ChainlinkAutomationManager {
   // ============================================================================
 
   /**
-   * Check if batch processing is needed
+   * Check if batch processing is needed.
+   * Upkeep needed when in processing window and (phase 0 with requests, or phase 2).
    */
   private async checkBatchProcessorUpkeep(): Promise<{ upkeepNeeded: boolean; performData: string }> {
     try {
-      // Check if we're in processing window
       const isProcessingWindow = await this.kashYield.isProcessingWindow();
       if (!isProcessingWindow) {
         return { upkeepNeeded: false, performData: '0x' };
       }
 
-      // Get yesterday's batch cycle
       const currentCycle = await this.kashYield.getCurrentBatchCycle();
-      const batchCycle = currentCycle - 1n;
+      const batchCycle = currentCycle;
 
-      // Check if already processed
       const batchInfo = await this.kashYield.getBatchInfo(batchCycle);
       if (batchInfo.processed) {
         return { upkeepNeeded: false, performData: '0x' };
       }
 
-      // Check if there are any pending requests
-      if (batchInfo.mintUsersCount === 0 && batchInfo.redeemUsersCount === 0) {
-        return { upkeepNeeded: false, performData: '0x' };
+      const phase = await this.kashYield.batchPhase(batchCycle);
+      const phaseNum = Number(phase);
+      const hasRequests = batchInfo.mintUsersCount > 0n || batchInfo.redeemUsersCount > 0n;
+      if (phaseNum === 0 && !hasRequests) return { upkeepNeeded: false, performData: '0x' };
+      if (phaseNum === 0 || phaseNum === 2) {
+        return { upkeepNeeded: true, performData: '0x01' };
       }
-
-      // Upkeep needed!
-      return { 
-        upkeepNeeded: true, 
-        performData: '0x01' // Type 1 = Batch Processor
-      };
-
+      return { upkeepNeeded: false, performData: '0x' };
     } catch (error) {
       console.error('Error checking batch processor upkeep:', error);
       return { upkeepNeeded: false, performData: '0x' };
