@@ -197,7 +197,7 @@ export function MintForm() {
     <div className="space-y-4">
       {/* Token Selector */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-2">Select Token (ETH product → KASH_ETH)</label>
+        {/*<label className="block text-sm font-medium text-gray-700 mb-2">Select Token (ETH product → KASH_ETH)</label>*/}
         <div className="grid grid-cols-2 gap-2">
           {MINT_TOKENS_ETH.map((token) => {
             const isDisabled = 'disabled' in token && token.disabled;
@@ -220,9 +220,9 @@ export function MintForm() {
             );
           })}
         </div>
-        <p className="text-xs text-gray-500 mt-1.5">
+        {/*<p className="text-xs text-gray-500 mt-1.5">
           Deposit native ETH (no approval). The protocol wraps ETH to wETH when supplying to Aave. wBTC (KASH_BTC) coming soon.
-        </p>
+        </p>*/}
       </div>
 
       {/* Amount Input */}
@@ -299,9 +299,9 @@ export function MintForm() {
         </div>
       )}
 
-      <p className="text-xs text-gray-500 text-center">
+      {/*<p className="text-xs text-gray-500 text-center">
         Fee: 0.03% | Processed at next batch (23:50 UTC)
-      </p>
+      </p>*/}
     </div>
   );
 }

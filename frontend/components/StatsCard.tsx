@@ -5,15 +5,13 @@ import { useQuery } from '@tanstack/react-query';
 import { CONTRACTS } from '@/lib/contracts/addresses';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 import { kashTokenABI } from '@/lib/contracts/kashTokenABI';
-import { formatEther, formatUnits, zeroAddress } from 'viem';
+import { formatEther } from 'viem';
 import { useAccount } from 'wagmi';
 import { useMemo } from 'react';
 
-const TOKEN_INFO: Record<string, { symbol: string; decimals: number }> = {
-  [zeroAddress.toLowerCase()]: { symbol: 'ETH', decimals: 18 },
-  [(CONTRACTS.tokens.weth as string).toLowerCase()]: { symbol: 'wETH', decimals: 18 },
-  [(CONTRACTS.tokens.wbtc as string).toLowerCase()]: { symbol: 'wBTC', decimals: 8 },
-};
+// The current smart contract only takes ETH or wETH, not wBTC. We will create and link
+// another smart contract for wBTC to this front end, but at a later date. In the future,
+// the front end will need to read from 2 different contracts (1 for ETH and 1 for wBTC).
 
 export function StatsCard() {
   const { address } = useAccount();
@@ -25,6 +23,12 @@ export function StatsCard() {
     functionName: 'currentNAV',
   });
 
+  // Deposits: read only from chain (event logs), no contract view calls.
+  // MintRequested = user requested a mint (amountIn, batchCycle). BatchProcessed = batch settled.
+  // Settled ETH = sum of amountIn from MintRequested where batchCycle appears in BatchProcessed.
+  // A future smart contract should expose a view function that returns the total amount of ETH
+  // deposited by each wallet (e.g. totalDepositedEth(address user) returns uint256), so the
+  // front end can call it once instead of deriving from events.
   const { data: mintEvents } = useQuery({
     queryKey: ['userMintEvents', address, publicClient?.chain?.id],
     queryFn: async () => {
@@ -40,6 +44,20 @@ export function StatsCard() {
     enabled: !!publicClient && !!address,
   });
 
+  const { data: batchProcessedEvents } = useQuery({
+    queryKey: ['batchProcessedEvents', publicClient?.chain?.id],
+    queryFn: async () => {
+      if (!publicClient) return [];
+      const logs = await publicClient.getContractEvents({
+        address: CONTRACTS.kashYieldEth,
+        abi: kashYieldABI,
+        eventName: 'BatchProcessed',
+      });
+      return logs;
+    },
+    enabled: !!publicClient,
+  });
+
   const { data: kashBalance } = useReadContract({
     address: CONTRACTS.kashTokenEth,
     abi: kashTokenABI,
@@ -47,28 +65,25 @@ export function StatsCard() {
     args: address ? [address] : undefined,
   });
 
-  const userTotalDeposits = useMemo(() => {
-    if (!mintEvents?.length) return null;
-    const totals: Record<string, bigint> = {};
+  const processedBatchCycles = useMemo(() => {
+    if (!batchProcessedEvents?.length) return new Set<bigint>();
+    return new Set(batchProcessedEvents.map((e) => e.args.batchCycle).filter((c): c is bigint => c !== undefined));
+  }, [batchProcessedEvents]);
+
+  const settledFromChain = useMemo(() => {
+    if (!mintEvents?.length || processedBatchCycles.size === 0) return { settledEth: 0n, settledCount: 0 };
+    let settledEth = 0n;
+    let settledCount = 0;
     for (const log of mintEvents) {
-      const tokenIn = log.args.tokenIn;
+      const batchCycle = log.args.batchCycle;
       const amountIn = log.args.amountIn;
-      if (tokenIn !== undefined && amountIn !== undefined) {
-        const key = (tokenIn as string).toLowerCase();
-        totals[key] = (totals[key] ?? 0n) + amountIn;
+      if (batchCycle !== undefined && processedBatchCycles.has(batchCycle) && amountIn !== undefined) {
+        settledEth += amountIn;
+        settledCount += 1;
       }
     }
-    const parts: string[] = [];
-    for (const [tokenKey, amount] of Object.entries(totals)) {
-      if (amount === 0n) continue;
-      const info = TOKEN_INFO[tokenKey];
-      const symbol = info?.symbol ?? 'Asset';
-      const decimals = info?.decimals ?? 18;
-      const formatted = Number(formatUnits(amount, decimals)).toLocaleString(undefined, { maximumFractionDigits: 6 });
-      parts.push(`${formatted} ${symbol}`);
-    }
-    return parts.length > 0 ? parts.join(' · ') : null;
-  }, [mintEvents]);
+    return { settledEth, settledCount };
+  }, [mintEvents, processedBatchCycles]);
 
   return (
     <>
@@ -99,11 +114,20 @@ export function StatsCard() {
           </div>
         </div>
         <p className="text-3xl font-bold text-gray-900 leading-tight">
-          {userTotalDeposits ?? (address ? '—' : '0')}
+          {address
+            ? settledFromChain.settledEth > 0n
+              ? `${Number(formatEther(settledFromChain.settledEth)).toLocaleString(undefined, { maximumFractionDigits: 4 })} ETH`
+              : '0.00 ETH'
+            : '—'}
         </p>
         <p className="text-xs text-gray-500 mt-1">
-          {userTotalDeposits ? 'Your total deposits' : (address ? 'No deposits yet' : 'Connect wallet')}
+          {address ? '' : 'Connect wallet'}
         </p>
+        {address && (mintEvents?.length ?? 0) > 0 && (
+          <p className="text-xs text-gray-500 mt-0.5">
+            {mintEvents!.length} request{mintEvents!.length !== 1 ? 's' : ''} · {settledFromChain.settledCount} settled
+          </p>
+        )}
       </div>
 
       <div className="bg-white rounded-xl shadow-md p-6 border border-gray-100">

@@ -255,7 +255,7 @@ function AppContent() {
               </div>
               <div>
                 <h1 className="text-2xl font-bold app-title">Kash - Enhanced Yield Product</h1>
-                <p className="text-xs app-subtitle">Indicative Yields: wBTC 13%/wETH 10%</p>
+                <p className="text-xs app-subtitle">Indicative Yields: wBTC 13%  wETH 10%</p>
               </div>
             </Link>
           </header>

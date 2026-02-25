@@ -163,4 +163,26 @@ export const kashYieldABI = [
     name: "RedeemRequested",
     type: "event",
   },
+  {
+    anonymous: false,
+    inputs: [
+      { indexed: true, name: "batchCycle", type: "uint256" },
+      { indexed: false, name: "totalMintValueUSD", type: "uint256" },
+      { indexed: false, name: "totalRedeemValueUSD", type: "uint256" },
+      { indexed: false, name: "exactNAV", type: "uint256" },
+    ],
+    name: "BatchProcessed",
+    type: "event",
+  },
+  {
+    anonymous: false,
+    inputs: [
+      { indexed: true, name: "user", type: "address" },
+      { indexed: true, name: "token", type: "address" },
+      { indexed: false, name: "amount", type: "uint256" },
+      { indexed: false, name: "isMint", type: "bool" },
+    ],
+    name: "TokensClaimed",
+    type: "event",
+  },
 ] as const;

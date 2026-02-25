@@ -178,7 +178,7 @@ export function RedeemForm() {
     <div className="space-y-4">
       {/* Token Selector */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-2">Redeem Token</label>
+        {/*<label className="block text-sm font-medium text-gray-700 mb-2">Redeem Token</label>*/}
         <div className="grid grid-cols-2 gap-2">
           {REDEEM_TOKENS.map((token) => {
             const isDisabled = token.disabled;
@@ -201,9 +201,9 @@ export function RedeemForm() {
             );
           })}
         </div>
-        <p className="text-xs text-gray-500 mt-1.5">
+        {/*<p className="text-xs text-gray-500 mt-1.5">
           KASH-ETH redeems to wETH. KASH-BTC coming soon.
-        </p>
+        </p>*/}
       </div>
 
       {/* Amount Input */}
@@ -268,9 +268,9 @@ export function RedeemForm() {
         </button>
       </div>
 
-      <p className="text-xs text-gray-500 text-center">
+      {/*<p className="text-xs text-gray-500 text-center">
         Fee: 0.03% | Processed at next batch (23:50 UTC)
-      </p>
+      </p>*/}
     </div>
   );
 }
