@@ -260,9 +260,12 @@ export class BatchProcessor {
    * Handle NET_MINT - Deploy capital to earn yield
    *
    * Strategy (net mints vs redemptions):
-   * 1. Send the actual net-deposited asset to Aave (ETH→wETH, wETH, or wBTC). No conversion to USDC.
+   * 1. Send the actual net-deposited asset to Aave (ETH→wETH, wETH). No conversion to USDC.
    * 2. Borrow 70% of that deposit’s USD value as USDC and send to Hyperliquid as collateral.
-   * 3. Open a 1.7x short on Hyperliquid in the same asset (ETH or wBTC) as was minted.
+   * 3. Swap USDC to ETH on Hyperliquid (step 2b: spotBuyOnHyperliquid) — already in code.
+   * 4. Transfer from Spot to Perp: real HL uses API (spot_perp_transfer), not on-chain — add
+   *    in this file only when integrating real HL; no contract change. Mock needs no transfer.
+   * 5. Open a 1.7x short on Hyperliquid in the same asset (ETH or wBTC) as was minted.
    *
    * @param amount Net mint amount in USD (18 decimals)
    */
@@ -292,6 +295,8 @@ export class BatchProcessor {
       console.log(`   Step 2b: Spot buy ETH on Hyperliquid`);
       const txSpot = await this.kashYield.spotBuyOnHyperliquid(borrowUsdcUnits);
       await txSpot.wait();
+      // Optional (real HL only): call Hyperliquid API spot_perp_transfer(amount, to_perp=true)
+      // to move ETH or USDC from spot to perp margin. No contract change needed — add here if needed.
 
       const leverageScaled = BigInt(Math.round(config.strategy.shortLeverage * 100));
       const shortSizeUSD = (amountUSD * leverageScaled) / 100n;
@@ -307,7 +312,11 @@ export class BatchProcessor {
   }
 
   /**
-   * Handle NET_REDEEM - Withdraw capital (close short, spot sell ETH→USDC, withdraw USDC, repay Aave, withdraw ETH).
+   * Handle NET_REDEEM - Withdraw capital (reverse of NET_MINT).
+   *
+   * Unwind flow: 1) Cover short; 2) Send ETH from perp to spot on HL (API, real HL only);
+   * 3) Sell ETH for USDC on HL; 4) Withdraw USDC from HL; 5) Repay Aave; 6) Withdraw ETH from Aave.
+   *
    * @param amountUSD Net redeem amount in USD (18 decimals)
    */
   private async handleNetRedeem(amountUSD: bigint, _asset: string): Promise<void> {
@@ -317,6 +326,8 @@ export class BatchProcessor {
     try {
       console.log(`   Step 1: Close ETH short on Hyperliquid`);
       await this.closeShortOnHyperliquid();
+      // Optional (real HL only): call Hyperliquid API spot_perp_transfer(amount, to_perp=false)
+      // to move ETH (or USDC) from perp to spot before selling. No contract change needed.
 
       const ltv = BigInt(config.strategy.borrowLtvPct);
       const usdcToWithdrawUSD = (amountUSD * ltv) / 100n;
