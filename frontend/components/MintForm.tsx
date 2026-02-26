@@ -2,16 +2,10 @@
 
 import { useState, useMemo } from 'react';
 import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadContract, useEstimateFeesPerGas } from 'wagmi';
-import { CONTRACTS, ARBITRUM_SEPOLIA_BLOCK_EXPLORER, ARBITRUM_SEPOLIA_CHAIN_ID } from '@/lib/contracts/addresses';
+import { CONTRACTS, ARBITRUM_SEPOLIA_BLOCK_EXPLORER } from '@/lib/contracts/addresses';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 import { kashTokenABI } from '@/lib/contracts/kashTokenABI';
 import { parseEther, parseUnits, zeroAddress } from 'viem';
-
-const GWEI = 10n ** 9n;
-const FEE_BUFFER_PERCENT = 120n; // 20% buffer over estimated
-// L2 (Arbitrum Sepolia) gas is ~0.02–0.1 gwei; a 30 gwei floor would make wallet think gas costs 300x+ more → "Insufficient funds"
-const MIN_MAX_FEE_GWEI_MAINNET = 30n;
-const MIN_MAX_FEE_GWEI_ARBITRUM_SEPOLIA = 1n;
 
 // ETH product: single "ETH" option (native ETH; protocol wraps to wETH for Aave). wBTC shown but disabled until KashYieldBTC.
 const MINT_TOKENS_ETH = [
@@ -21,22 +15,21 @@ const MINT_TOKENS_ETH = [
 const TOKENS = MINT_TOKENS_ETH;
 
 export function MintForm() {
-  const { address, chain } = useAccount();
+  const { address } = useAccount();
   const [selectedToken, setSelectedToken] = useState(MINT_TOKENS_ETH[0]!);
   const [amount, setAmount] = useState('');
 
-  const minFeeGwei = chain?.id === ARBITRUM_SEPOLIA_CHAIN_ID ? MIN_MAX_FEE_GWEI_ARBITRUM_SEPOLIA : MIN_MAX_FEE_GWEI_MAINNET;
   const { data: feesPerGas } = useEstimateFeesPerGas();
   const gasOptions = useMemo(() => {
-    const raw = feesPerGas?.maxFeePerGas ?? minFeeGwei * GWEI;
-    const withBuffer = (raw * FEE_BUFFER_PERCENT) / 100n;
-    const minFee = minFeeGwei * GWEI;
-    const maxFeePerGas = withBuffer > minFee ? withBuffer : minFee;
+    if (!feesPerGas?.maxFeePerGas) return {}; // Fallback to wagmi defaults if no estimate
+    // No min floor on Sepolia—network is cheap; trust estimates
+    const raw = feesPerGas.maxFeePerGas;
+    const withBuffer = (raw * 110n) / 100n; // Lighter 10% buffer—enough for L2 fluctuations
     return {
-      maxFeePerGas,
-      maxPriorityFeePerGas: feesPerGas?.maxPriorityFeePerGas,
+      maxFeePerGas: withBuffer,
+      maxPriorityFeePerGas: feesPerGas.maxPriorityFeePerGas,
     };
-  }, [feesPerGas?.maxFeePerGas, feesPerGas?.maxPriorityFeePerGas, minFeeGwei]);
+  }, [feesPerGas]);
 
   const { data: allowance } = useReadContract({
     address: selectedToken.address as `0x${string}`,
