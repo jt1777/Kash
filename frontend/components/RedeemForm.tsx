@@ -108,7 +108,7 @@ export function RedeemForm() {
       address: CONTRACTS.kashYieldEth,
       abi: kashYieldABI,
       functionName: 'requestRedeem',
-      args: [parsedAmount, selectedToken.address as `0x${string}`],
+      args: [parsedAmount],
       ...gasOptions,
     });
   };

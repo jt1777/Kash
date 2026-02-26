@@ -132,7 +132,7 @@ export function MintForm() {
           address: CONTRACTS.kashYieldEth,
           abi: kashYieldABI,
           functionName: 'requestMint',
-          args: [zeroAddress, BigInt(0)],
+          args: [BigInt(0)],
           value: parsedAmount,
           ...gasOptions,
         });
@@ -141,7 +141,7 @@ export function MintForm() {
           address: CONTRACTS.kashYieldEth,
           abi: kashYieldABI,
           functionName: 'requestMint',
-          args: [selectedToken.address as `0x${string}`, parsedAmount],
+          args: [parsedAmount],
           ...gasOptions,
         });
       }

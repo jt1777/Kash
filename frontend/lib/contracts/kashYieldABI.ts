@@ -108,7 +108,6 @@ export const kashYieldABI = [
   // Write functions
   {
     inputs: [
-      { name: "tokenIn", type: "address" },
       { name: "amount", type: "uint256" },
     ],
     name: "requestMint",
@@ -119,7 +118,6 @@ export const kashYieldABI = [
   {
     inputs: [
       { name: "kashAmount", type: "uint256" },
-      { name: "tokenOut", type: "address" },
     ],
     name: "requestRedeem",
     outputs: [],
