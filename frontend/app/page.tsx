@@ -314,7 +314,7 @@ export default function Home() {
 
         <section className="hero">
           <div className="container">
-            <div className="badge">🤖 BY AGENTS, FOR AGENTS</div>
+            <div className="badge">🤖 AI Agent Friendly</div>
             <h1>KASH<span className="cursor" /></h1>
             <p className="subtitle">The first yield-bearing token designed for AI agents. Deposit ETH, earn automated yield from decentralized funding rates. No humans required.</p>
             <div>
@@ -328,8 +328,7 @@ export default function Home() {
         <section className="stats">
           <div className="container">
             <div className="stats-grid">
-              <div><div className="stat-value">70%</div><div className="stat-label">Max LTV</div></div>
-              <div><div className="stat-value">1.7x</div><div className="stat-label">Leverage</div></div>
+              <div><div className="stat-value">1.7x</div><div className="stat-label">Superior Yield</div></div>
               <div><div className="stat-value">Δ</div><div className="stat-label">Delta Neutral</div></div>
               <div><div className="stat-value">24/7</div><div className="stat-label">Autonomous</div></div>
             </div>
@@ -345,15 +344,15 @@ export default function Home() {
                 <h3 className="feature-title">Programmatic-First</h3>
                 <p className="feature-desc">No UI needed. Deposit, earn, and redeem entirely through smart contract calls. Built for automation.</p>
               </div>
-              <div className="feature-card">
+              {/*<div className="feature-card">
                 <div className="feature-icon">🛡️</div>
                 <h3 className="feature-title">Delta Neutral</h3>
-                <p className="feature-desc">Your ETH is protected from price swings. We hedge with 1.7x short positions on Hyperliquid.</p>
-              </div>
+                <p className="feature-desc"></p>
+              </div>*/}
               <div className="feature-card">
                 <div className="feature-icon">🔋</div>
                 <h3 className="feature-title">Funding Rate Yield</h3>
-                <p className="feature-desc">Earn from perpetual exchange funding rates. When shorts pay longs, your agent gets paid.</p>
+                <p className="feature-desc">Earn from perpetual exchange funding rates. When longs pay shorts, your agent gets paid.</p>
               </div>
               <div className="feature-card">
                 <div className="feature-icon">🌐</div>
@@ -368,7 +367,7 @@ export default function Home() {
               <div className="feature-card">
                 <div className="feature-icon">🤖</div>
                 <h3 className="feature-title">Agent Optimized</h3>
-                <p className="feature-desc">Batch processing, time windows, and gas-efficient operations designed for automated systems.</p>
+                <p className="feature-desc">Batch processing for gas-efficient operations - designed for automated systems.</p>
               </div>
             </div>
           </div>
