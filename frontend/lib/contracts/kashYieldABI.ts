@@ -52,7 +52,6 @@ export const kashYieldABI = [
       {
         components: [
           { name: "user", type: "address" },
-          { name: "tokenIn", type: "address" },
           { name: "amountIn", type: "uint256" },
           { name: "amountInUSD", type: "uint256" },
           { name: "batchCycle", type: "uint256" },
@@ -75,7 +74,6 @@ export const kashYieldABI = [
         components: [
           { name: "user", type: "address" },
           { name: "kashAmount", type: "uint256" },
-          { name: "tokenOut", type: "address" },
           { name: "batchCycle", type: "uint256" },
         ],
         name: "",
@@ -143,7 +141,6 @@ export const kashYieldABI = [
     anonymous: false,
     inputs: [
       { indexed: true, name: "user", type: "address" },
-      { indexed: true, name: "tokenIn", type: "address" },
       { indexed: false, name: "amountIn", type: "uint256" },
       { indexed: false, name: "batchCycle", type: "uint256" },
     ],
@@ -155,7 +152,6 @@ export const kashYieldABI = [
     inputs: [
       { indexed: true, name: "user", type: "address" },
       { indexed: false, name: "kashAmount", type: "uint256" },
-      { indexed: true, name: "tokenOut", type: "address" },
       { indexed: false, name: "batchCycle", type: "uint256" },
     ],
     name: "RedeemRequested",

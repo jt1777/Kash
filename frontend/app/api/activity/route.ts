@@ -33,8 +33,8 @@ function getEtherscanApiKey(): string {
 }
 
 // Function selectors (first 4 bytes of calldata) for our contract
-const SELECTOR_REQUEST_MINT = '0x31a02bce';
-const SELECTOR_REQUEST_REDEEM = '0x107703ab';
+const SELECTOR_REQUEST_MINT = '0x49733d04';
+const SELECTOR_REQUEST_REDEEM = '0xaa2f892d';
 
 export type ActivityItem = {
   type: 'mint' | 'redeem';
