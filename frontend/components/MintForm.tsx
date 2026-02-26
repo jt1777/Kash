@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadContract, useBalance } from 'wagmi';
+import { useState, useMemo } from 'react';
+import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadContract, useBalance, useEstimateFeesPerGas } from 'wagmi';
 import { CONTRACTS, ARBITRUM_SEPOLIA_BLOCK_EXPLORER } from '@/lib/contracts/addresses';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 import { kashTokenABI } from '@/lib/contracts/kashTokenABI';
@@ -9,6 +9,9 @@ import { parseEther, parseUnits, formatEther, zeroAddress } from 'viem';
 
 // Reserve this much native ETH for gas so wallet never sees "Insufficient funds" (deposit + gas > balance)
 const GAS_RESERVE_ETH = parseEther('0.0005');
+
+// Arbitrum Sepolia fallback: 1 gwei. Without explicit gas, wallet can fall back to mainnet defaults → insane "$15M" fee.
+const ARB_SEPOLIA_MAX_FEE_WEI = 10n ** 9n; // 1 gwei
 
 // ETH product: single "ETH" option (native ETH; protocol wraps to wETH for Aave). wBTC shown but disabled until KashYieldBTC.
 const MINT_TOKENS_ETH = [
@@ -25,6 +28,22 @@ export function MintForm() {
   const { data: balance } = useBalance({ address });
   const nativeBalance = balance?.value ?? 0n;
   const maxMintEth = nativeBalance > GAS_RESERVE_ETH ? nativeBalance - GAS_RESERVE_ETH : 0n;
+
+  const { data: feesPerGas } = useEstimateFeesPerGas();
+  const gasOptions = useMemo(() => {
+    const raw = feesPerGas?.maxFeePerGas;
+    if (raw != null && raw > 0n) {
+      const withBuffer = (raw * 110n) / 100n;
+      return {
+        maxFeePerGas: withBuffer,
+        maxPriorityFeePerGas: feesPerGas?.maxPriorityFeePerGas ?? withBuffer,
+      };
+    }
+    return {
+      maxFeePerGas: ARB_SEPOLIA_MAX_FEE_WEI,
+      maxPriorityFeePerGas: ARB_SEPOLIA_MAX_FEE_WEI,
+    };
+  }, [feesPerGas?.maxFeePerGas, feesPerGas?.maxPriorityFeePerGas]);
 
   const { data: allowance } = useReadContract({
     address: selectedToken.address as `0x${string}`,
@@ -100,6 +119,7 @@ export function MintForm() {
       abi: kashTokenABI,
       functionName: 'approve',
       args: [CONTRACTS.kashYieldEth, parsedAmount],
+      ...gasOptions,
     });
   };
 
@@ -114,6 +134,7 @@ export function MintForm() {
           functionName: 'requestMint',
           args: [zeroAddress, BigInt(0)],
           value: parsedAmount,
+          ...gasOptions,
         });
       } else {
         mint({
@@ -121,6 +142,7 @@ export function MintForm() {
           abi: kashYieldABI,
           functionName: 'requestMint',
           args: [selectedToken.address as `0x${string}`, parsedAmount],
+          ...gasOptions,
         });
       }
     } catch (error) {
@@ -135,6 +157,7 @@ export function MintForm() {
       abi: kashYieldABI,
       functionName: 'cancelMintRequest',
       args: [currentBatchCycle],
+      ...gasOptions,
     });
   };
 
