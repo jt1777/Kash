@@ -1,10 +1,8 @@
 # Off-Chain Bot Specification for KashYield
 
-> **⚠️ Partially outdated.** The **current** contract does **not** use `setMintValuation()` or a separate claim step. Batch flow is: during 23:50–23:59 UTC call `processBatch()` (which values mints via Chainlink, settles redeems, and distributes in one tx). The bot should (1) call `processBatch()` in the processing window (or use Chainlink Automation) and (2) react to `ProtocolInteraction("NET_MINT" | "NET_REDEEM")` events for capital deployment. NAV formulas and protocol interaction *ideas* (Aave, Hyperliquid) still apply; the **timeline and step-by-step below** (e.g. “Call setMintValuation”) reflect the old flow. See `frontend/README.md` for current status.
-
 ## Overview
 
-The off-chain bot is responsible for calculating the Net Asset Value (NAV), processing batch settlements, rebalancing the portfolio, and storing historical data. This document outlines the bot's responsibilities, calculation formulas, and operational procedures.
+The bot (1) calls `processBatch()` in the processing window (or uses Chainlink Automation), and (2) reacts to `ProtocolInteraction` events to deploy/withdraw capital. The contract values mints via Chainlink and distributes in the same flow (no `setMintValuation()` or separate claim). This doc covers NAV formulas, deployment/withdrawal strategy, and operational procedures.
 
 ---
 
@@ -67,120 +65,32 @@ Unrealized PnL = Position Size × (Current Price - Entry Price) × Direction
 
 ---
 
-## 2. Batch Processing Workflow
+## 2. Batch Processing Workflow (Current)
 
-### Daily Timeline
+### Contract flow (KashYieldETH)
 
-| Time (UTC) | Event | Bot Action |
-|------------|-------|------------|
-| 00:00 - 23:49 | User Window | Monitor mint/redeem requests |
-| 23:50 | Processing Start | Calculate NAV and value all deposits |
-| 23:50 - 23:52 | Valuation | Call `setMintValuation()` for each mint request |
-| 23:52 - 23:55 | NAV Update | Call `updateNAV()` with calculated portfolio value |
-| 23:55 - 23:57 | Execution | Execute protocol interactions |
-| 23:57 - 23:59 | Settlement | Call `processBatch()` on-chain |
-| 00:00 | Distribution | Tokens available for claiming |
+- **Processing window:** 23:50–23:59 UTC (configurable).
+- **`processBatch()`** runs in one call but two phases:
+  1. **Phase 1:** Values mint requests via Chainlink (`getEthPrice()` etc.), computes batch totals and NAV, stores state. Then **stops** until owner marks ops done.
+  2. **Owner/bot:** Performs Aave/Hyperliquid ops (deploy or withdraw capital), then calls **`updateNAV(newNAV)`**, then **`markBatchOpsDone()`**.
+  3. **Phase 2:** Distributes KASH to minters and ETH (or other tokens) to redeemers, emits `BatchProcessed` and `TokensClaimed`, sets `batchProcessed[batchCycle] = true`.
+- **ProtocolInteraction** events (e.g. `NET_MINT_ETH_DEPLOY`, asset, amount) are emitted when there is net mint or net redeem ETH to deploy/withdraw; the bot should react to these (from the tx receipt or event subscription) and call the contract’s owner functions (e.g. `depositToAave`, `depositToHyperliquid`, `openShort`) as needed.
 
-### Processing Steps
+### Daily timeline
 
-#### Step 1: Value All Mint Requests (23:50 - 23:52)
+| Time (UTC)     | Event            | Bot / contract action |
+|----------------|------------------|------------------------|
+| 00:00 – 23:49  | User window      | Users request mint/redeem |
+| 23:50 – 23:59  | Processing       | Call `processBatch()` (or Chainlink Automation triggers it). Contract does Phase 1 (Chainlink valuation, batch math). |
+| After Phase 1  | Owner ops        | Bot/owner: Aave + Hyperliquid deploy/withdraw, then `updateNAV(...)`, then `markBatchOpsDone()`. |
+| Same tx / next | Phase 2          | Contract continues Phase 2: distributes tokens, emits events. |
+| After tx       | Capital deploy  | Bot reads `ProtocolInteraction` from receipt (or listener) and calls `depositToAave`, `depositToHyperliquid`, `openShort`, etc. |
 
-```javascript
-// Get all users who requested mints for yesterday
-const batchCycle = currentDay - 1;
-const mintUsers = await contract.batchMintUsers(batchCycle);
+### Bot responsibilities
 
-// For each user, calculate USD value of their deposit
-for (const user of mintUsers) {
-  const request = await contract.getPendingMintRequest(user, batchCycle);
-  
-  // Get real-time price for the deposited token
-  const price = await getPriceForToken(request.tokenIn);
-  const amountInUSD = calculateUSDValue(request.amountIn, request.tokenIn, price);
-  
-  // Set the valuation on-chain
-  await contract.setMintValuation(user, batchCycle, amountInUSD);
-}
-```
-
-#### Step 2: Calculate Portfolio NAV (23:50 - 23:52)
-
-```javascript
-// Calculate total portfolio value
-const portfolioValue = await calculatePortfolioValue();
-const kashSupply = await kashToken.totalSupply();
-const newNAV = portfolioValue / kashSupply;
-
-// Get mint/redeem totals
-const batchInfo = await contract.getBatchInfo(batchCycle);
-const netPositionUSD = batchInfo.totalMintUSD - batchInfo.totalRedeemUSD;
-```
-
-#### Step 3: Update NAV (23:52 - 23:55)
-
-```javascript
-// Update on-chain NAV
-const navTx = await contract.updateNAV(ethers.parseEther(newNAV.toString()));
-await navTx.wait();
-console.log(`NAV updated to ${newNAV}`);
-```
-
-#### Step 4: Determine Actions (23:52 - 23:55)
-
-```javascript
-if (netPositionUSD > 0) {
-  // Net mints: Deploy new capital
-  actions = determineDeploymentStrategy(netPositionUSD);
-} else if (netPositionUSD < 0) {
-  // Net redeems: Free up capital
-  actions = determineWithdrawalStrategy(Math.abs(netPositionUSD));
-} else {
-  // No net change: Only rebalancing if needed
-  actions = checkRebalancingNeeds();
-}
-```
-
-#### Step 5: Execute Protocol Interactions (23:55 - 23:57)
-
-Execute actions determined in step 2:
-
-```javascript
-for (const action of actions) {
-  switch (action.type) {
-    case 'DEPOSIT_AAVE':
-      await contract.depositToAave(action.asset, action.amount);
-      break;
-    case 'WITHDRAW_AAVE':
-      await contract.withdrawFromAave(action.asset, action.amount);
-      break;
-    case 'BORROW_AAVE':
-      await contract.borrowFromAave(action.asset, action.amount);
-      break;
-    case 'REPAY_AAVE':
-      await contract.repayToAave(action.asset, action.amount);
-      break;
-    case 'DEPOSIT_HYPERLIQUID':
-      await contract.depositToHyperliquid(action.amount);
-      break;
-    case 'OPEN_PERP':
-      await contract.openPerpPosition(action.symbol, action.size, action.isLong);
-      break;
-    case 'CLOSE_PERP':
-      await contract.closePerpPosition(action.symbol);
-      break;
-  }
-  
-  await delay(1000); // Wait between transactions
-}
-```
-
-#### Step 6: Call processBatch() (23:57 - 23:59)
-
-```javascript
-const tx = await contract.processBatch();
-await tx.wait();
-console.log(`Batch ${batchCycle} processed successfully`);
-```
+1. **Trigger batch:** Call `processBatch()` during the window, or use Chainlink Automation (`checkUpkeep` / `performUpkeep`).
+2. **Between Phase 1 and Phase 2:** Run Aave/Hyperliquid ops, then `updateNAV(calculatedNAV)`, then `markBatchOpsDone()`.
+3. **After batch tx:** Parse `ProtocolInteraction` from the tx receipt (or subscribe to events) and execute deploy/withdraw (see `bot/CHECKLIST.md` and `batchProcessor.ts`).
 
 ---
 

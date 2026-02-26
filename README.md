@@ -1,50 +1,37 @@
-# KashYield - Simplified Yield Strategy Protocol
+# KashYield - Enhanced Yield Strategy Protocol
 
-A capital-efficient yield strategy protocol that allows users to deposit multiple assets (ETH, wETH, wBTC) and receive Kash tokens representing their share of the portfolio.
+A capital-efficient yield strategy protocol. Users deposit ETH (and later wBTC via a separate product) and receive KASH tokens representing their share of the portfolio. NAV-based pricing, daily batch settlement, Hyperliquid (delta-neutral) and Aave integration.
 
 ## 🎯 Key Features
 
-- **Multi-Asset Support**: Deposit and redeem in ETH, wETH, or wBTC.
-- **NAV-Based Pricing**: Kash tokens are priced at current Net Asset Value (NAV)
-- **Daily Batch Settlement**: Capital-efficient processing at 23:50 UTC daily
-- **Hyperliquid Integration**: Perpetual futures for delta-neutral yield
-- **Aave Integration**: Lending and borrowing for yield generation
+- **ETH product (live)**: Mint KASH with ETH; redeem KASH for ETH, wETH, or wBTC. wBTC mint coming with KashYieldBTC.
+- **NAV-based pricing**: KASH priced at current Net Asset Value.
+- **Daily batch settlement**: Two-phase `processBatch()` (23:50–23:59 UTC): Phase 1 (Chainlink valuation, batch math), owner/bot Aave/HL + `updateNAV()` + `markBatchOpsDone()`, Phase 2 (distribute KASH and payouts). No user claim step.
+- **Hyperliquid**: Delta-neutral yield via short positions (owner/bot).
+- **Aave**: Lending/borrowing (owner/bot).
 
 ## 📋 Architecture
 
-### Smart Contracts
+### Smart contracts (KashYieldETH)
 
-1. **KashYield.sol** - Main protocol contract
-   - User functions: `requestMint()`, `requestRedeem()`
-   - Batch processing: `processBatch()` (values mints via Chainlink, settles redemptions, mints/burns KASH, distributes in one tx)
-   - Protocol interactions: Aave and Hyperliquid functions (owner/bot only)
+- **KashYieldETH.sol** – Main protocol: `requestMint()`, `requestRedeem()`, `processBatch()` (two-phase), Aave/Hyperliquid owner functions. Chainlink used in Phase 1 for mint valuation.
+- **KashTokenEth** – ERC20 (KASH), mint/burn by KashYieldETH only.
 
-2. **KashToken.sol** - ERC20 token (Kash)
-   - Mintable/Burnable by KashYield contract only
+| Aspect | Behavior |
+|--------|----------|
+| Mint valuation | Phase 1 via Chainlink (`getEthPrice()`); no `setMintValuation()` |
+| NAV | Owner/bot calls `updateNAV()` after Aave/HL, before `markBatchOpsDone()`; Phase 2 uses `currentNAV` |
+| Distribution | Phase 2 mints KASH to minters, sends tokens to redeemers; no user claim |
+| Time window | `processBatch()` is `onlyProcessingWindow` (23:50–23:59 UTC) |
+| Hyperliquid | `setHyperliquid(address)`; HL calls owner-only |
 
-### Off-Chain Bot
+**Owner config (no redeploy):** `setAavePool`, `setHyperliquid`, `setFeeBps`, `pause`/`unpause`.
 
-The bot handles the critical capital deployment operations:
+### Off-chain bot
 
-1. **During batch processing (23:50-23:59 UTC)**:
-   - Calculate net position (mint vs redeem USD)
-   - Call `processBatch()` during the processing window
-   - React to `ProtocolInteraction("NET_MINT" | "NET_REDEEM")` events
-
-2. **Capital Deployment** (on NET_MINT):
-   - Take net ETH amount X to be minted
-   - Send wETH to Aave
-   - Borrow 70% of X total worth of minted ETH as USDC
-   - Send USDC to Hyperliquid as collateral
-   - Open 1.7X short of wETH to earn funding
-
-3. **Capital Withdrawal** (on NET_REDEEM):
-   - Reverse the trade starting with Hyperliquid unwind
-   - Return Aave borrow
-   - Withdraw wETH
-   - Payout original amount of ETH plus yield if any
-
-4. **Same flow applies for wBTC deposits**
+1. **Processing window (23:50–23:59 UTC)**: Call `processBatch()` (or use Chainlink Automation).
+2. **Between Phase 1 and Phase 2**: Run Aave/Hyperliquid ops, then `updateNAV(newNAV)`, then `markBatchOpsDone()`.
+3. **After batch**: React to `ProtocolInteraction("NET_MINT_ETH_DEPLOY", ...)` (and net redeem) to deploy/withdraw capital. See [docs/OFFCHAIN_BOT_SPEC.md](docs/OFFCHAIN_BOT_SPEC.md) and [bot/CHECKLIST.md](bot/CHECKLIST.md).
 
 ## 🕐 Time Windows
 
@@ -103,35 +90,23 @@ npm start
 ```bash
 cd frontend
 npm install
-cp .env.local.example .env.local
-# Add your WalletConnect Project ID
+```
+
+Create `frontend/.env.local` with `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` (get from https://cloud.walletconnect.com/). Then:
+
+```bash
 npm run dev
 ```
+
+Open http://localhost:3000. Root `/` is the landing page; `/app` is the mint/redeem app. Contract addresses live in `frontend/lib/contracts/addresses.ts` (update after deploy; see [DEPLOYMENT.md](DEPLOYMENT.md)).
 
 ## 💡 How It Works
 
 ### For Users
 
-1. **Deposit (Mint)**
-   ```solidity
-   // Deposit ETH
-   kashYield.requestMint(address(0), 0, { value: 1 ether });
-   
-   // Deposit wETH
-   weth.approve(kashYield, 1 ether);
-   kashYield.requestMint(wethAddress, 1 ether);
-   ```
-
-2. **Wait for Batch Processing**
-   - Requests are queued during the day
-   - During 23:50–23:59 UTC, the bot calls `processBatch()`
-   - Contract values deposits via Chainlink oracles, settles redeems, mints KASH to minters, sends tokens to redeemers
-
-3. **Redeem**
-   ```solidity
-   kash.approve(kashYield, 1000 ether);
-   kashYield.requestRedeem(1000 ether, address(0)); // Redeem for ETH
-   ```
+1. **Deposit (Mint)** – Send ETH or approve wETH and call `requestMint()`. Requests are queued until the next batch.
+2. **Batch** – During 23:50–23:59 UTC, bot calls `processBatch()`; Phase 1 (Chainlink valuation), owner runs Aave/HL and `updateNAV()` + `markBatchOpsDone()`, Phase 2 distributes KASH to minters.
+3. **Redeem** – Approve KASH and call `requestRedeem(kashAmount)`. After the next batch, redeemers receive ETH (or chosen token).
 
 ### NAV Calculation
 
@@ -165,46 +140,30 @@ Liabilities:
 - Permissionless batch processing (anyone can call during window)
 - Emergency pause functions
 
-### Configurable Parameters (Owner-Only)
-
-| Parameter | Function | Notes |
-|-----------|----------|-------|
-| Aave pool | `setAavePool(address)` | Switch to mock or different Aave pool |
-| Hyperliquid adapter | `setHyperliquid(address)` | Set HL bridge/adapter |
-| Token addresses | `setTokenAddresses(weth, wbtc, usdt, usdc)` | Update supported tokens |
-| Oracle per token | `setOracle(token, oracle)` | Chainlink feed for a token |
-| Protocol fee | `setFeeBps(uint256)` | 0–100 (0–1%); default 3 (0.03%) |
-| Pause | `pause()` / `unpause()` | Emergency pause |
+(Owner configuration is listed in the Architecture section above.)
 
 ## 📁 Project Structure
 
 ```
 yieldproduct/
 ├── contracts/
-│   ├── KashYield.sol          # Main protocol contract
-│   ├── KashToken.sol           # Kash ERC20 token
-│   ├── MockAaveV3.sol          # Mock Aave for testing
-│   └── MockHyperliquid.sol     # Mock Hyperliquid for testing
-├── scripts/
-│   └── deploy.js               # Deployment script
+│   ├── KashYieldETH.sol        # Main protocol (ETH product)
+│   ├── MockHyperliquid.sol     # Mock HL for testing
+│   └── ...
+├── scripts/                    # Deploy and config scripts
 ├── test/
-│   ├── KashYieldTest.v2.js     # Comprehensive test suite
-│   └── KashYield.Hyperliquid.test.js
 ├── docs/
-│   ├── ARCHITECTURE_CHANGES.md # Historical architecture notes
-│   └── OFFCHAIN_BOT_SPEC.md    # Detailed bot specification
-├── bot/                        # Off-chain bot
-│   ├── src/
-│   │   ├── batch/              # Batch processing logic
-│   │   ├── contracts/          # Contract ABIs
-│   │   ├── scripts/            # Utility scripts
-│   │   └── utils/              # Utilities
-│   ├── package.json
-│   └── README.md
-├── frontend/                   # Next.js frontend
-│   ├── app/
-│   ├── components/
-│   └── lib/
+│   ├── OFFCHAIN_BOT_SPEC.md    # Bot specification
+│   ├── HYPERLIQUID-INTEGRATION.md
+│   └── ...
+├── bot/                        # Off-chain bot (batch, Aave/HL)
+│   ├── src/batch/, ...
+│   └── CHECKLIST.md
+├── frontend/                   # Next.js 15 + wagmi + RainbowKit
+│   ├── app/                    # App Router: page.tsx (landing), app/page.tsx (mint/redeem)
+│   ├── components/            # MintForm, RedeemForm, StatsCard, StatusIndicator, ...
+│   └── lib/contracts/          # addresses.ts, kashYieldABI, kashTokenABI
+├── DEPLOYMENT.md               # Deployment checklist
 ├── hardhat.config.js
 └── package.json
 ```
@@ -247,30 +206,19 @@ npx hardhat run scripts/deploy.js --network sepolia
 
 ## 📝 Current Status
 
-### Deployed Contracts (Arbitrum Sepolia)
+- **Frontend**: Live on Arbitrum Sepolia. Landing at `/`, app at `/app`. Mint (ETH), redeem (ETH/wETH/wBTC), stats (NAV, deposits from chain events, KASH balance), time-window status. See **Frontend** section below for setup and details.
+- **Contracts**: KashYieldETH and KashTokenEth. Addresses are in `frontend/lib/contracts/addresses.ts`; update after deploy (see [DEPLOYMENT.md](DEPLOYMENT.md)).
+- **Still needed**: Owner must call `setHyperliquid(adapter)` for HL (e.g. MockHyperliquid on testnet; see [docs/HYPERLIQUID-INTEGRATION.md](docs/HYPERLIQUID-INTEGRATION.md)). Bot must run batch flow and react to `ProtocolInteraction("NET_MINT_ETH_DEPLOY", ...)` (see [bot/CHECKLIST.md](bot/CHECKLIST.md)).
 
-- **KashYield**: `0x4C3910E93aB0c5983c6DEE003749485E525E5Db7`
-- **KashToken**: `0x3461e725Fb77ead9a4FD22A10e0f0c9373156297`
+## 🌐 Frontend
 
-### Missing Configurations
-
-⚠️ **The deployed contract has NOT been updated with:**
-- Aave pool address (mainnet: `0x794a61358D6845594F94dc1DB02A252b5b4814aD`)
-- Hyperliquid adapter address
-
-The owner must call:
-- `setAavePool(address)` 
-- `setHyperliquid(address)`
-
-### Still Needed
-
-1. **Hyperliquid integration**: Contract has `hyperliquidAddress` (currently unset). Owner must call `setHyperliquid(adapter)` so the bot can use `depositToHyperliquid`, `withdrawFromHyperliquid`, `openShort`, `closeShort`, etc.
-
-2. **Bot batch actions**: Bot needs to:
-   - Call `processBatch()` during the processing window (23:50–23:59 UTC)
-   - React to `ProtocolInteraction("NET_MINT", ...)` / `("NET_REDEEM", ...)` by moving capital
-
-3. **Chainlink Automation (optional)**: Contract exposes `checkUpkeep` / `performUpkeep` so a keeper can call `processBatch()` at 23:50 UTC without running the bot manually.
+- **Stack**: Next.js 15 (App Router), Tailwind, wagmi + viem + RainbowKit. Network: Arbitrum Sepolia.
+- **Features**: Mobile-first UI, wallet connect, mint KASH (ETH), redeem (ETH/wETH/wBTC), real-time NAV and deposits (from chain events), KASH balance, time-window status.
+- **Contract addresses**: Set in `frontend/lib/contracts/addresses.ts` (`CONTRACTS.kashYieldEth`, `CONTRACTS.kashTokenEth`, tokens, oracles). Update when you deploy (see [DEPLOYMENT.md](DEPLOYMENT.md)).
+- **Mint flow**: Select ETH → enter amount → approve if needed → submit mint → wait for batch (KASH in Phase 2). **Redeem**: Select output token → enter KASH → approve → submit → wait for batch.
+- **Time windows**: User window 00:00–23:50 UTC (requests); processing 23:50–23:59 UTC (`processBatch()`).
+- **Build**: `cd frontend && npm run build && npm start`. **Deploy**: e.g. `vercel` or Docker (see [DEPLOYMENT.md](DEPLOYMENT.md) for full checklist).
+- **Troubleshooting**: Use Arbitrum Sepolia; set WalletConnect project ID in `.env.local`; ensure user window for mint/redeem; check addresses in `lib/contracts/addresses.ts`. Testnet ETH: [Alchemy Arbitrum Sepolia faucet](https://www.alchemy.com/faucets/arbitrum-sepolia).
 
 ## 📄 License
 

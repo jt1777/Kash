@@ -37,27 +37,49 @@ Earn funding rate yield
 
 | Contract | Address | Purpose |
 |----------|---------|---------|
-| `Hyperliquid Deposit Bridge` | `0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7` | Same address on testnet |
-| `USDC` | `0xd9CBEC81df392A88AEff575E962d149d57F4d6bc` | Testnet USDC |
+| **MockHyperliquid** | Deploy via `scripts/deploy-mock-hyperliquid-arbitrum-sepolia.js` | Implements `IHyperliquid` for testing; set on KashYieldETH with `setHyperliquid(mockAddress)` |
+| `USDC` | `0x15BB91b9e63EA29863678B1dcBcB01dE31bD8Ab5` (script default) | Used by mock and KashYieldETH for HL spot |
+| `USDT` | `0x833EdA586220B1d0C25034E9bAb5ed4B4a5769a1` (script default) | Optional on mock |
+| `wBTC` | `0x4D8b720b94D341F54df948696747B05998c5FbD5` (script default) | Optional on mock |
 
-**Note:** The trading bot uses Hyperliquid's REST API, not direct contract calls for trading. The bridge contract is only used for deposits/withdrawals.
+**Note:** On testnet we use **MockHyperliquid** on Arbitrum Sepolia, not the real Hyperliquid bridge. The real bridge address (`0x2Df1c51...`) is for mainnet HL deposits/withdrawals when you switch to production.
 
 ## Hyperliquid Interaction Flow
 
-### Current (Mock)
-Our `MockHyperliquid.sol` simulates:
+### Current (Mock) – IHyperliquid interface
+
+KashYieldETH talks to any address that implements `IHyperliquid`. Our **MockHyperliquid.sol** (used on Arbitrum Sepolia) implements:
+
 ```solidity
-function depositCollateralAndOpenShort(usdcAmount, positionSize, user)
-function closePosition(user) returns (collateralReturned, pnl)
-function getPositionFunding(user) returns fundingAmount
+// Spot wallet (USDC or USDT)
+function depositToSpotWallet(address stableToken, uint256 amount) external;
+function withdrawFromSpotWallet(address stableToken, uint256 amount) external;
+function getSpotBalance(address user) external view returns (uint256);
+
+// Spot trading: ETH/wBTC ↔ USDC/USDT
+function tradeSpot(address tokenIn, address tokenOut, uint256 amountIn) external payable returns (uint256 amountOut);
+
+// Perps
+function openPerpPosition(string calldata symbol, uint256 size, bool isLong) external;
+function closePerpPosition(string calldata symbol) external;
+function getPosition(address user, string calldata symbol) external view returns (
+    uint256 size, uint256 collateral, uint256 entryPrice, bool isLong, bool isActive
+);
+
+// Orders (mock: no-op / empty)
+function cancelOrder(bytes32 orderId) external;
+function getOpenOrderIds(address account) external view returns (bytes32[] memory);
 ```
 
+KashYieldETH uses **USDC** for Hyperliquid (its `usdcAddress`); the mock accepts USDC or USDT. Deploy the mock with `scripts/deploy-mock-hyperliquid-arbitrum-sepolia.js`, then set that address on KashYieldETH via `setHyperliquid(mockAddress)`.
+
 ### Real Hyperliquid
+
 The actual integration would use:
 
-1. **Deposit to L1** → Bridge USDC to Hyperliquid
-2. **API Calls** → Open/close positions via REST API
-3. **Or** → Direct contract calls to Clearinghouse
+1. **Deposit to L1** → Bridge USDC to Hyperliquid (e.g. bridge contract on Arbitrum)
+2. **API** → Open/close perp positions via REST API (real HL may not expose perps on-chain)
+3. **Or** an adapter contract that implements `IHyperliquid` and forwards to bridge/API
 
 ## Important: Hyperliquid Architecture
 
@@ -84,13 +106,8 @@ exchange = Exchange(wallet, constants.TESTNET_API_URL)
 exchange.market_open("ETH", True, sz=1.7)  # Open 1.7x short
 ```
 
-### Option C: Real Hyperliquid via Contracts
-Direct contract calls (limited functionality):
-```solidity
-// Deposit to Hyperliquid L1
-IClearinghouse(clearinghouse).deposit(usdcAmount);
-// Note: Opening positions requires API, not direct contract calls
-```
+### Option C: Real Hyperliquid via adapter contract
+KashYieldETH calls `IHyperliquid(hyperliquidAddress).depositToSpotWallet(usdcAddress, amount)` etc. For real HL you’d deploy an **adapter** that implements this interface and either calls the HL bridge or forwards to an API. Real HL perp opening may still require the API.
 
 ## Recommended Approach
 
@@ -156,4 +173,4 @@ Before mainnet:
 
 ---
 
-**Updated**: 2026-02-19 - Added actual contract addresses from Nova's AI Trading Bot project
+**Updated**: 2026-02-26 - Corrected Mock/IHyperliquid API (depositToSpotWallet, openPerpPosition, etc.), testnet uses deployed MockHyperliquid; fixed Sepolia addresses to match deploy script.

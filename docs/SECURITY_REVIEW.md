@@ -1,9 +1,11 @@
 # KASH Yield Protocol Security Review
 
-**Contract:** KashYield.sol  
+**Contract:** KashYieldETH.sol (KashYieldETH)  
 **Date:** 2026-02-20  
 **Reviewer:** Nova (AI Assistant)  
 **Status:** PRELIMINARY - Not a substitute for professional audit
+
+> **Note:** This review was written against an earlier version of the code. The current contract (KashYieldETH) uses Chainlink inside `processBatch()` for mint valuation and has a two-phase batch flow (Phase 1 → owner/bot runs Aave/Hyperliquid + `updateNAV` + `markBatchOpsDone` → Phase 2). Line numbers and some findings may not match the current file. Re-validate each item against `contracts/KashYieldETH.sol` before relying on it.
 
 ---
 

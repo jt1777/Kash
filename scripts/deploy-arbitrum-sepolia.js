@@ -19,7 +19,14 @@ async function main() {
     console.warn(`⚠️  This script is intended for Arbitrum Sepolia. You are on: ${network}`);
   }
 
-  const [deployer] = await hre.ethers.getSigners();
+  const signers = await hre.ethers.getSigners();
+  const deployer = signers[0];
+  if (!deployer) {
+    throw new Error(
+      "No deployer account. Set PRIVATE_KEY in the project root .env file (not in scripts/). " +
+      "Run this from repo root: npx hardhat run scripts/deploy-arbitrum-sepolia.js --network arbitrumSepolia"
+    );
+  }
   console.log("Deploying to", network);
   console.log("Deployer:", deployer.address);
   const balance = await hre.ethers.provider.getBalance(deployer.address);
@@ -30,11 +37,12 @@ async function main() {
   }
 
   // ============================================
-  // 1. Deploy KashYieldETH (no constructor args)
+  // 1. Deploy KashYieldETH (constructor: botAddress)
   // ============================================
-  console.log("Deploying KashYieldETH...");
+  const botAddress = process.env.BOT_ADDRESS || deployer.address;
+  console.log("Deploying KashYieldETH (botAddress:", botAddress, ")...");
   const KashYieldETH = await hre.ethers.getContractFactory("KashYieldETH");
-  const kashYieldEth = await KashYieldETH.deploy();
+  const kashYieldEth = await KashYieldETH.deploy(botAddress);
   await kashYieldEth.waitForDeployment();
 
   const kashYieldEthAddress = await kashYieldEth.getAddress();
@@ -99,8 +107,6 @@ async function main() {
     builtInAddresses: {
       aavePool: await kashYieldEth.aavePoolAddress(),
       weth: await kashYieldEth.wethAddress(),
-      wbtc: await kashYieldEth.wbtcAddress(),
-      usdt: await kashYieldEth.usdtAddress(),
       usdc: await kashYieldEth.usdcAddress(),
     },
     ...(hyperliquidAddress && hre.ethers.isAddress(hyperliquidAddress)

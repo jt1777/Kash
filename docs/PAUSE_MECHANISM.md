@@ -1,8 +1,8 @@
 # Pause Mechanism Alternatives
 
-## Current Implementation
+## Current Implementation (KashYieldETH)
 
-**Status:** Only contract owner can pause/unpause via `pause()` and `unpause()` functions.
+**Status:** Only the contract owner can pause/unpause via `pause()` and `unpause()` (both `onlyOwner`). This matches the current deployment.
 
 ```solidity
 function pause() external onlyOwner {

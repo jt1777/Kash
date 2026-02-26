@@ -1,3 +1,5 @@
+// these are tests for an older version of the KashYield contract that was used to migrate to the new KashYield contract and can probably be deleted.
+
 const { time, loadFixture } = require("@nomicfoundation/hardhat-toolbox/network-helpers");
 const { anyValue } = require("@nomicfoundation/hardhat-chai-matchers/withArgs");
 const { expect } = require("chai");
