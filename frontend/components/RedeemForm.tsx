@@ -2,24 +2,38 @@
 
 import { useState, useMemo } from 'react';
 import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadContract, useEstimateFeesPerGas } from 'wagmi';
-import { CONTRACTS, ARBITRUM_SEPOLIA_BLOCK_EXPLORER } from '@/lib/contracts/addresses';
+import { CONTRACTS, ARBITRUM_SEPOLIA_BLOCK_EXPLORER, HARDHAT_CHAIN_ID } from '@/lib/contracts/addresses';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 import { kashTokenABI } from '@/lib/contracts/kashTokenABI';
 import { parseEther, formatEther } from 'viem';
+import { useChainId } from 'wagmi';
 
 const MIN_MAX_FEE_GWEI = 30n;
 const GWEI = 10n ** 9n;
 const FEE_BUFFER_PERCENT = 120n;
 
-// KASH-ETH redeems to wETH; KASH-BTC disabled until BTC product.
-const REDEEM_TOKENS = [
+// KASH-ETH redeems to wETH; KASH-BTC redeems to wBTC.
+const REDEEM_TOKENS_ETH = [
   { symbol: 'KASH-ETH', address: CONTRACTS.tokens.weth, disabled: false },
   { symbol: 'KASH-BTC', address: CONTRACTS.tokens.wbtc, disabled: true },
 ];
+// KASH-BTC redeems to wBTC (mockWbtc when using MockAave stack)
+const getRedeemTokensBtc = () => [
+  { symbol: 'KASH-BTC', address: CONTRACTS.mockWbtc ?? CONTRACTS.tokens.wbtc, disabled: false },
+];
 
-export function RedeemForm() {
+type Product = 'eth' | 'btc';
+
+export function RedeemForm({ product = 'eth' }: { product?: Product }) {
   const { address } = useAccount();
-  const [selectedToken, setSelectedToken] = useState(REDEEM_TOKENS[0]!);
+  const chainId = useChainId();
+  const isBtc = product === 'btc' && CONTRACTS.kashYieldBtc && CONTRACTS.kashTokenBtc;
+
+  const kashYield = isBtc ? CONTRACTS.kashYieldBtc! : CONTRACTS.kashYieldEth;
+  const kashToken = isBtc ? CONTRACTS.kashTokenBtc! : CONTRACTS.kashTokenEth;
+  const redeemTokens = isBtc ? getRedeemTokensBtc() : REDEEM_TOKENS_ETH;
+
+  const [selectedToken, setSelectedToken] = useState(redeemTokens[0]!);
   const [amount, setAmount] = useState('');
 
   const { data: feesPerGas } = useEstimateFeesPerGas();
@@ -35,34 +49,34 @@ export function RedeemForm() {
   }, [feesPerGas?.maxFeePerGas, feesPerGas?.maxPriorityFeePerGas]);
 
   const { data: kashBalance } = useReadContract({
-    address: CONTRACTS.kashTokenEth,
+    address: kashToken,
     abi: kashTokenABI,
     functionName: 'balanceOf',
     args: address ? [address] : undefined,
   });
 
   const { data: allowance } = useReadContract({
-    address: CONTRACTS.kashTokenEth,
+    address: kashToken,
     abi: kashTokenABI,
     functionName: 'allowance',
-    args: address ? [address, CONTRACTS.kashYieldEth] : undefined,
+    args: address ? [address, kashYield] : undefined,
   });
 
   const { data: currentBatchCycle } = useReadContract({
-    address: CONTRACTS.kashYieldEth,
+    address: kashYield,
     abi: kashYieldABI,
     functionName: 'getCurrentBatchCycle',
   });
 
   const { data: batchInfo } = useReadContract({
-    address: CONTRACTS.kashYieldEth,
+    address: kashYield,
     abi: kashYieldABI,
     functionName: 'getBatchInfo',
     args: currentBatchCycle !== undefined ? [currentBatchCycle] : undefined,
   });
 
   const { data: pendingRedeemRequest } = useReadContract({
-    address: CONTRACTS.kashYieldEth,
+    address: kashYield,
     abi: kashYieldABI,
     functionName: 'getPendingRedeemRequest',
     args: address && currentBatchCycle !== undefined ? [address, currentBatchCycle] : undefined,
@@ -93,10 +107,10 @@ export function RedeemForm() {
     if (!parsedAmount) return;
 
     approve({
-      address: CONTRACTS.kashTokenEth,
+      address: kashToken,
       abi: kashTokenABI,
       functionName: 'approve',
-      args: [CONTRACTS.kashYieldEth, parsedAmount],
+      args: [kashYield, parsedAmount],
       ...gasOptions,
     });
   };
@@ -105,7 +119,7 @@ export function RedeemForm() {
     if (!parsedAmount) return;
 
     redeem({
-      address: CONTRACTS.kashYieldEth,
+      address: kashYield,
       abi: kashYieldABI,
       functionName: 'requestRedeem',
       args: [parsedAmount],
@@ -116,7 +130,7 @@ export function RedeemForm() {
   const handleCancelRedeem = () => {
     if (currentBatchCycle === undefined) return;
     cancelRedeem({
-      address: CONTRACTS.kashYieldEth,
+      address: kashYield,
       abi: kashYieldABI,
       functionName: 'cancelRedeemRequest',
       args: [currentBatchCycle],
@@ -180,7 +194,7 @@ export function RedeemForm() {
       <div>
         {/*<label className="block text-sm font-medium text-gray-700 mb-2">Redeem Token</label>*/}
         <div className="grid grid-cols-2 gap-2">
-          {REDEEM_TOKENS.map((token) => {
+          {redeemTokens.map((token) => {
             const isDisabled = token.disabled;
             return (
               <button
@@ -226,7 +240,7 @@ export function RedeemForm() {
           className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
         />
         {amount && parsedAmount > BigInt(0) && kashBalance !== undefined && parsedAmount > kashBalance && (
-          <p className="text-sm text-red-600 mt-1.5">Insufficient KASH-ETH balance. Your balance: {Number(formatEther(kashBalance)).toFixed(4)}</p>
+          <p className="text-sm text-red-600 mt-1.5">Insufficient {isBtc ? 'KASH-BTC' : 'KASH-ETH'} balance. Your balance: {Number(formatEther(kashBalance)).toFixed(4)}</p>
         )}
       </div>
 

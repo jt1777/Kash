@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useEnsAvatar, useEnsName } from 'wagmi';
 import { normalize } from 'viem/ens';
@@ -12,6 +13,7 @@ import { StatusIndicator } from '@/components/StatusIndicator';
 import { ClientOnly } from '@/components/ClientOnly';
 import { useAccount } from 'wagmi';
 import Link from 'next/link';
+import { hasBtcProduct } from '@/lib/contracts/addresses';
 
 function WalletAvatar({ address, fallbackUrl, size = 24 }: { address: `0x${string}`; fallbackUrl?: string; size?: number }) {
   const { data: ensName } = useEnsName({ address, chainId: mainnet.id });
@@ -136,6 +138,8 @@ function CustomWalletButton() {
 
 function AppContent() {
   const { isConnected } = useAccount();
+  const [product, setProduct] = useState<'eth' | 'btc'>('eth');
+  const showBtcTab = hasBtcProduct();
 
   return (
     <>
@@ -260,9 +264,36 @@ function AppContent() {
             </Link>
           </header>
 
-          <StatusIndicator />
+          {showBtcTab && (
+            <div className="flex gap-2 mb-6">
+              <button
+                type="button"
+                onClick={() => setProduct('eth')}
+                className={`px-4 py-2 rounded-lg font-medium transition ${
+                  product === 'eth'
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-white/10 text-gray-400 hover:text-white border border-white/20'
+                }`}
+              >
+                ETH Product
+              </button>
+              <button
+                type="button"
+                onClick={() => setProduct('btc')}
+                className={`px-4 py-2 rounded-lg font-medium transition ${
+                  product === 'btc'
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-white/10 text-gray-400 hover:text-white border border-white/20'
+                }`}
+              >
+                wBTC Product
+              </button>
+            </div>
+          )}
+
+          <StatusIndicator product={product} />
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-            <StatsCard />
+            <StatsCard product={product} />
           </div>
 
           {isConnected ? (
@@ -280,7 +311,7 @@ function AppContent() {
                   <p className="text-gray-600 mb-6">
                     Deposit selected asset to receive KASH tokens
                   </p>
-                  <MintForm />
+                  <MintForm product={product} />
                 </div>
 
                 <div className="rounded-2xl p-6 border bg-white shadow-xl" style={{ borderColor: 'rgba(0, 255, 255, 0.2)' }}>
@@ -293,9 +324,9 @@ function AppContent() {
                     <h2 className="text-2xl font-bold text-gray-900">Redeem Assets</h2>
                   </div>
                   <p className="text-gray-600 mb-6">
-                    Redeem KASH tokens for your deposited asset
+                    Redeem {product === 'btc' ? 'KASH-BTC' : 'KASH'} tokens for your deposited asset
                   </p>
-                  <RedeemForm />
+                  <RedeemForm product={product} />
                 </div>
               </div>
 

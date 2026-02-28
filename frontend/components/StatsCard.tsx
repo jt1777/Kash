@@ -5,20 +5,22 @@ import { useQuery } from '@tanstack/react-query';
 import { CONTRACTS } from '@/lib/contracts/addresses';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 import { kashTokenABI } from '@/lib/contracts/kashTokenABI';
-import { formatEther } from 'viem';
+import { formatEther, formatUnits } from 'viem';
 import { useAccount } from 'wagmi';
 import { useMemo } from 'react';
 
-// The current smart contract only takes ETH or wETH, not wBTC. We will create and link
-// another smart contract for wBTC to this front end, but at a later date. In the future,
-// the front end will need to read from 2 different contracts (1 for ETH and 1 for wBTC).
+type Product = 'eth' | 'btc';
 
-export function StatsCard() {
+export function StatsCard({ product = 'eth' }: { product?: Product }) {
   const { address } = useAccount();
   const publicClient = usePublicClient();
 
+  const isBtc = product === 'btc' && CONTRACTS.kashYieldBtc && CONTRACTS.kashTokenBtc;
+  const kashYield = isBtc ? CONTRACTS.kashYieldBtc! : CONTRACTS.kashYieldEth;
+  const kashToken = isBtc ? CONTRACTS.kashTokenBtc! : CONTRACTS.kashTokenEth;
+
   const { data: nav } = useReadContract({
-    address: CONTRACTS.kashYieldEth,
+    address: kashYield,
     abi: kashYieldABI,
     functionName: 'currentNAV',
   });
@@ -30,11 +32,11 @@ export function StatsCard() {
   // deposited by each wallet (e.g. totalDepositedEth(address user) returns uint256), so the
   // front end can call it once instead of deriving from events.
   const { data: mintEvents } = useQuery({
-    queryKey: ['userMintEvents', address, publicClient?.chain?.id],
+    queryKey: ['userMintEvents', address, publicClient?.chain?.id, kashYield],
     queryFn: async () => {
       if (!publicClient || !address) return [];
       const logs = await publicClient.getContractEvents({
-        address: CONTRACTS.kashYieldEth,
+        address: kashYield,
         abi: kashYieldABI,
         eventName: 'MintRequested',
         args: { user: address as `0x${string}` },
@@ -45,11 +47,11 @@ export function StatsCard() {
   });
 
   const { data: batchProcessedEvents } = useQuery({
-    queryKey: ['batchProcessedEvents', publicClient?.chain?.id],
+    queryKey: ['batchProcessedEvents', publicClient?.chain?.id, kashYield],
     queryFn: async () => {
       if (!publicClient) return [];
       const logs = await publicClient.getContractEvents({
-        address: CONTRACTS.kashYieldEth,
+        address: kashYield,
         abi: kashYieldABI,
         eventName: 'BatchProcessed',
       });
@@ -59,7 +61,7 @@ export function StatsCard() {
   });
 
   const { data: kashBalance } = useReadContract({
-    address: CONTRACTS.kashTokenEth,
+    address: kashToken,
     abi: kashTokenABI,
     functionName: 'balanceOf',
     args: address ? [address] : undefined,
@@ -116,8 +118,12 @@ export function StatsCard() {
         <p className="text-3xl font-bold text-gray-900 leading-tight">
           {address
             ? settledFromChain.settledEth > 0n
-              ? `${Number(formatEther(settledFromChain.settledEth)).toLocaleString(undefined, { maximumFractionDigits: 4 })} ETH`
-              : '0.00 ETH'
+              ? isBtc
+                ? `${Number(formatUnits(settledFromChain.settledEth, 8)).toLocaleString(undefined, { maximumFractionDigits: 6 })} wBTC`
+                : `${Number(formatEther(settledFromChain.settledEth)).toLocaleString(undefined, { maximumFractionDigits: 4 })} ETH`
+              : isBtc
+                ? '0.00 wBTC'
+                : '0.00 ETH'
             : '—'}
         </p>
         <p className="text-xs text-gray-500 mt-1">
@@ -143,7 +149,7 @@ export function StatsCard() {
           {address && kashBalance ? Number(formatEther(kashBalance)).toFixed(2) : '0.00'}
         </p>
         <p className="text-xs text-gray-500 mt-1">
-          KASH tokens
+          {isBtc ? 'KASH-BTC' : 'KASH'} tokens
         </p>
       </div>
     </>

@@ -5,6 +5,8 @@ import { useReadContract } from 'wagmi';
 import { CONTRACTS } from '@/lib/contracts/addresses';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 
+type Product = 'eth' | 'btc';
+
 function getUtcTimeString(): string {
   const now = new Date();
   const h = now.getUTCHours();
@@ -12,27 +14,30 @@ function getUtcTimeString(): string {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 
-export function StatusIndicator() {
+export function StatusIndicator({ product = 'eth' }: { product?: Product }) {
   const [utcTime, setUtcTime] = useState(() => getUtcTimeString());
+
+  const isBtc = product === 'btc' && CONTRACTS.kashYieldBtc;
+  const kashYield = isBtc ? CONTRACTS.kashYieldBtc! : CONTRACTS.kashYieldEth;
 
   useEffect(() => {
     const t = setInterval(() => setUtcTime(getUtcTimeString()), 60_000);
     return () => clearInterval(t);
   }, []);
   const { data: isUserWindow } = useReadContract({
-    address: CONTRACTS.kashYieldEth,
+    address: kashYield,
     abi: kashYieldABI,
     functionName: 'isUserWindow',
   });
 
   const { data: isProcessingWindow } = useReadContract({
-    address: CONTRACTS.kashYieldEth,
+    address: kashYield,
     abi: kashYieldABI,
     functionName: 'isProcessingWindow',
   });
 
   const { data: isPaused } = useReadContract({
-    address: CONTRACTS.kashYieldEth,
+    address: kashYield,
     abi: kashYieldABI,
     functionName: 'paused',
   });

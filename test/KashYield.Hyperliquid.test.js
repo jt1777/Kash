@@ -20,7 +20,7 @@ describe("KashYield - Hyperliquid Migration", function () {
     const MockAave = await ethers.getContractFactory('MockAaveV3');
     const mockAavePool = await MockAave.deploy(mockUsdc.target);
     await mockAavePool.waitForDeployment();
-    await mockAavePool.setUsdtAddress(mockUsdc.target);
+    await mockAavePool.setUsdcAddress(mockUsdc.target);
 
     const MockPriceFeed = await ethers.getContractFactory('MockChainlinkPriceFeed');
     const mockPriceFeed = await MockPriceFeed.deploy(300000000000n); // $3000 ETH

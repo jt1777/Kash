@@ -2,10 +2,11 @@
 
 import { useState, useMemo } from 'react';
 import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadContract, useBalance, useEstimateFeesPerGas } from 'wagmi';
-import { CONTRACTS, ARBITRUM_SEPOLIA_BLOCK_EXPLORER } from '@/lib/contracts/addresses';
+import { CONTRACTS, ARBITRUM_SEPOLIA_BLOCK_EXPLORER, HARDHAT_CHAIN_ID } from '@/lib/contracts/addresses';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 import { kashTokenABI } from '@/lib/contracts/kashTokenABI';
-import { parseEther, parseUnits, formatEther, zeroAddress } from 'viem';
+import { parseEther, parseUnits, formatEther, formatUnits, zeroAddress } from 'viem';
+import { useChainId } from 'wagmi';
 
 // Reserve this much native ETH for gas so wallet never sees "Insufficient funds" (deposit + gas > balance)
 const GAS_RESERVE_ETH = parseEther('0.0005');
@@ -18,11 +19,19 @@ const MINT_TOKENS_ETH = [
   { symbol: 'ETH', address: zeroAddress, decimals: 18, disabled: false },
   { symbol: 'wBTC', address: CONTRACTS.tokens.wbtc, decimals: 8, disabled: true },
 ];
-const TOKENS = MINT_TOKENS_ETH;
 
-export function MintForm() {
+type Product = 'eth' | 'btc';
+
+export function MintForm({ product = 'eth' }: { product?: Product }) {
   const { address } = useAccount();
-  const [selectedToken, setSelectedToken] = useState(MINT_TOKENS_ETH[0]!);
+  const chainId = useChainId();
+  const blockExplorer = chainId === HARDHAT_CHAIN_ID ? 'http://localhost:8545' : ARBITRUM_SEPOLIA_BLOCK_EXPLORER;
+
+  const isBtc = product === 'btc' && CONTRACTS.kashYieldBtc && CONTRACTS.mockWbtc;
+  const kashYield = isBtc ? CONTRACTS.kashYieldBtc! : CONTRACTS.kashYieldEth;
+  const depositToken = isBtc ? { symbol: 'wBTC', address: CONTRACTS.mockWbtc!, decimals: 8 } : MINT_TOKENS_ETH[0]!;
+
+  const [selectedToken, setSelectedToken] = useState(depositToken);
   const [amount, setAmount] = useState('');
 
   const { data: balance } = useBalance({ address });
@@ -49,24 +58,29 @@ export function MintForm() {
     address: selectedToken.address as `0x${string}`,
     abi: kashTokenABI,
     functionName: 'allowance',
-    args: address && selectedToken.symbol !== 'ETH' ? [address, CONTRACTS.kashYieldEth] : undefined,
+    args: address && selectedToken.symbol !== 'ETH' ? [address, kashYield] : undefined,
+  });
+
+  const { data: wbtcBalance } = useBalance({
+    address,
+    token: isBtc ? (CONTRACTS.mockWbtc as `0x${string}`) : undefined,
   });
 
   const { data: currentBatchCycle } = useReadContract({
-    address: CONTRACTS.kashYieldEth,
+    address: kashYield,
     abi: kashYieldABI,
     functionName: 'getCurrentBatchCycle',
   });
 
   const { data: batchInfo } = useReadContract({
-    address: CONTRACTS.kashYieldEth,
+    address: kashYield,
     abi: kashYieldABI,
     functionName: 'getBatchInfo',
     args: currentBatchCycle !== undefined ? [currentBatchCycle] : undefined,
   });
 
   const { data: pendingMintRequest } = useReadContract({
-    address: CONTRACTS.kashYieldEth,
+    address: kashYield,
     abi: kashYieldABI,
     functionName: 'getPendingMintRequest',
     args: address && currentBatchCycle !== undefined ? [address, currentBatchCycle] : undefined,
@@ -105,8 +119,9 @@ export function MintForm() {
 
   // For ETH mint: require balance >= amount + gas reserve so wallet never fails with "Insufficient funds"
   const exceedsBalance = selectedToken.symbol === 'ETH' && parsedAmount > 0n && parsedAmount > maxMintEth;
+  const exceedsWbtcBalance = isBtc && wbtcBalance && parsedAmount > 0n && parsedAmount > wbtcBalance.value;
 
-  const needsApproval = selectedToken.symbol !== 'ETH' && 
+  const needsApproval = (selectedToken.symbol !== 'ETH' || isBtc) && 
     allowance !== undefined && 
     parsedAmount > BigInt(0) && 
     allowance < parsedAmount;
@@ -118,18 +133,18 @@ export function MintForm() {
       address: selectedToken.address as `0x${string}`,
       abi: kashTokenABI,
       functionName: 'approve',
-      args: [CONTRACTS.kashYieldEth, parsedAmount],
+      args: [kashYield, parsedAmount],
       ...gasOptions,
     });
   };
 
   const handleMint = async () => {
-    if (!parsedAmount || exceedsBalance) return;
+    if (!parsedAmount || exceedsBalance || exceedsWbtcBalance) return;
 
     try {
-      if (selectedToken.symbol === 'ETH') {
+      if (selectedToken.symbol === 'ETH' && !isBtc) {
         mint({
-          address: CONTRACTS.kashYieldEth,
+          address: kashYield,
           abi: kashYieldABI,
           functionName: 'requestMint',
           args: [BigInt(0)],
@@ -138,7 +153,7 @@ export function MintForm() {
         });
       } else {
         mint({
-          address: CONTRACTS.kashYieldEth,
+          address: kashYield,
           abi: kashYieldABI,
           functionName: 'requestMint',
           args: [parsedAmount],
@@ -153,7 +168,7 @@ export function MintForm() {
   const handleCancelMint = () => {
     if (currentBatchCycle === undefined) return;
     cancelMint({
-      address: CONTRACTS.kashYieldEth,
+      address: kashYield,
       abi: kashYieldABI,
       functionName: 'cancelMintRequest',
       args: [currentBatchCycle],
@@ -162,7 +177,7 @@ export function MintForm() {
   };
 
   if (isMintSuccess && amount && mintHash) {
-    const txUrl = `${ARBITRUM_SEPOLIA_BLOCK_EXPLORER}/tx/${mintHash}`;
+    const txUrl = chainId === HARDHAT_CHAIN_ID ? '#' : `${ARBITRUM_SEPOLIA_BLOCK_EXPLORER}/tx/${mintHash}`;
     return (
       <div className="text-center py-8">
         <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -205,13 +220,14 @@ export function MintForm() {
     );
   }
 
+  const tokensToShow = isBtc ? [depositToken] : MINT_TOKENS_ETH;
+
   return (
     <div className="space-y-4">
       {/* Token Selector */}
       <div>
-        {/*<label className="block text-sm font-medium text-gray-700 mb-2">Select Token (ETH product → KASH_ETH)</label>*/}
         <div className="grid grid-cols-2 gap-2">
-          {MINT_TOKENS_ETH.map((token) => {
+          {tokensToShow.map((token) => {
             const isDisabled = 'disabled' in token && token.disabled;
             return (
               <button
@@ -232,22 +248,33 @@ export function MintForm() {
             );
           })}
         </div>
-        {/*<p className="text-xs text-gray-500 mt-1.5">
-          Deposit native ETH (no approval). The protocol wraps ETH to wETH when supplying to Aave. wBTC (KASH_BTC) coming soon.
-        </p>*/}
       </div>
 
       {/* Amount Input */}
       <div>
         <div className="flex items-center justify-between mb-2">
           <label className="block text-sm font-medium text-gray-700">Amount</label>
-          {selectedToken.symbol === 'ETH' && address && (
+          {selectedToken.symbol === 'ETH' && !isBtc && address && (
             <span className="text-xs text-gray-500">
               Balance: {formatEther(nativeBalance)} ETH
               {maxMintEth > 0n && (
                 <button
                   type="button"
                   onClick={() => setAmount(formatEther(maxMintEth))}
+                  className="ml-1.5 text-indigo-600 hover:text-indigo-700 font-medium"
+                >
+                  Max
+                </button>
+              )}
+            </span>
+          )}
+          {isBtc && address && wbtcBalance && (
+            <span className="text-xs text-gray-500">
+              Balance: {Number(formatUnits(wbtcBalance.value, 8)).toFixed(8)} wBTC
+              {wbtcBalance.value > 0n && (
+                <button
+                  type="button"
+                  onClick={() => setAmount(formatUnits(wbtcBalance!.value, 8))}
                   className="ml-1.5 text-indigo-600 hover:text-indigo-700 font-medium"
                 >
                   Max
@@ -269,6 +296,14 @@ export function MintForm() {
         <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
           <p className="text-sm text-amber-800">
             Amount exceeds available balance. Leave some ETH for gas (we reserve 0.0005 ETH). Use <strong>Max</strong> or reduce the amount.
+          </p>
+        </div>
+      )}
+
+      {exceedsWbtcBalance && (
+        <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+          <p className="text-sm text-amber-800">
+            Amount exceeds your wBTC balance. Use <strong>Max</strong> or reduce the amount.
           </p>
         </div>
       )}
@@ -304,7 +339,7 @@ export function MintForm() {
         <button
           type="button"
           onClick={handleMint}
-          disabled={isMintPending || isMintConfirming || !amount || needsApproval || exceedsBalance}
+          disabled={isMintPending || isMintConfirming || !amount || needsApproval || exceedsBalance || !!exceedsWbtcBalance}
           className="w-full px-6 py-3 bg-linear-to-r from-indigo-600 to-purple-600 text-white rounded-lg font-medium hover:from-indigo-700 hover:to-purple-700 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed cursor-pointer transition-all shadow-lg"
         >
           {isMintPending || isMintConfirming ? 'Processing...' : 'Submit Mint Request'}

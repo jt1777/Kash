@@ -1,6 +1,8 @@
 // scripts/setHyperliquid.js
-// Sets the Hyperliquid adapter/bridge address on the deployed KashYieldETH contract.
-// Usage: npx hardhat run scripts/setHyperliquid.js --network arbitrumSepolia
+// Sets the Hyperliquid adapter/bridge address on KashYieldETH or KashYieldBtc.
+// Usage:
+//   ETH: npx hardhat run scripts/setHyperliquid.js --network arbitrumSepolia
+//   BTC: KASH_YIELD_BTC_ADDRESS=0x... npx hardhat run scripts/setHyperliquid.js --network arbitrumSepolia
 //
 // What to put for HYPERLIQUID_ADDRESS:
 //
@@ -24,39 +26,43 @@ require("dotenv").config();
 const hre = require("hardhat");
 
 async function main() {
-  const KASH_YIELD_ADDRESS =
-    process.env.KASH_YIELD_ADDRESS || "0x4C3910E93aB0c5983c6DEE003749485E525E5Db7";
   const HYPERLIQUID_ADDRESS = process.env.HYPERLIQUID_ADDRESS || "";
+  const kashYieldBtcAddress = process.env.KASH_YIELD_BTC_ADDRESS;
+  const isBtc = kashYieldBtcAddress && hre.ethers.isAddress(kashYieldBtcAddress);
 
   if (!HYPERLIQUID_ADDRESS || HYPERLIQUID_ADDRESS === "0x...") {
     throw new Error(
-      "Set HYPERLIQUID_ADDRESS in .env (or in this script). " +
-        "Use a deployed MockHyperliquid address on Sepolia, or the real HL bridge/adapter on mainnet. " +
-        "Use 0x0000000000000000000000000000000000000000 to disable."
+      "Set HYPERLIQUID_ADDRESS in .env. " +
+        "Use a deployed MockHyperliquid address, or 0x0000000000000000000000000000000000000000 to disable."
     );
   }
   if (!hre.ethers.isAddress(HYPERLIQUID_ADDRESS)) {
     throw new Error("Invalid HYPERLIQUID_ADDRESS");
   }
 
-  console.log("Network:", hre.network.name);
-  console.log("KashYieldETH:", KASH_YIELD_ADDRESS);
-  console.log("Hyperliquid address:", HYPERLIQUID_ADDRESS);
-  console.log("\nConnecting to KashYieldETH...");
-  const KashYieldETH = await hre.ethers.getContractAt("KashYieldETH", KASH_YIELD_ADDRESS);
+  const kashYieldAddress = isBtc
+    ? kashYieldBtcAddress
+    : process.env.KASH_YIELD_ADDRESS || "0x4C3910E93aB0c5983c6DEE003749485E525E5Db7";
+  const contractName = isBtc ? "KashYieldBtc" : "KashYieldETH";
 
-  const owner = await KashYieldETH.owner();
+  console.log("Network:", hre.network.name);
+  console.log(`${contractName}:`, kashYieldAddress);
+  console.log("Hyperliquid address:", HYPERLIQUID_ADDRESS);
+  console.log("\nConnecting to", contractName, "...");
+  const kashYield = await hre.ethers.getContractAt(contractName, kashYieldAddress);
+
+  const owner = await kashYield.owner();
   const [signer] = await hre.ethers.getSigners();
   if (signer.address.toLowerCase() !== owner.toLowerCase()) {
     throw new Error(`Signer ${signer.address} is not the contract owner (${owner})`);
   }
-  console.log("Current Hyperliquid address:", await KashYieldETH.hyperliquidAddress());
+  console.log("Current Hyperliquid address:", await kashYield.hyperliquidAddress());
   console.log("Setting Hyperliquid address...");
-  const tx = await KashYieldETH.setHyperliquid(HYPERLIQUID_ADDRESS);
+  const tx = await kashYield.setHyperliquid(HYPERLIQUID_ADDRESS);
   console.log("Transaction sent:", tx.hash);
   await tx.wait();
   console.log("✅ Hyperliquid address updated!");
-  console.log("New Hyperliquid address:", await KashYieldETH.hyperliquidAddress());
+  console.log("New Hyperliquid address:", await kashYield.hyperliquidAddress());
 }
 
 main()
