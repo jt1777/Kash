@@ -1,12 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { readFileSync, existsSync } from 'fs';
+
+export const dynamic = 'force-dynamic';
 import { join } from 'path';
 import { CONTRACTS } from '@/lib/contracts/addresses';
 import { ARBITRUM_SEPOLIA_CHAIN_ID } from '@/lib/contracts/addresses';
 
 // Etherscan API V2 (required; V1 deprecated). Same key works for all chains.
 const ETHERSCAN_V2_API = 'https://api.etherscan.io/v2/api';
-const KASH_YIELD_LOWER = (CONTRACTS.kashYieldEth as string).toLowerCase();
+const KASH_YIELD_ADDRESSES = new Set([
+  (CONTRACTS.kashYieldEth as string).toLowerCase(),
+  ...(CONTRACTS.kashYieldBtc ? [(CONTRACTS.kashYieldBtc as string).toLowerCase()] : []),
+]);
 
 function getEtherscanApiKey(): string {
   let key =
@@ -70,7 +75,7 @@ export async function GET(request: NextRequest) {
   const url = `${ETHERSCAN_V2_API}?chainid=${ARBITRUM_SEPOLIA_CHAIN_ID}&module=account&action=txlist&address=${address}&startblock=0&endblock=99999999&page=1&offset=100&sort=desc&apikey=${apiKey}`;
 
   try {
-    const res = await fetch(url, { next: { revalidate: 60 } });
+    const res = await fetch(url, { cache: 'no-store' }); // Always fetch fresh so Refresh shows new txs
     const data = await res.json();
 
     if (data.status !== '1' || !Array.isArray(data.result)) {
@@ -83,7 +88,7 @@ export async function GET(request: NextRequest) {
     for (const tx of txs) {
       if (activities.length >= limit) break;
       const to = (tx.to || '').toLowerCase();
-      if (to !== KASH_YIELD_LOWER) continue;
+      if (!KASH_YIELD_ADDRESSES.has(to)) continue;
 
       const input = (tx.input || '').toLowerCase();
       const selector = input.slice(0, 10);

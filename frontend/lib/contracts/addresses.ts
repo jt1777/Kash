@@ -1,16 +1,12 @@
-// Deployed contract addresses on Arbitrum Sepolia (ETH product)
-// BTC product (KashYieldBtc + MockAave): set via NEXT_PUBLIC_* env vars after running deploy-kashyieldbtc.js
-const kashYieldBtcEnv = process.env.NEXT_PUBLIC_KASH_YIELD_BTC as string | undefined;
-const kashTokenBtcEnv = process.env.NEXT_PUBLIC_KASH_TOKEN_BTC as string | undefined;
-const mockWbtcEnv = process.env.NEXT_PUBLIC_MOCK_WBTC as string | undefined;
-
+// Deployed contract addresses on Arbitrum Sepolia
 export const CONTRACTS = {
+  // ETH product
   kashYieldEth: "0xf78854a9B5D28DdB1B35a60553e22481fE87d759" as `0x${string}`,
   kashTokenEth: "0x0d590B388C3e01201852d623A5d7692ada376160" as `0x${string}`,
-  // BTC product - only set when deployed
-  kashYieldBtc: (kashYieldBtcEnv && kashYieldBtcEnv.startsWith('0x') ? kashYieldBtcEnv : null) as `0x${string}` | null,
-  kashTokenBtc: (kashTokenBtcEnv && kashTokenBtcEnv.startsWith('0x') ? kashTokenBtcEnv : null) as `0x${string}` | null,
-  mockWbtc: (mockWbtcEnv && mockWbtcEnv.startsWith('0x') ? mockWbtcEnv : null) as `0x${string}` | null,
+  // BTC product (KashYieldBtc + MockAave)
+  kashYieldBtc: "0x897a206c1C7494C1593C2a9b7900D8fd4EbFFD7b" as `0x${string}`,
+  kashTokenBtc: "0x28f90D5f0D4689db6e972CA02E1453151Ad22634" as `0x${string}`,
+  mockWbtc: "0xED3e0bc11EBa0ef569C67896fe31E24F7c2aAF28" as `0x${string}`,
   tokens: {
     weth: "0x89c8C8AD33c4a9539361a2Cf1A908C4300F258D9" as `0x${string}`,
     wbtc: "0x4D8b720b94D341F54df948696747B05998c5FbD5" as `0x${string}`,
@@ -29,5 +25,4 @@ export const ARBITRUM_SEPOLIA_CHAIN_ID = 421614;
 export const ARBITRUM_SEPOLIA_BLOCK_EXPLORER = 'https://sepolia.arbiscan.io';
 export const HARDHAT_CHAIN_ID = 31337;
 
-export const hasBtcProduct = (): boolean =>
-  !!(CONTRACTS.kashYieldBtc && CONTRACTS.kashTokenBtc && CONTRACTS.mockWbtc);
+export const hasBtcProduct = (): boolean => true;

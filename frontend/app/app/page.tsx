@@ -1,6 +1,5 @@
 'use client';
 
-import { useState } from 'react';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useEnsAvatar, useEnsName } from 'wagmi';
 import { normalize } from 'viem/ens';
@@ -11,9 +10,10 @@ import { RecentActivity } from '@/components/RecentActivity';
 import { StatsCard } from '@/components/StatsCard';
 import { StatusIndicator } from '@/components/StatusIndicator';
 import { ClientOnly } from '@/components/ClientOnly';
+import { CONTRACTS } from '@/lib/contracts/addresses';
+import { useState } from 'react';
 import { useAccount } from 'wagmi';
 import Link from 'next/link';
-import { hasBtcProduct } from '@/lib/contracts/addresses';
 
 function WalletAvatar({ address, fallbackUrl, size = 24 }: { address: `0x${string}`; fallbackUrl?: string; size?: number }) {
   const { data: ensName } = useEnsName({ address, chainId: mainnet.id });
@@ -139,7 +139,7 @@ function CustomWalletButton() {
 function AppContent() {
   const { isConnected } = useAccount();
   const [product, setProduct] = useState<'eth' | 'btc'>('eth');
-  const showBtcTab = hasBtcProduct();
+  const showBtcTab = !!CONTRACTS.kashYieldBtc;
 
   return (
     <>
@@ -275,7 +275,7 @@ function AppContent() {
                     : 'bg-white/10 text-gray-400 hover:text-white border border-white/20'
                 }`}
               >
-                ETH Product
+                KASH-ETH
               </button>
               <button
                 type="button"
@@ -286,7 +286,7 @@ function AppContent() {
                     : 'bg-white/10 text-gray-400 hover:text-white border border-white/20'
                 }`}
               >
-                wBTC Product
+                KASH-BTC
               </button>
             </div>
           )}
@@ -324,7 +324,7 @@ function AppContent() {
                     <h2 className="text-2xl font-bold text-gray-900">Redeem Assets</h2>
                   </div>
                   <p className="text-gray-600 mb-6">
-                    Redeem {product === 'btc' ? 'KASH-BTC' : 'KASH'} tokens for your deposited asset
+                    Redeem {product === 'btc' ? 'KASH-BTC' : 'KASH-ETH'} tokens for your deposited asset
                   </p>
                   <RedeemForm product={product} />
                 </div>

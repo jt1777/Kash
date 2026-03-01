@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadContract, useBalance, useEstimateFeesPerGas } from 'wagmi';
 import { CONTRACTS, ARBITRUM_SEPOLIA_BLOCK_EXPLORER, HARDHAT_CHAIN_ID } from '@/lib/contracts/addresses';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
@@ -14,13 +14,10 @@ const GAS_RESERVE_ETH = parseEther('0.0005');
 // Arbitrum Sepolia fallback: 1 gwei. Without explicit gas, wallet can fall back to mainnet defaults → insane "$15M" fee.
 const ARB_SEPOLIA_MAX_FEE_WEI = 10n ** 9n; // 1 gwei
 
-// ETH product: single "ETH" option (native ETH; protocol wraps to wETH for Aave). wBTC shown but disabled until KashYieldBTC.
-const MINT_TOKENS_ETH = [
-  { symbol: 'ETH', address: zeroAddress, decimals: 18, disabled: false },
-  { symbol: 'wBTC', address: CONTRACTS.tokens.wbtc, decimals: 8, disabled: true },
-];
-
 type Product = 'eth' | 'btc';
+
+const MINT_TOKEN_ETH = { symbol: 'ETH', address: zeroAddress, decimals: 18 };
+const MINT_TOKEN_BTC = { symbol: 'wBTC', address: CONTRACTS.mockWbtc, decimals: 8 };
 
 export function MintForm({ product = 'eth' }: { product?: Product }) {
   const { address } = useAccount();
@@ -29,9 +26,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
 
   const isBtc = product === 'btc' && CONTRACTS.kashYieldBtc && CONTRACTS.mockWbtc;
   const kashYield = isBtc ? CONTRACTS.kashYieldBtc! : CONTRACTS.kashYieldEth;
-  const depositToken = isBtc ? { symbol: 'wBTC', address: CONTRACTS.mockWbtc!, decimals: 8 } : MINT_TOKENS_ETH[0]!;
-
-  const [selectedToken, setSelectedToken] = useState(depositToken);
+  const depositToken = isBtc ? MINT_TOKEN_BTC : MINT_TOKEN_ETH;
   const [amount, setAmount] = useState('');
 
   const { data: balance } = useBalance({ address });
@@ -54,11 +49,11 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
     };
   }, [feesPerGas?.maxFeePerGas, feesPerGas?.maxPriorityFeePerGas]);
 
-  const { data: allowance } = useReadContract({
-    address: selectedToken.address as `0x${string}`,
+  const { data: allowance, refetch: refetchAllowance } = useReadContract({
+    address: depositToken.address as `0x${string}`,
     abi: kashTokenABI,
     functionName: 'allowance',
-    args: address && selectedToken.symbol !== 'ETH' ? [address, kashYield] : undefined,
+    args: address && depositToken.symbol !== 'ETH' ? [address, kashYield] : undefined,
   });
 
   const { data: wbtcBalance } = useBalance({
@@ -100,9 +95,16 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
   const { writeContract: mint, data: mintHash, isPending: isMintPending, error: mintError } = useWriteContract();
   const { writeContract: cancelMint, data: cancelMintHash, isPending: isCancelMintPending } = useWriteContract();
 
-  const { isLoading: isApproveConfirming, isError: isApproveError } = useWaitForTransactionReceipt({ hash: approveHash });
+  const { isLoading: isApproveConfirming, isSuccess: isApproveSuccess, isError: isApproveError } = useWaitForTransactionReceipt({ hash: approveHash });
   const { isLoading: isMintConfirming, isSuccess: isMintSuccess, isError: isMintError } = useWaitForTransactionReceipt({ hash: mintHash });
   const { isLoading: isCancelMintConfirming } = useWaitForTransactionReceipt({ hash: cancelMintHash });
+
+  // Refetch allowance after approve succeeds so UI updates and Submit Mint Request becomes enabled
+  useEffect(() => {
+    if (isApproveSuccess && refetchAllowance) {
+      refetchAllowance();
+    }
+  }, [isApproveSuccess, refetchAllowance]);
 
   // Helper to safely render error cause
   const renderErrorCause = (error: typeof mintError) => {
@@ -114,14 +116,14 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
   };
 
   const parsedAmount = amount ?
-    (selectedToken.symbol === 'ETH' ? parseEther(amount) : parseUnits(amount, selectedToken.decimals))
+    (depositToken.symbol === 'ETH' ? parseEther(amount) : parseUnits(amount, depositToken.decimals))
     : BigInt(0);
 
   // For ETH mint: require balance >= amount + gas reserve so wallet never fails with "Insufficient funds"
-  const exceedsBalance = selectedToken.symbol === 'ETH' && parsedAmount > 0n && parsedAmount > maxMintEth;
+  const exceedsBalance = depositToken.symbol === 'ETH' && parsedAmount > 0n && parsedAmount > maxMintEth;
   const exceedsWbtcBalance = isBtc && wbtcBalance && parsedAmount > 0n && parsedAmount > wbtcBalance.value;
 
-  const needsApproval = (selectedToken.symbol !== 'ETH' || isBtc) && 
+  const needsApproval = (depositToken.symbol !== 'ETH' || isBtc) && 
     allowance !== undefined && 
     parsedAmount > BigInt(0) && 
     allowance < parsedAmount;
@@ -130,7 +132,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
     if (!parsedAmount) return;
 
     approve({
-      address: selectedToken.address as `0x${string}`,
+      address: depositToken.address as `0x${string}`,
       abi: kashTokenABI,
       functionName: 'approve',
       args: [kashYield, parsedAmount],
@@ -142,7 +144,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
     if (!parsedAmount || exceedsBalance || exceedsWbtcBalance) return;
 
     try {
-      if (selectedToken.symbol === 'ETH' && !isBtc) {
+      if (depositToken.symbol === 'ETH' && !isBtc) {
         mint({
           address: kashYield,
           abi: kashYieldABI,
@@ -193,7 +195,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
         <div className="rounded-xl p-4 mb-6 border border-gray-200 bg-indigo-50 shadow-md text-left space-y-2">
           <p className="text-sm font-medium text-gray-700">Deposit summary</p>
           <p className="text-sm text-gray-600">
-            You deposited <span className="font-semibold text-indigo-600">{amount} {selectedToken.symbol}</span>
+            You deposited <span className="font-semibold text-indigo-600">{amount} {depositToken.symbol}</span>
           </p>
           <p className="text-sm text-gray-600">
             Transaction:{' '}
@@ -220,41 +222,18 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
     );
   }
 
-  const tokensToShow = isBtc ? [depositToken] : MINT_TOKENS_ETH;
-
   return (
     <div className="space-y-4">
-      {/* Token Selector */}
-      <div>
-        <div className="grid grid-cols-2 gap-2">
-          {tokensToShow.map((token) => {
-            const isDisabled = 'disabled' in token && token.disabled;
-            return (
-              <button
-                key={token.symbol}
-                type="button"
-                onClick={() => !isDisabled && setSelectedToken(token)}
-                disabled={isDisabled}
-                className={`px-4 py-2 rounded-lg border-2 transition-all ${
-                  isDisabled
-                    ? 'border-gray-200 bg-gray-200/60 text-gray-500 cursor-default'
-                    : selectedToken.symbol === token.symbol
-                      ? 'border-indigo-600 bg-indigo-50 text-indigo-700 cursor-pointer'
-                      : 'border-gray-200 hover:border-gray-300 text-gray-700 cursor-pointer'
-                }`}
-              >
-                {token.symbol}
-              </button>
-            );
-          })}
-        </div>
+      {/* Token (single option per product) */}
+      <div className="text-sm font-medium text-gray-700">
+        Deposit: {depositToken.symbol}
       </div>
 
       {/* Amount Input */}
       <div>
         <div className="flex items-center justify-between mb-2">
           <label className="block text-sm font-medium text-gray-700">Amount</label>
-          {selectedToken.symbol === 'ETH' && !isBtc && address && (
+          {depositToken.symbol === 'ETH' && !isBtc && address && (
             <span className="text-xs text-gray-500">
               Balance: {formatEther(nativeBalance)} ETH
               {maxMintEth > 0n && (
@@ -332,7 +311,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
             disabled={isApprovePending || isApproveConfirming || !amount}
             className="w-full px-6 py-3 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed cursor-pointer transition-colors"
           >
-            {isApprovePending || isApproveConfirming ? 'Approving...' : `Approve ${selectedToken.symbol}`}
+            {isApprovePending || isApproveConfirming ? 'Approving...' : `Approve ${depositToken.symbol}`}
           </button>
         )}
         

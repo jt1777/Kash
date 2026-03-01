@@ -4,7 +4,8 @@ import { BatchProcessor } from './batch/batchProcessor';
 import { validateConfig, verifyContract } from './utils/validateConfig';
 
 async function main() {
-  console.log('🚀 KashYieldETH Bot - Starting...\n');
+  const productLabel = config.product === 'btc' ? 'KashYieldBtc (wBTC)' : 'KashYieldETH';
+  console.log(`🚀 KashYield Bot - Starting (${productLabel})...\n`);
 
   // Validate configuration
   try {
@@ -36,6 +37,7 @@ async function main() {
   }
 
   console.log(`📡 Connected to RPC: ${config.rpcUrl}`);
+  console.log(`📦 Product: ${config.product.toUpperCase()} (${productLabel})`);
   console.log(`📄 Contract Address: ${config.kashYieldAddress}`);
   console.log(`🔗 Chain ID: ${config.chainId}\n`);
 

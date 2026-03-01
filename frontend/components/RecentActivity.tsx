@@ -14,7 +14,10 @@ type ActivityItem = {
 };
 
 async function fetchActivity(address: string): Promise<{ list: ActivityItem[]; error?: string }> {
-  const res = await fetch(`/api/activity?address=${encodeURIComponent(address)}&limit=${ACTIVITY_LIMIT}`);
+  const res = await fetch(
+    `/api/activity?address=${encodeURIComponent(address)}&limit=${ACTIVITY_LIMIT}&_=${Date.now()}`,
+    { cache: 'no-store' }
+  );
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     return { list: [], error: data.error || 'Failed to load activity' };

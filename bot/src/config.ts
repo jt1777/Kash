@@ -19,8 +19,8 @@ if (fs.existsSync(envPath)) {
   }
 }
 
-// Load .env - dotenv by default loads from process.cwd(), so we explicitly set path
-const envResult = dotenvConfig({ path: envPath, override: true });
+// Load .env - override: false so shell env vars (e.g. KASH_YIELD_ADDRESS) take precedence
+const envResult = dotenvConfig({ path: envPath, override: false });
 
 // Debug logging
 if (envResult.error) {
@@ -44,14 +44,18 @@ const getRpcUrl = (): string => {
   return 'https://sepolia-rollup.arbitrum.io/rpc';
 };
 
+export type Product = 'eth' | 'btc';
+
 export const config = {
   // Blockchain
-  // Prioritize ARBITRUM_SEPOLIA_RPC_URL if set, then RPC_URL, then default to Sepolia
   rpcUrl: getRpcUrl(),
-  chainId: parseInt(process.env.CHAIN_ID || '421614'), // Arbitrum Sepolia chain ID
+  chainId: parseInt(process.env.CHAIN_ID || '421614'),
   privateKey: process.env.PRIVATE_KEY || '',
 
-  // Contracts
+  // Product: eth (KashYieldETH) or btc (KashYieldBtc)
+  product: ((process.env.PRODUCT || 'eth').toLowerCase() === 'btc' ? 'btc' : 'eth') as Product,
+
+  // Contracts - KASH_YIELD_ADDRESS targets the selected product
   kashYieldAddress: process.env.KASH_YIELD_ADDRESS || '',
   kashTokenAddress: process.env.KASH_TOKEN_ADDRESS || '',
 
@@ -82,6 +86,8 @@ export const config = {
   // Configuration
   batchProcessingTime: process.env.BATCH_PROCESSING_TIME || '23:50',
   logLevel: process.env.LOG_LEVEL || 'info',
+  /** When false, exit immediately if not in processing window instead of waiting */
+  waitForProcessingWindow: process.env.WAIT_FOR_PROCESSING_WINDOW !== 'false',
 
   // Strategy allocation (NET_MINT / NET_REDEEM)
   // Override via .env: AAVE_DEPOSIT_PCT=100, BORROW_LTV_PCT=70, SHORT_LEVERAGE=1.7

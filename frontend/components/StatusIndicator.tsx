@@ -5,8 +5,6 @@ import { useReadContract } from 'wagmi';
 import { CONTRACTS } from '@/lib/contracts/addresses';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 
-type Product = 'eth' | 'btc';
-
 function getUtcTimeString(): string {
   const now = new Date();
   const h = now.getUTCHours();
@@ -14,9 +12,10 @@ function getUtcTimeString(): string {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 
+type Product = 'eth' | 'btc';
+
 export function StatusIndicator({ product = 'eth' }: { product?: Product }) {
   const [utcTime, setUtcTime] = useState(() => getUtcTimeString());
-
   const isBtc = product === 'btc' && CONTRACTS.kashYieldBtc;
   const kashYield = isBtc ? CONTRACTS.kashYieldBtc! : CONTRACTS.kashYieldEth;
 
@@ -64,26 +63,7 @@ export function StatusIndicator({ product = 'eth' }: { product?: Product }) {
     );
   }
 
-  if (isProcessingWindow) {
-    return (
-      <div className="mb-6 bg-amber-50 border border-amber-200 rounded-lg p-4">
-        <div className="flex items-center">
-          <div className="shrink-0">
-            <div className="animate-spin rounded-full h-5 w-5 border-2 border-amber-600 border-t-transparent"></div>
-          </div>
-          <div className="ml-3">
-            <h3 className="text-sm font-medium text-amber-800">
-              Processing Window Active (23:50-23:59 UTC)
-            </h3>
-            <p className="text-sm text-amber-700 mt-1">
-              Batch processing in progress. User transactions are temporarily disabled. Check back soon!
-            </p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
+  // When user window is open, deposits are allowed – show that first (even if processing window overlaps, e.g. KashYieldBtc testing)
   if (isUserWindow) {
     return (
       <div className="mb-6 bg-green-50 border border-green-200 rounded-lg p-4">
@@ -97,6 +77,27 @@ export function StatusIndicator({ product = 'eth' }: { product?: Product }) {
             </h3>
             <p className="text-sm text-green-700 mt-1">
               All mint and redemption requests each day will be processed at the batch time (23:50 UTC).
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // User window closed; show processing status when applicable
+  if (isProcessingWindow) {
+    return (
+      <div className="mb-6 bg-amber-50 border border-amber-200 rounded-lg p-4">
+        <div className="flex items-center">
+          <div className="shrink-0">
+            <div className="animate-spin rounded-full h-5 w-5 border-2 border-amber-600 border-t-transparent"></div>
+          </div>
+          <div className="ml-3">
+            <h3 className="text-sm font-medium text-amber-800">
+              Processing Window Active (23:50-23:59 UTC)
+            </h3>
+            <p className="text-sm text-amber-700 mt-1">
+              Batch processing in progress. User transactions temporarily disabled. Check back after 00:00 UTC.
             </p>
           </div>
         </div>

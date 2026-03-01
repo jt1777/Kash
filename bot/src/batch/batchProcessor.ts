@@ -7,11 +7,11 @@ const TOKEN_ADDRESSES = {
   USDC: config.tokens.USDC,
 };
 
-// Aave V3 Pool address from config (Arbitrum Sepolia)
 const AAVE_POOL_ADDRESS = config.aavePoolAddress;
+const isBtc = config.product === 'btc';
 
 /**
- * Batch Processor - Two-phase daily batch for KashYieldETH (ETH/wETH only).
+ * Batch Processor - Two-phase daily batch for KashYieldETH or KashYieldBtc.
  * Phase 1: performUpkeep() → indicative; handle NET_MINT/NET_REDEEM, updateNAV, markBatchOpsDone.
  * Phase 2: performUpkeep() → distribute; optionally handle NET_MINT_ETH_DEPLOY.
  */
@@ -36,8 +36,13 @@ export class BatchProcessor {
     const isProcessingWindow = await this.kashYield.isProcessingWindow();
     if (!isProcessingWindow) {
       console.log('⏳ Not in processing window (23:50-23:59 UTC)');
-      console.log('   Waiting for processing window...');
-      await this.waitForProcessingWindow();
+      if (config.waitForProcessingWindow) {
+        console.log('   Waiting for processing window...');
+        await this.waitForProcessingWindow();
+      } else {
+        console.log('   Exiting (set WAIT_FOR_PROCESSING_WINDOW=true to wait)');
+        return;
+      }
     }
 
     const currentCycle = await this.kashYield.getCurrentBatchCycle();
@@ -80,7 +85,7 @@ export class BatchProcessor {
         aavePoolAddress: AAVE_POOL_ADDRESS,
         aaveUserAddress: config.aaveUserAddress || config.kashYieldAddress,
       });
-      const tokenAddr = await this.kashYield.kashTokenEth().catch(() => null);
+      const tokenAddr = await (isBtc ? this.kashYield.kashTokenBtc() : this.kashYield.kashTokenEth()).catch(() => null);
       const kashSupply = tokenAddr
         ? await new ethers.Contract(tokenAddr, ['function totalSupply() view returns (uint256)'], this.provider).totalSupply()
         : 0n;
@@ -110,7 +115,7 @@ export class BatchProcessor {
         aavePoolAddress: AAVE_POOL_ADDRESS,
         aaveUserAddress: config.aaveUserAddress || config.kashYieldAddress,
       });
-      const tokenAddr = await this.kashYield.kashTokenEth().catch(() => null);
+      const tokenAddr = await (isBtc ? this.kashYield.kashTokenBtc() : this.kashYield.kashTokenEth()).catch(() => null);
       const kashSupply = tokenAddr
         ? await new ethers.Contract(tokenAddr, ['function totalSupply() view returns (uint256)'], this.provider).totalSupply()
         : 0n;
@@ -144,7 +149,7 @@ export class BatchProcessor {
   private async estimatePortfolioValueUSD(): Promise<bigint> {
     try {
       const nav = await this.kashYield.currentNAV();
-      const tokenAddr = await this.kashYield.kashTokenEth().catch(() => null);
+      const tokenAddr = await (isBtc ? this.kashYield.kashTokenBtc() : this.kashYield.kashTokenEth()).catch(() => null);
       const kashSupply = tokenAddr
         ? await new ethers.Contract(tokenAddr, ['function totalSupply() view returns (uint256)'], this.provider).totalSupply()
         : 0n;
@@ -270,18 +275,20 @@ export class BatchProcessor {
    * @param amount Net mint amount in USD (18 decimals)
    */
   private async handleNetMint(amount: bigint, _asset: string): Promise<void> {
-    console.log('💰 Handling NET_MINT - Deploying capital...');
+    console.log(`💰 Handling NET_MINT (${isBtc ? 'BTC' : 'ETH'}) - Deploying capital...`);
     console.log(`   Net amount: ${ethers.formatEther(amount)} USD\n`);
 
     try {
       const amountUSD = amount;
-      const ethPrice = await this.kashYield.getEthPrice();
+      const price = isBtc ? await this.kashYield.getBtcPrice() : await this.kashYield.getEthPrice();
       const pct = BigInt(config.strategy.aaveDepositPct);
       const depositAmountUSD = (amountUSD * pct) / 100n;
-      const depositEthWei = (depositAmountUSD * (10n ** 18n)) / ethPrice;
+      const depositAmount = isBtc
+        ? (depositAmountUSD * (10n ** 8n)) / price
+        : (depositAmountUSD * (10n ** 18n)) / price;
 
-      console.log(`   Step 1: Deposit ${config.strategy.aaveDepositPct}% (${ethers.formatEther(depositEthWei)} ETH) to Aave`);
-      const txDeposit = await this.kashYield.depositToAave(depositEthWei);
+      console.log(`   Step 1: Deposit ${config.strategy.aaveDepositPct}% (${isBtc ? Number(depositAmount) / 1e8 + ' wBTC' : ethers.formatEther(depositAmount) + ' ETH'}) to Aave`);
+      const txDeposit = await this.kashYield.depositToAave(depositAmount);
       await txDeposit.wait();
 
       // Step 2: Borrow 70% of deposit’s USD value as USDC, send to Hyperliquid as collateral
@@ -292,16 +299,15 @@ export class BatchProcessor {
       await this.borrowFromAave(TOKEN_ADDRESSES.USDC, borrowUsdcUnits);
       await this.depositToHyperliquid(borrowUsdcUnits);
 
-      console.log(`   Step 2b: Spot buy ETH on Hyperliquid`);
+      console.log(`   Step 2b: Spot buy ${isBtc ? 'wBTC' : 'ETH'} on Hyperliquid`);
       const txSpot = await this.kashYield.spotBuyOnHyperliquid(borrowUsdcUnits);
       await txSpot.wait();
-      // Optional (real HL only): call Hyperliquid API spot_perp_transfer(amount, to_perp=true)
-      // to move ETH or USDC from spot to perp margin. No contract change needed — add here if needed.
 
       const leverageScaled = BigInt(Math.round(config.strategy.shortLeverage * 100));
       const shortSizeUSD = (amountUSD * leverageScaled) / 100n;
-      console.log(`   Step 3: Open ${config.strategy.shortLeverage}x ETH short`);
-      await this.openShortOnHyperliquid(shortSizeUSD);
+      const shortSymbol = isBtc ? 'BTC' : 'ETH';
+      console.log(`   Step 3: Open ${config.strategy.shortLeverage}x ${shortSymbol} short`);
+      await this.openShortOnHyperliquid(shortSizeUSD, price, shortSymbol);
 
       console.log('   ✅ NET_MINT complete!\n');
 
@@ -320,21 +326,23 @@ export class BatchProcessor {
    * @param amountUSD Net redeem amount in USD (18 decimals)
    */
   private async handleNetRedeem(amountUSD: bigint, _asset: string): Promise<void> {
-    console.log('💸 Handling NET_REDEEM - Withdrawing capital...');
+    console.log(`💸 Handling NET_REDEEM (${isBtc ? 'BTC' : 'ETH'}) - Withdrawing capital...`);
     console.log(`   Net amount: ${ethers.formatEther(amountUSD)} USD\n`);
 
     try {
-      console.log(`   Step 1: Close ETH short on Hyperliquid`);
-      await this.closeShortOnHyperliquid();
-      // Optional (real HL only): call Hyperliquid API spot_perp_transfer(amount, to_perp=false)
-      // to move ETH (or USDC) from perp to spot before selling. No contract change needed.
+      const shortSymbol = isBtc ? 'BTC' : 'ETH';
+      console.log(`   Step 1: Close ${shortSymbol} short on Hyperliquid`);
+      await this.closeShortOnHyperliquid(shortSymbol);
 
       const ltv = BigInt(config.strategy.borrowLtvPct);
       const usdcToWithdrawUSD = (amountUSD * ltv) / 100n;
-      const ethPrice = await this.kashYield.getEthPrice();
-      const spotSellEthWei = (usdcToWithdrawUSD * (10n ** 18n)) / ethPrice;
-      console.log(`   Step 1b: Spot sell ETH to USDC on Hyperliquid`);
-      const txSell = await this.kashYield.spotSellOnHyperliquid(spotSellEthWei, { value: spotSellEthWei });
+      const price = isBtc ? await this.kashYield.getBtcPrice() : await this.kashYield.getEthPrice();
+      // Spot sell: Mock HL uses 18 decimals for both eth and btc internal balances
+      const spotSellAmount = (usdcToWithdrawUSD * (10n ** 18n)) / price;
+      console.log(`   Step 1b: Spot sell ${isBtc ? 'wBTC' : 'ETH'} to USDC on Hyperliquid`);
+      const txSell = isBtc
+        ? await this.kashYield.spotSellOnHyperliquid(spotSellAmount)
+        : await this.kashYield.spotSellOnHyperliquid(spotSellAmount, { value: spotSellAmount });
       await txSell.wait();
 
       const usdcWithdrawUnits = usdcToWithdrawUSD / (10n ** 12n);
@@ -344,9 +352,11 @@ export class BatchProcessor {
       console.log(`   Step 3: Repay Aave borrow with USDC`);
       await this.repayToAave(TOKEN_ADDRESSES.USDC, usdcWithdrawUnits);
 
-      const withdrawEthWei = (amountUSD * (10n ** 18n)) / ethPrice;
-      console.log(`   Step 4: Withdraw ${ethers.formatEther(withdrawEthWei)} ETH from Aave`);
-      const txWithdraw = await this.kashYield.withdrawFromAave(withdrawEthWei);
+      const withdrawAmount = isBtc
+        ? (amountUSD * (10n ** 8n)) / price
+        : (amountUSD * (10n ** 18n)) / price;
+      console.log(`   Step 4: Withdraw ${isBtc ? Number(withdrawAmount) / 1e8 + ' wBTC' : ethers.formatEther(withdrawAmount) + ' ETH'} from Aave`);
+      const txWithdraw = await this.kashYield.withdrawFromAave(withdrawAmount);
       await txWithdraw.wait();
 
       console.log('   ✅ NET_REDEEM complete!\n');
@@ -427,20 +437,17 @@ export class BatchProcessor {
 
   /**
    * Open short position on Hyperliquid in the same asset as the mint (ETH or BTC).
-   * Size = 1.7x net mint in USD; we convert to notional in asset units.
-   * Contract expects openShort(string symbol, uint256 size) with size in 18 decimals.
+   * Size = leverage x net mint in USD; convert to asset units (18 decimals for both ETH and BTC per MockHyperliquid).
    */
-  private async openShortOnHyperliquid(amountUSD: bigint): Promise<void> {
+  private async openShortOnHyperliquid(amountUSD: bigint, price: bigint, symbol: 'ETH' | 'BTC'): Promise<void> {
     try {
-      const priceBigInt = BigInt((await this.kashYield.getEthPrice()).toString());
-      if (priceBigInt === 0n) throw new Error('ETH price is zero');
+      if (price === 0n) throw new Error(`${symbol} price is zero`);
+      const size = (amountUSD * (10n ** 18n)) / price;
 
-      const size = (amountUSD * (10n ** 18n)) / priceBigInt;
-
-      console.log(`   → Opening ${ethers.formatEther(amountUSD)} USD (${ethers.formatEther(size)} ETH) short on Hyperliquid`);
-      const tx = await this.kashYield.openShort('ETH', size);
+      console.log(`   → Opening ${ethers.formatEther(amountUSD)} USD (${ethers.formatEther(size)} ${symbol}) short on Hyperliquid`);
+      const tx = await this.kashYield.openShort(symbol, size);
       await tx.wait();
-      console.log(`   ✅ Opened ETH short on Hyperliquid`);
+      console.log(`   ✅ Opened ${symbol} short on Hyperliquid`);
     } catch (error: any) {
       console.error(`   ❌ Failed to open short on Hyperliquid: ${error.message}`);
       throw error;
@@ -450,12 +457,12 @@ export class BatchProcessor {
   /**
    * Close short position on Hyperliquid in the same asset (ETH or BTC).
    */
-  private async closeShortOnHyperliquid(): Promise<void> {
+  private async closeShortOnHyperliquid(symbol: 'ETH' | 'BTC'): Promise<void> {
     try {
-      console.log(`   → Closing ETH short on Hyperliquid`);
-      const tx = await this.kashYield.closeShort('ETH');
+      console.log(`   → Closing ${symbol} short on Hyperliquid`);
+      const tx = await this.kashYield.closeShort(symbol);
       await tx.wait();
-      console.log(`   ✅ Closed ETH short on Hyperliquid`);
+      console.log(`   ✅ Closed ${symbol} short on Hyperliquid`);
     } catch (error: any) {
       console.error(`   ❌ Failed to close short on Hyperliquid: ${error.message}`);
       throw error;

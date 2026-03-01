@@ -12,28 +12,16 @@ const MIN_MAX_FEE_GWEI = 30n;
 const GWEI = 10n ** 9n;
 const FEE_BUFFER_PERCENT = 120n;
 
-// KASH-ETH redeems to wETH; KASH-BTC redeems to wBTC.
-const REDEEM_TOKENS_ETH = [
-  { symbol: 'KASH-ETH', address: CONTRACTS.tokens.weth, disabled: false },
-  { symbol: 'KASH-BTC', address: CONTRACTS.tokens.wbtc, disabled: true },
-];
-// KASH-BTC redeems to wBTC (mockWbtc when using MockAave stack)
-const getRedeemTokensBtc = () => [
-  { symbol: 'KASH-BTC', address: CONTRACTS.mockWbtc ?? CONTRACTS.tokens.wbtc, disabled: false },
-];
-
 type Product = 'eth' | 'btc';
 
 export function RedeemForm({ product = 'eth' }: { product?: Product }) {
   const { address } = useAccount();
   const chainId = useChainId();
-  const isBtc = product === 'btc' && CONTRACTS.kashYieldBtc && CONTRACTS.kashTokenBtc;
 
+  const isBtc = product === 'btc' && CONTRACTS.kashYieldBtc && CONTRACTS.kashTokenBtc;
   const kashYield = isBtc ? CONTRACTS.kashYieldBtc! : CONTRACTS.kashYieldEth;
   const kashToken = isBtc ? CONTRACTS.kashTokenBtc! : CONTRACTS.kashTokenEth;
-  const redeemTokens = isBtc ? getRedeemTokensBtc() : REDEEM_TOKENS_ETH;
-
-  const [selectedToken, setSelectedToken] = useState(redeemTokens[0]!);
+  const redeemSymbol = isBtc ? 'KASH-BTC' : 'KASH-ETH';
   const [amount, setAmount] = useState('');
 
   const { data: feesPerGas } = useEstimateFeesPerGas();
@@ -161,7 +149,7 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
         <div className="rounded-xl p-4 mb-6 border border-gray-200 bg-purple-50 shadow-md text-left space-y-2">
           <p className="text-sm font-medium text-gray-700">Request summary</p>
           <p className="text-sm text-gray-600">
-            You requested to redeem <span className="font-semibold text-purple-600">{amount} KASH</span> for {selectedToken.symbol}
+            You requested to redeem <span className="font-semibold text-purple-600">{amount} {redeemSymbol}</span>
           </p>
           <p className="text-sm text-gray-600">
             Transaction:{' '}
@@ -190,34 +178,9 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
 
   return (
     <div className="space-y-4">
-      {/* Token Selector */}
-      <div>
-        {/*<label className="block text-sm font-medium text-gray-700 mb-2">Redeem Token</label>*/}
-        <div className="grid grid-cols-2 gap-2">
-          {redeemTokens.map((token) => {
-            const isDisabled = token.disabled;
-            return (
-              <button
-                key={token.symbol}
-                type="button"
-                onClick={() => !isDisabled && setSelectedToken(token)}
-                disabled={isDisabled}
-                className={`px-4 py-2 rounded-lg border-2 transition-all ${
-                  isDisabled
-                    ? 'border-gray-200 bg-gray-200/60 text-gray-500 cursor-default'
-                    : selectedToken.symbol === token.symbol
-                      ? 'border-purple-600 bg-purple-50 text-purple-700 cursor-pointer'
-                      : 'border-gray-200 hover:border-gray-300 text-gray-700 cursor-pointer'
-                }`}
-              >
-                {token.symbol}
-              </button>
-            );
-          })}
-        </div>
-        {/*<p className="text-xs text-gray-500 mt-1.5">
-          KASH-ETH redeems to wETH. KASH-BTC coming soon.
-        </p>*/}
+      {/* Token (single option per product) */}
+      <div className="text-sm font-medium text-gray-700">
+        Redeem: {redeemSymbol}
       </div>
 
       {/* Amount Input */}
@@ -240,7 +203,7 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
           className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
         />
         {amount && parsedAmount > BigInt(0) && kashBalance !== undefined && parsedAmount > kashBalance && (
-          <p className="text-sm text-red-600 mt-1.5">Insufficient {isBtc ? 'KASH-BTC' : 'KASH-ETH'} balance. Your balance: {Number(formatEther(kashBalance)).toFixed(4)}</p>
+          <p className="text-sm text-red-600 mt-1.5">Insufficient {redeemSymbol} balance. Your balance: {Number(formatEther(kashBalance)).toFixed(4)}</p>
         )}
       </div>
 
