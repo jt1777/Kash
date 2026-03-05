@@ -16,8 +16,11 @@ async function main() {
     process.exit(1);
   }
 
-  // Initialize provider and signer
-  const provider = new ethers.JsonRpcProvider(config.rpcUrl);
+  // Initialize provider and signer (60s timeout; static network to avoid extra RPC on startup)
+  const fetchRequest = new ethers.FetchRequest(config.rpcUrl);
+  fetchRequest.timeout = 60000;
+  const network = { chainId: config.chainId, name: 'arbitrum-sepolia' };
+  const provider = new ethers.JsonRpcProvider(fetchRequest, network);
   
   if (!config.privateKey) {
     console.error('❌ Private key not configured. Set PRIVATE_KEY in .env');

@@ -66,6 +66,7 @@ export const kashYieldABI = [
   { inputs: [], name: "owner", outputs: [{ name: "", type: "address" }], stateMutability: "view", type: "function" },
   { inputs: [], name: "feeBps", outputs: [{ name: "", type: "uint256" }], stateMutability: "view", type: "function" },
   { inputs: [], name: "wethAddress", outputs: [{ name: "", type: "address" }], stateMutability: "view", type: "function" },
+  { inputs: [], name: "wbtcAddress", outputs: [{ name: "", type: "address" }], stateMutability: "view", type: "function" },
   { inputs: [], name: "usdcAddress", outputs: [{ name: "", type: "address" }], stateMutability: "view", type: "function" },
   { inputs: [], name: "currentNAV", outputs: [{ name: "", type: "uint256" }], stateMutability: "view", type: "function" },
   { inputs: [], name: "kashTokenEth", outputs: [{ name: "", type: "address" }], stateMutability: "view", type: "function" },
@@ -75,12 +76,14 @@ export const kashYieldABI = [
   { inputs: [], name: "hyperliquidAddress", outputs: [{ name: "", type: "address" }], stateMutability: "view", type: "function" },
   { inputs: [], name: "getEthPrice", outputs: [{ name: "", type: "uint256" }], stateMutability: "view", type: "function" },
   { inputs: [], name: "getReservedEth", outputs: [{ name: "", type: "uint256" }], stateMutability: "view", type: "function" },
+  { inputs: [], name: "getReservedBtc", outputs: [{ name: "", type: "uint256" }], stateMutability: "view", type: "function" },
   // User + batch
   { inputs: [{ name: "amount", type: "uint256" }], name: "requestMint", outputs: [], stateMutability: "payable", type: "function" },
   { inputs: [{ name: "kashAmount", type: "uint256" }], name: "requestRedeem", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "batchCycle", type: "uint256" }], name: "cancelMintRequest", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "batchCycle", type: "uint256" }], name: "cancelRedeemRequest", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "performData", type: "bytes" }], name: "performUpkeep", outputs: [], stateMutability: "nonpayable", type: "function" },
+  { inputs: [{ name: "batchCycle", type: "uint256" }], name: "processBatchPhase2ForCycle", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "batchCycle", type: "uint256" }], name: "markBatchOpsDone", outputs: [], stateMutability: "nonpayable", type: "function" },
   // Aave (ETH-only)
   { inputs: [{ name: "amount", type: "uint256" }], name: "depositToAave", outputs: [], stateMutability: "nonpayable", type: "function" },

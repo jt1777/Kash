@@ -316,11 +316,21 @@ contract KashYieldETH {
         emit BatchPhaseUpdated(batchCycle, 2, currentNAV); // Now exact
     }
 
-    // Phase 2: Final distributions with exact NAV
+    // Phase 2: Final distributions with exact NAV (current cycle only, time-gated)
     function processBatchPhase2() internal onlyProcessingWindow {
         uint256 batchCycle = block.timestamp / 86400;
         require(batchPhase[batchCycle] == 2, "Ops not done");
+        _processBatchPhase2(batchCycle);
+    }
 
+    /// @notice Run Phase 2 for a specific batch (e.g. orphaned batch). Bot/keeper only. No time window.
+    function processBatchPhase2ForCycle(uint256 batchCycle) external onlyBotOrKeeper {
+        require(batchPhase[batchCycle] == 2, "Ops not done");
+        require(batchCycle != block.timestamp / 86400, "Use performUpkeep for current");
+        _processBatchPhase2(batchCycle);
+    }
+
+    function _processBatchPhase2(uint256 batchCycle) internal {
         uint256 exactNAV = currentNAV;
         batchExactNAV[batchCycle] = exactNAV;
 

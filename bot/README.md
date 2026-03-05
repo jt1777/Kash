@@ -147,6 +147,23 @@ For mainnet deployment, update:
 - Aave pool address to Arbitrum mainnet
 - Oracle addresses to Arbitrum mainnet
 
+## Owner Status Script
+
+View protocol state at a glance (asset in contract, Aave, Hyperliquid):
+
+```bash
+# ETH product
+PRODUCT=eth KASH_YIELD_ADDRESS=0x... npm run owner:status
+
+# BTC product (with MockAave)
+PRODUCT=btc KASH_YIELD_ADDRESS=0x... AAVE_POOL_ADDRESS=0x... npm run owner:status
+```
+
+Shows:
+- **Asset in contract**: Total wBTC/ETH, user deposits (reserved), excess (owner-withdrawable)
+- **Aave**: Supplied ETH/wBTC, borrowed USDC
+- **Hyperliquid**: USDC in spot wallet, open perp positions
+
 ## Troubleshooting
 
 ### "Invalid KASH_YIELD_ADDRESS"

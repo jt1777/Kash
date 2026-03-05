@@ -5,6 +5,8 @@ import { getDailyYield } from './dailyYield';
 
 const TOKEN_ADDRESSES = {
   USDC: config.tokens.USDC,
+  /** For borrow/repay - use Aave's expected USDC (MockUSDC when using MockAave) */
+  AAVE_USDC: config.aaveUsdcAddress,
 };
 
 const AAVE_POOL_ADDRESS = config.aavePoolAddress;
@@ -46,11 +48,31 @@ export class BatchProcessor {
     }
 
     const currentCycle = await this.kashYield.getCurrentBatchCycle();
-    const batchCycle = currentCycle;
-    console.log(`📅 Batch cycle: ${batchCycle}\n`);
+    console.log(`📅 Batch cycle: ${currentCycle}\n`);
 
-    const batchInfo = await this.kashYield.getBatchInfo(batchCycle);
-    await this.runBatch(batchCycle, batchInfo);
+    // Check previous batches for incomplete work (phase 1: ops not done; phase 2: distribution not run)
+    const lookback = 10; // check last 10 days of batches
+    for (let i = 1; i <= lookback; i++) {
+      const prevCycle = currentCycle - BigInt(i);
+      if (prevCycle < 0n) break;
+      const prevPhase = await this.kashYield.batchPhase(prevCycle);
+      const prevInfo = await this.kashYield.getBatchInfo(prevCycle);
+      if (prevInfo.processed) continue;
+      const prevPhaseNum = Number(prevPhase);
+      const prevNet = BigInt(prevInfo.totalMintUSD.toString()) - BigInt(prevInfo.totalRedeemUSD.toString());
+      const isPhase1Orphan = prevPhaseNum === 1 && prevNet !== 0n;
+      const isPhase2Orphan = prevPhaseNum === 2; // ops done but Phase 2 (distribution) never ran
+      if (isPhase1Orphan || isPhase2Orphan) {
+        const action = isPhase2Orphan ? 'phase 2 (distribution) pending' : prevNet > 0n ? `net mint ${ethers.formatEther(prevNet)} USD` : `net redeem ${ethers.formatEther(-prevNet)} USD`;
+        console.log(`⚠️  Found incomplete batch ${prevCycle} (${isPhase2Orphan ? 'phase 2' : 'phase 1'}, ${action})`);
+        console.log(`   Completing orphaned batch before processing current batch...\n`);
+        await this.runBatch(prevCycle, prevInfo);
+        break; // complete one at a time, then re-run for more if needed
+      }
+    }
+
+    const batchInfo = await this.kashYield.getBatchInfo(currentCycle);
+    await this.runBatch(currentCycle, batchInfo);
   }
 
   /**
@@ -91,17 +113,18 @@ export class BatchProcessor {
         : 0n;
       const portfolioValueUSD = await this.estimatePortfolioValueUSD();
       const { computeNAVFromPortfolioAndYield } = await import('./dailyYield');
-      const newNAV = computeNAVFromPortfolioAndYield(portfolioValueUSD, dailyYield.netYield, kashSupply);
+      let newNAV = computeNAVFromPortfolioAndYield(portfolioValueUSD, dailyYield.netYield, kashSupply);
+      if (newNAV === 0n) {
+        newNAV = await this.kashYield.currentNAV();
+        if (newNAV === 0n) newNAV = 1n * 10n ** 18n;
+        console.log(`   📈 KASH supply is 0, using current NAV for updateNAV`);
+      }
       console.log('📈 Updating NAV and marking ops done...');
       await (await this.kashYield.updateNAV(newNAV)).wait();
       await (await this.kashYield.markBatchOpsDone(batchCycle)).wait();
       console.log('   ✅ markBatchOpsDone\n');
 
-      console.log('🔄 Phase 2: Calling performUpkeep()...');
-      const tx2 = await this.kashYield.performUpkeep('0x');
-      const receipt2 = await tx2.wait();
-      console.log(`   ✅ Phase 2 done in block ${receipt2.blockNumber}\n`);
-      await this.handleEventsFromReceipt(receipt2, true);
+      await this.runPhase2ForBatch(batchCycle);
       return;
     }
 
@@ -121,22 +144,20 @@ export class BatchProcessor {
         : 0n;
       const portfolioValueUSD = await this.estimatePortfolioValueUSD();
       const { computeNAVFromPortfolioAndYield } = await import('./dailyYield');
-      const newNAV = computeNAVFromPortfolioAndYield(portfolioValueUSD, dailyYield.netYield, kashSupply);
+      let newNAV = computeNAVFromPortfolioAndYield(portfolioValueUSD, dailyYield.netYield, kashSupply);
+      if (newNAV === 0n) {
+        newNAV = await this.kashYield.currentNAV();
+        if (newNAV === 0n) newNAV = 1n * 10n ** 18n;
+        console.log(`   📈 KASH supply is 0, using current NAV for updateNAV`);
+      }
       await (await this.kashYield.updateNAV(newNAV)).wait();
       await (await this.kashYield.markBatchOpsDone(batchCycle)).wait();
-      const tx2 = await this.kashYield.performUpkeep('0x');
-      const receipt2 = await tx2.wait();
-      console.log(`   ✅ Phase 2 done in block ${receipt2.blockNumber}\n`);
-      await this.handleEventsFromReceipt(receipt2, true);
+      await this.runPhase2ForBatch(batchCycle);
       return;
     }
 
     if (phaseNum === 2) {
-      console.log('🔄 Phase 2: Calling performUpkeep()...');
-      const tx2 = await this.kashYield.performUpkeep('0x');
-      const receipt2 = await tx2.wait();
-      console.log(`   ✅ Phase 2 done in block ${receipt2.blockNumber}\n`);
-      await this.handleEventsFromReceipt(receipt2, true);
+      await this.runPhase2ForBatch(batchCycle);
       return;
     }
 
@@ -177,6 +198,28 @@ export class BatchProcessor {
       
       checkWindow();
     });
+  }
+
+  /**
+   * Run Phase 2 (mint KASH to minters, pay redeemers). For current cycle use performUpkeep();
+   * for a past/orphan batch use processBatchPhase2ForCycle(batchCycle) so the correct batch gets finalized.
+   */
+  private async runPhase2ForBatch(batchCycle: bigint): Promise<void> {
+    const currentCycle = await this.kashYield.getCurrentBatchCycle();
+    const currentCycleBn = typeof currentCycle === 'bigint' ? currentCycle : BigInt(currentCycle.toString());
+    if (batchCycle === currentCycleBn) {
+      console.log('🔄 Phase 2: Calling performUpkeep()...');
+      const tx2 = await this.kashYield.performUpkeep('0x');
+      const receipt2 = await tx2.wait();
+      console.log(`   ✅ Phase 2 done in block ${receipt2.blockNumber}\n`);
+      await this.handleEventsFromReceipt(receipt2, true);
+    } else {
+      console.log(`🔄 Phase 2: Calling processBatchPhase2ForCycle(${batchCycle}) (orphan batch)...`);
+      const tx2 = await this.kashYield.processBatchPhase2ForCycle(batchCycle);
+      const receipt2 = await tx2.wait();
+      console.log(`   ✅ Phase 2 for batch ${batchCycle} done in block ${receipt2.blockNumber}\n`);
+      await this.handleEventsFromReceipt(receipt2, true);
+    }
   }
 
   /**
@@ -287,32 +330,52 @@ export class BatchProcessor {
         ? (depositAmountUSD * (10n ** 8n)) / price
         : (depositAmountUSD * (10n ** 18n)) / price;
 
-      console.log(`   Step 1: Deposit ${config.strategy.aaveDepositPct}% (${isBtc ? Number(depositAmount) / 1e8 + ' wBTC' : ethers.formatEther(depositAmount) + ' ETH'}) to Aave`);
-      const txDeposit = await this.kashYield.depositToAave(depositAmount);
-      await txDeposit.wait();
+      const aaveSupplied = await this.getAaveSuppliedAmount();
+      if (aaveSupplied >= depositAmount) {
+        console.log(`   Stage 1: Already deposited to Aave`);
+      } else {
+        const toDeposit = depositAmount - aaveSupplied;
+        console.log(`   Stage 1: Deposit ${config.strategy.aaveDepositPct}% to Aave`);
+        const txDeposit = await this.kashYield.depositToAave(toDeposit);
+        await txDeposit.wait();
+      }
 
       // Step 2: Borrow 70% of deposit’s USD value as USDC, send to Hyperliquid as collateral
       const ltv = BigInt(config.strategy.borrowLtvPct);
       const borrowAmountUSD = (depositAmountUSD * ltv) / 100n;
       const borrowUsdcUnits = borrowAmountUSD / (10n ** 12n);
-      console.log(`   Step 2: Borrow ${config.strategy.borrowLtvPct}% as USDC, send to Hyperliquid`);
-      await this.borrowFromAave(TOKEN_ADDRESSES.USDC, borrowUsdcUnits);
-      await this.depositToHyperliquid(borrowUsdcUnits);
+      console.log(`   Stage 2a: Borrow ${config.strategy.borrowLtvPct}% as USDC`);
+      const aaveDebt = await this.getAaveBorrowedAmount();
+      if (aaveDebt < borrowUsdcUnits) {
+        await this.borrowFromAave(TOKEN_ADDRESSES.AAVE_USDC, borrowUsdcUnits - aaveDebt);
+      }
+      const contractUsdc = await this.getContractUsdcBalance();
+      if (contractUsdc > 0n) {
+        console.log(`   Stage 2b: Deposit ${ethers.formatUnits(contractUsdc, 6)} USDC to Hyperliquid`);
+        await this.depositToHyperliquid(contractUsdc);
+      }
 
-      console.log(`   Step 2b: Spot buy ${isBtc ? 'wBTC' : 'ETH'} on Hyperliquid`);
-      const txSpot = await this.kashYield.spotBuyOnHyperliquid(borrowUsdcUnits);
-      await txSpot.wait();
+      console.log(`   Stage 3: Spot buy ${isBtc ? 'wBTC' : 'ETH'} on Hyperliquid`);
+      const hlSpot = await this.getHyperliquidSpotBalance();
+      if (hlSpot >= borrowUsdcUnits) {
+        const txSpot = await this.kashYield.spotBuyOnHyperliquid(borrowUsdcUnits);
+        await txSpot.wait();
+      }
 
-      const leverageScaled = BigInt(Math.round(config.strategy.shortLeverage * 100));
-      const shortSizeUSD = (amountUSD * leverageScaled) / 100n;
       const shortSymbol = isBtc ? 'BTC' : 'ETH';
-      console.log(`   Step 3: Open ${config.strategy.shortLeverage}x ${shortSymbol} short`);
-      await this.openShortOnHyperliquid(shortSizeUSD, price, shortSymbol);
+      const hasShort = await this.hasHyperliquidShort(shortSymbol);
+      if (!hasShort) {
+        const leverageScaled = BigInt(Math.round(config.strategy.shortLeverage * 100));
+        const shortSizeUSD = (amountUSD * leverageScaled) / 100n;
+        console.log(`   Stage 4: Open ${config.strategy.shortLeverage}x ${shortSymbol} short`);
+        await this.openShortOnHyperliquid(shortSizeUSD, price, shortSymbol);
+      }
 
       console.log('   ✅ NET_MINT complete!\n');
 
     } catch (error: any) {
       console.error('❌ Failed to handle NET_MINT:', error.message);
+      console.error('   Re-run the bot to resume from the last completed stage.');
       throw error;
     }
   }
@@ -350,7 +413,7 @@ export class BatchProcessor {
       await this.withdrawFromHyperliquid(usdcWithdrawUnits);
 
       console.log(`   Step 3: Repay Aave borrow with USDC`);
-      await this.repayToAave(TOKEN_ADDRESSES.USDC, usdcWithdrawUnits);
+      await this.repayToAave(TOKEN_ADDRESSES.AAVE_USDC, usdcWithdrawUnits);
 
       const withdrawAmount = isBtc
         ? (amountUSD * (10n ** 8n)) / price
@@ -466,6 +529,73 @@ export class BatchProcessor {
     } catch (error: any) {
       console.error(`   ❌ Failed to close short on Hyperliquid: ${error.message}`);
       throw error;
+    }
+  }
+
+  private async getAaveSuppliedAmount(): Promise<bigint> {
+    const poolAddr = await this.kashYield.aavePoolAddress();
+    if (!poolAddr || poolAddr === ethers.ZeroAddress) return 0n;
+    const aavePool = new ethers.Contract(
+      poolAddr,
+      [
+        { inputs: [{ name: 'asset', type: 'address' }, { name: 'user', type: 'address' }], name: 'getATokenBalance', outputs: [{ name: '', type: 'uint256' }], stateMutability: 'view', type: 'function' },
+        { inputs: [], name: 'wbtcAddress', outputs: [{ name: '', type: 'address' }], stateMutability: 'view', type: 'function' },
+      ],
+      this.provider
+    );
+    const addr = config.kashYieldAddress!;
+    try {
+      if (isBtc) {
+        const wbtcAddr = await aavePool.wbtcAddress?.().catch(() => null);
+        if (wbtcAddr) return await aavePool.getATokenBalance(wbtcAddr, addr);
+      }
+      const wethAddr = await this.kashYield.wethAddress?.().catch(() => null);
+      if (wethAddr) return await aavePool.getATokenBalance(wethAddr, addr);
+      return await aavePool.getATokenBalance(ethers.ZeroAddress, addr);
+    } catch {
+      return 0n;
+    }
+  }
+
+  private async getAaveBorrowedAmount(): Promise<bigint> {
+    const poolAddr = await this.kashYield.aavePoolAddress();
+    if (!poolAddr || poolAddr === ethers.ZeroAddress) return 0n;
+    try {
+      const pool = new ethers.Contract(
+        poolAddr,
+        [{ inputs: [{ name: 'user', type: 'address' }], name: 'getBorrowedAmount', outputs: [{ name: '', type: 'uint256' }], stateMutability: 'view', type: 'function' }],
+        this.provider
+      );
+      return await pool.getBorrowedAmount(config.kashYieldAddress!);
+    } catch {
+      return 0n;
+    }
+  }
+
+  private async getContractUsdcBalance(): Promise<bigint> {
+    try {
+      const usdcAddr = await this.kashYield.usdcAddress();
+      const usdc = new ethers.Contract(usdcAddr, [{ inputs: [{ name: 'account', type: 'address' }], name: 'balanceOf', outputs: [{ name: '', type: 'uint256' }], stateMutability: 'view', type: 'function' }], this.provider);
+      return await usdc.balanceOf(config.kashYieldAddress!);
+    } catch {
+      return 0n;
+    }
+  }
+
+  private async getHyperliquidSpotBalance(): Promise<bigint> {
+    try {
+      return await this.kashYield.getHyperliquidSpotBalance();
+    } catch {
+      return 0n;
+    }
+  }
+
+  private async hasHyperliquidShort(symbol: string): Promise<boolean> {
+    try {
+      const [, , , , isActive] = await this.kashYield.getHyperliquidPosition(symbol);
+      return !!isActive;
+    } catch {
+      return false;
     }
   }
 }

@@ -71,6 +71,9 @@ export const config = {
   // Aave V3 Pool (Arbitrum Sepolia)
   aavePoolAddress: process.env.AAVE_POOL_ADDRESS || '0xBfC91D59fdAA134A4ED45f7B584cAf96D7792Eff',
 
+  /** USDC address for Aave borrow/repay. When using MockAave, set to MockUSDC address. */
+  aaveUsdcAddress: process.env.AAVE_USDC_ADDRESS || process.env.USDC_ADDRESS || '0x15BB91b9e63EA29863678B1dcBcB01dE31bD8Ab5',
+
   // Aave user address (defaults to kashYieldAddress if not set - for separate vault scenarios)
   aaveUserAddress: process.env.AAVE_USER_ADDRESS || '',
 
