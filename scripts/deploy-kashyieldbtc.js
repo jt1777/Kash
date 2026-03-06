@@ -1,15 +1,15 @@
 // scripts/deploy-kashyieldbtc.js
 // Deploys KashYieldBtc with full MockAave stack: MockUSDC, MockWBTC, MockAaveV3, MockChainlinkPriceFeed.
+// Does NOT deploy MockHyperliquid — deploy that separately and set via setHyperliquid.js.
 // Use for local testing (hardhat) or Arbitrum Sepolia.
 //
 // Usage:
 //   Local:    npx hardhat run scripts/deploy-kashyieldbtc.js
 //   Sepolia: npx hardhat run scripts/deploy-kashyieldbtc.js --network arbitrumSepolia
 //
-// Output: Prints addresses. Add to frontend/.env.local:
-//   NEXT_PUBLIC_KASH_YIELD_BTC=0x...
-//   NEXT_PUBLIC_KASH_TOKEN_BTC=0x...
-//   NEXT_PUBLIC_MOCK_WBTC=0x...
+// Env: BOT_ADDRESS (optional) — bot/keeper address for performUpkeep; defaults to deployer.
+//
+// Output: Prints addresses. After full setup, add to frontend/.env.local and bot/.env (see DEPLOYMENT.md).
 
 const hre = require("hardhat");
 const fs = require("fs");

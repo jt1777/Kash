@@ -46,6 +46,10 @@ export type ActivityItem = {
   hash: string;
   timestamp: number;
   blockNumber: string;
+  /** Batch cycle (day index) for this tx; used to cancel pending mint/redeem */
+  batchCycle: number;
+  /** KashYield contract that was called (ETH or BTC) */
+  contractAddress: string;
 };
 
 type ArbiscanTx = {
@@ -93,19 +97,27 @@ export async function GET(request: NextRequest) {
       const input = (tx.input || '').toLowerCase();
       const selector = input.slice(0, 10);
 
+      const ts = parseInt(tx.timeStamp, 10);
+      const batchCycle = Math.floor(ts / 86400);
+      const contractAddress = tx.to || '';
+
       if (selector === SELECTOR_REQUEST_MINT) {
         activities.push({
           type: 'mint',
           hash: tx.hash,
-          timestamp: parseInt(tx.timeStamp, 10),
+          timestamp: ts,
           blockNumber: tx.blockNumber,
+          batchCycle,
+          contractAddress,
         });
       } else if (selector === SELECTOR_REQUEST_REDEEM) {
         activities.push({
           type: 'redeem',
           hash: tx.hash,
-          timestamp: parseInt(tx.timeStamp, 10),
+          timestamp: ts,
           blockNumber: tx.blockNumber,
+          batchCycle,
+          contractAddress,
         });
       }
     }
