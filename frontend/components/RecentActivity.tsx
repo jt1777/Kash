@@ -2,7 +2,7 @@
 
 import { useAccount, useReadContracts, useWriteContract, useWaitForTransactionReceipt, useEstimateFeesPerGas } from 'wagmi';
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { ARBITRUM_SEPOLIA_CHAIN_ID, ARBITRUM_SEPOLIA_BLOCK_EXPLORER } from '@/lib/contracts/addresses';
+import { ARBITRUM_SEPOLIA_CHAIN_ID, ARBITRUM_SEPOLIA_BLOCK_EXPLORER, CONTRACTS } from '@/lib/contracts/addresses';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 
 // Fallback max fee when estimate is missing (e.g. 25 gwei for Arbitrum Sepolia)
@@ -75,8 +75,9 @@ export function RecentActivity() {
   const readConfigs: { address: `0x${string}`; abi: typeof kashYieldABI; functionName: 'getBatchInfo' | 'getPendingMintRequest' | 'getPendingRedeemRequest'; args: [bigint] | [string, bigint] }[] = [];
   const activityToConfigIndex: number[] = [];
   activities.forEach((a, i) => {
-    if (!a.contractAddress || a.batchCycle == null || !address) return;
-    const contract = a.contractAddress as `0x${string}`;
+    const contractAddress = a.contractAddress?.trim();
+    if (!contractAddress || a.batchCycle == null || !address) return;
+    const contract = contractAddress as `0x${string}`;
     const cycle = BigInt(a.batchCycle);
     const batchIdx = readConfigs.length;
     readConfigs.push({ address: contract, abi: kashYieldABI, functionName: 'getBatchInfo', args: [cycle] });
@@ -87,9 +88,13 @@ export function RecentActivity() {
     }
     activityToConfigIndex[i] = batchIdx;
   });
-  const { data: readResults } = useReadContracts({ contracts: readConfigs });
+  const { data: readResults } = useReadContracts({
+    contracts: readConfigs,
+    query: { enabled: readConfigs.length > 0 },
+  });
   const canCancelByIndex = new Map<number, boolean>();
   const cancelledByIndex = new Map<number, boolean>();
+  const processedByIndex = new Map<number, boolean>();
   if (readResults && address) {
     type BatchResult = { status: 'success'; result: readonly [bigint, bigint, boolean, bigint, bigint] };
     type PendingResult = { status: 'success'; result: { amountIn?: bigint; kashAmount?: bigint } };
@@ -108,6 +113,7 @@ export function RecentActivity() {
         : false;
       canCancelByIndex.set(i, !processed && hasRequest);
       cancelledByIndex.set(i, !processed && !hasRequest);
+      processedByIndex.set(i, processed);
     }
   }
 
@@ -254,9 +260,14 @@ export function RecentActivity() {
           {activities.map((item, i) => {
             const canCancel = canCancelByIndex.get(i) ?? false;
             const cancelled = cancelledByIndex.get(i) ?? false;
+            const processed = processedByIndex.get(i) ?? false;
             const isCancellingThis = cancelTarget?.contractAddress === item.contractAddress &&
               cancelTarget?.batchCycle === item.batchCycle &&
               cancelTarget?.type === item.type;
+            const isBtcContract = item.contractAddress?.toLowerCase() === (CONTRACTS.kashYieldBtc as string).toLowerCase();
+            const mintedLabel = item.type === 'mint' && processed
+              ? (isBtcContract ? 'Kash-BTC minted' : 'Kash-ETH minted')
+              : null;
 
             return (
               <li
@@ -279,6 +290,11 @@ export function RecentActivity() {
                 >
                   {item.hash.slice(0, 10)}…{item.hash.slice(-8)}
                 </a>
+                {mintedLabel && (
+                  <span className="text-xs font-medium text-green-600 shrink-0">
+                    {mintedLabel}
+                  </span>
+                )}
                 {canCancel && (
                   <button
                     type="button"

@@ -31,15 +31,21 @@ export function StatsCard({ product = 'eth' }: { product?: Product }) {
   // A future smart contract should expose a view function that returns the total amount of ETH
   // deposited by each wallet (e.g. totalDepositedEth(address user) returns uint256), so the
   // front end can call it once instead of deriving from events.
+  // Block range for event fetches (some RPCs limit range; 500k blocks covers ~6 days on Arbitrum)
+  const EVENT_BLOCK_RANGE = 500_000n;
+
   const { data: mintEvents } = useQuery({
     queryKey: ['userMintEvents', address, publicClient?.chain?.id, kashYield],
     queryFn: async () => {
       if (!publicClient || !address) return [];
+      const blockNumber = await publicClient.getBlockNumber();
+      const fromBlock = blockNumber > EVENT_BLOCK_RANGE ? blockNumber - EVENT_BLOCK_RANGE : 0n;
       const logs = await publicClient.getContractEvents({
         address: kashYield,
         abi: kashYieldABI,
         eventName: 'MintRequested',
         args: { user: address as `0x${string}` },
+        fromBlock,
       });
       return logs;
     },
@@ -50,10 +56,13 @@ export function StatsCard({ product = 'eth' }: { product?: Product }) {
     queryKey: ['batchProcessedEvents', publicClient?.chain?.id, kashYield],
     queryFn: async () => {
       if (!publicClient) return [];
+      const blockNumber = await publicClient.getBlockNumber();
+      const fromBlock = blockNumber > EVENT_BLOCK_RANGE ? blockNumber - EVENT_BLOCK_RANGE : 0n;
       const logs = await publicClient.getContractEvents({
         address: kashYield,
         abi: kashYieldABI,
         eventName: 'BatchProcessed',
+        fromBlock,
       });
       return logs;
     },

@@ -1,12 +1,18 @@
 // Deployed contract addresses on Arbitrum Sepolia
+// Override with .env.local when you redeploy (e.g. NEXT_PUBLIC_KASH_YIELD_BTC, NEXT_PUBLIC_KASH_TOKEN_BTC, NEXT_PUBLIC_MOCK_WBTC)
+function addr(envKey: string, fallback: string): `0x${string}` {
+  const raw = typeof process !== 'undefined' ? process.env?.[envKey]?.trim?.() : undefined;
+  return (raw && raw.startsWith('0x') ? raw : fallback) as `0x${string}`;
+}
+
 export const CONTRACTS = {
   // ETH product
-  kashYieldEth: "0xf78854a9B5D28DdB1B35a60553e22481fE87d759" as `0x${string}`,
-  kashTokenEth: "0x0d590B388C3e01201852d623A5d7692ada376160" as `0x${string}`,
-  // BTC product (KashYieldBtc + MockAave)
-  kashYieldBtc: "0x897a206c1C7494C1593C2a9b7900D8fd4EbFFD7b" as `0x${string}`,
-  kashTokenBtc: "0x28f90D5f0D4689db6e972CA02E1453151Ad22634" as `0x${string}`,
-  mockWbtc: "0xED3e0bc11EBa0ef569C67896fe31E24F7c2aAF28" as `0x${string}`,
+  kashYieldEth: addr('NEXT_PUBLIC_KASH_YIELD_ETH', "0xf78854a9B5D28DdB1B35a60553e22481fE87d759"),
+  kashTokenEth: addr('NEXT_PUBLIC_KASH_TOKEN_ETH', "0x0d590B388C3e01201852d623A5d7692ada376160"),
+  // BTC product (KashYieldBtc + MockAave) — update these or set env when you redeploy
+  kashYieldBtc: addr('NEXT_PUBLIC_KASH_YIELD_BTC', "0x059EC0767854d5e699508A8B57F21d5b3E63CB07"),
+  kashTokenBtc: addr('NEXT_PUBLIC_KASH_TOKEN_BTC', "0x6124E335755C03C504FDb8abC7C4146b519E6b29"),
+  mockWbtc: addr('NEXT_PUBLIC_MOCK_WBTC', "0xeC5Bd373D1808F06Ae849FE5227859a8E3D3FE12"),
   tokens: {
     weth: "0x89c8C8AD33c4a9539361a2Cf1A908C4300F258D9" as `0x${string}`,
     wbtc: "0x4D8b720b94D341F54df948696747B05998c5FbD5" as `0x${string}`,
