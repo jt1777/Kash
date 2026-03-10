@@ -23,6 +23,7 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
   const kashToken = isBtc ? CONTRACTS.kashTokenBtc! : CONTRACTS.kashTokenEth;
   const redeemSymbol = isBtc ? 'KASH-BTC' : 'KASH-ETH';
   const [amount, setAmount] = useState('');
+  const [hideSettled, setHideSettled] = useState(false);
 
   const { data: feesPerGas } = useEstimateFeesPerGas();
   const gasOptions = useMemo(() => {
@@ -71,6 +72,7 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
   });
 
   const batchProcessed = batchInfo ? (batchInfo as readonly [bigint, bigint, boolean, bigint, bigint])[2] : true;
+  const redeemSettled = batchProcessed && pendingRedeemRequest && pendingRedeemRequest.kashAmount > 0n;
   const canCancelRedeem = Boolean(
     address &&
     currentBatchCycle !== undefined &&
@@ -213,6 +215,23 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
           <p className="text-sm text-red-600 mt-1.5">Insufficient {redeemSymbol} balance. Your balance: {Number(formatEther(kashBalance)).toFixed(4)}</p>
         )}
       </div>
+
+      {/* Settled redeem: success message */}
+      {redeemSettled && !hideSettled && (
+        <div className="rounded-lg border border-green-200 bg-green-50 p-3 flex items-start justify-between gap-2">
+          <p className="text-sm text-green-800 font-medium">Your redeem request for this batch has been settled! Assets have been returned to your wallet.</p>
+          <button
+            type="button"
+            onClick={() => setHideSettled(true)}
+            className="text-green-600 hover:text-green-800 transition shrink-0 cursor-pointer"
+            aria-label="Dismiss"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+      )}
 
       {/* Pending redeem: Cancel button */}
       {canCancelRedeem && (

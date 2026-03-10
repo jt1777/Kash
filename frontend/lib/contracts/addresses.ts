@@ -1,18 +1,21 @@
 // Deployed contract addresses on Arbitrum Sepolia
-// Override with .env.local when you redeploy (e.g. NEXT_PUBLIC_KASH_YIELD_BTC, NEXT_PUBLIC_KASH_TOKEN_BTC, NEXT_PUBLIC_MOCK_WBTC)
-function addr(envKey: string, fallback: string): `0x${string}` {
+// Override with .env.local when you redeploy (KASH_YIELD_BTC_ADDRESS, KASH_TOKEN_BTC, MOCK_WBTC, KASH_YIELD_ETH_ADDRESS, KASH_TOKEN_ETH)
+const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000' as `0x${string}`;
+
+function addr(envKey: string, fallback?: string): `0x${string}` {
   const raw = typeof process !== 'undefined' ? process.env?.[envKey]?.trim?.() : undefined;
-  return (raw && raw.startsWith('0x') ? raw : fallback) as `0x${string}`;
+  const value = raw && raw.startsWith('0x') ? raw : (fallback ?? ZERO_ADDRESS);
+  return value as `0x${string}`;
 }
 
 export const CONTRACTS = {
   // ETH product
-  kashYieldEth: addr('NEXT_PUBLIC_KASH_YIELD_ETH', "0xf78854a9B5D28DdB1B35a60553e22481fE87d759"),
-  kashTokenEth: addr('NEXT_PUBLIC_KASH_TOKEN_ETH', "0x0d590B388C3e01201852d623A5d7692ada376160"),
+  kashYieldEth: addr('KASH_YIELD_ETH_ADDRESS', "0xf78854a9B5D28DdB1B35a60553e22481fE87d759"),
+  kashTokenEth: addr('KASH_TOKEN_ETH', "0x0d590B388C3e01201852d623A5d7692ada376160"),
   // BTC product (KashYieldBtc + MockAave) — update these or set env when you redeploy
-  kashYieldBtc: addr('NEXT_PUBLIC_KASH_YIELD_BTC', "0x059EC0767854d5e699508A8B57F21d5b3E63CB07"),
-  kashTokenBtc: addr('NEXT_PUBLIC_KASH_TOKEN_BTC', "0x6124E335755C03C504FDb8abC7C4146b519E6b29"),
-  mockWbtc: addr('NEXT_PUBLIC_MOCK_WBTC', "0xeC5Bd373D1808F06Ae849FE5227859a8E3D3FE12"),
+  kashYieldBtc: addr('KASH_YIELD_BTC_ADDRESS', "0x20F5ab0bd387077108273f4ed47D7342Fc0E2C4c"),
+  kashTokenBtc: addr('KASH_TOKEN_BTC', "0x7D71F582Dc82fE006D7D0D1C8710f2D627ffd93c"),
+  mockWbtc: addr('MOCK_WBTC', "0xeC5Bd373D1808F06Ae849FE5227859a8E3D3FE12"),
   tokens: {
     weth: "0x89c8C8AD33c4a9539361a2Cf1A908C4300F258D9" as `0x${string}`,
     wbtc: "0x4D8b720b94D341F54df948696747B05998c5FbD5" as `0x${string}`,

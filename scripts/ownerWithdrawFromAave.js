@@ -8,7 +8,6 @@
 // Env (root .env):
 //   PRIVATE_KEY                    - owner wallet
 //   KASH_YIELD_BTC_ADDRESS         - KashYieldBtc contract (the one with wBTC in Aave)
-//   NEXT_PUBLIC_KASH_YIELD_BTC      - same, used if KASH_YIELD_BTC_ADDRESS not set
 //
 // Withdraw amount (wBTC, 8 decimals):
 //   WITHDRAW_AMOUNT=1    - withdraw 1 wBTC (default: withdraw all you can)
@@ -23,11 +22,10 @@ const WBTC_DECIMALS = 8;
 async function main() {
   const kashYieldBtcAddress =
     process.env.KASH_YIELD_BTC_ADDRESS ||
-    process.env.NEXT_PUBLIC_KASH_YIELD_BTC ||
     process.env.KASH_YIELD_ADDRESS;
   if (!kashYieldBtcAddress || !hre.ethers.isAddress(kashYieldBtcAddress)) {
     throw new Error(
-      "Set KASH_YIELD_BTC_ADDRESS, NEXT_PUBLIC_KASH_YIELD_BTC, or KASH_YIELD_ADDRESS in .env to the KashYieldBtc contract that has wBTC in Aave."
+      "Set KASH_YIELD_BTC_ADDRESS (or KASH_YIELD_ADDRESS) in .env to the KashYieldBtc contract that has wBTC in Aave."
     );
   }
 

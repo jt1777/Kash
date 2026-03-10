@@ -55,9 +55,21 @@ export const config = {
   // Product: eth (KashYieldETH) or btc (KashYieldBtc)
   product: ((process.env.PRODUCT || 'eth').toLowerCase() === 'btc' ? 'btc' : 'eth') as Product,
 
-  // Contracts - KASH_YIELD_ADDRESS targets the selected product
-  kashYieldAddress: process.env.KASH_YIELD_ADDRESS || '',
-  kashTokenAddress: process.env.KASH_TOKEN_ADDRESS || '',
+  // Contracts - resolved from product-specific vars (KASH_YIELD_ETH_ADDRESS / KASH_YIELD_BTC_ADDRESS) or legacy KASH_YIELD_ADDRESS
+  get kashYieldAddress(): string {
+    const product = this.product;
+    if (product === 'btc') {
+      return process.env.KASH_YIELD_BTC_ADDRESS || process.env.KASH_YIELD_ADDRESS || '';
+    }
+    return process.env.KASH_YIELD_ETH_ADDRESS || process.env.KASH_YIELD_ADDRESS || '';
+  },
+  get kashTokenAddress(): string {
+    const product = this.product;
+    if (product === 'btc') {
+      return process.env.KASH_TOKEN_BTC || process.env.KASH_TOKEN_ADDRESS || '';
+    }
+    return process.env.KASH_TOKEN_ETH || process.env.KASH_TOKEN_ADDRESS || '';
+  },
 
   // Token Addresses (Arbitrum Sepolia)
   tokens: {

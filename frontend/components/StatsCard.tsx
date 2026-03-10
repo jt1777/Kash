@@ -12,7 +12,7 @@ import { useMemo } from 'react';
 type Product = 'eth' | 'btc';
 
 export function StatsCard({ product = 'eth' }: { product?: Product }) {
-  const { address } = useAccount();
+  const { address, connector } = useAccount();
   const publicClient = usePublicClient();
 
   const isBtc = product === 'btc' && CONTRACTS.kashYieldBtc && CONTRACTS.kashTokenBtc;
@@ -212,8 +212,54 @@ export function StatsCard({ product = 'eth' }: { product?: Product }) {
           {address && kashBalance ? Number(formatEther(kashBalance)).toFixed(2) : '0.00'}
         </p>
         <p className="text-xs text-gray-500 mt-1">
-          {isBtc ? 'KASH-BTC' : 'KASH'} tokens
+          {isBtc ? 'KASH-BTC' : 'KASH-ETH'} tokens
         </p>
+        <div className="mt-3 pt-3 border-t border-gray-100">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-500 font-mono truncate" title={kashToken}>
+              {kashToken.slice(0, 6)}…{kashToken.slice(-4)}
+            </span>
+            <button
+              type="button"
+              onClick={() => navigator.clipboard.writeText(kashToken)}
+              className="text-xs text-gray-400 hover:text-gray-600 transition cursor-pointer"
+              title="Copy token address"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                const params = {
+                  type: 'ERC20' as const,
+                  options: {
+                    address: kashToken,
+                    symbol: isBtc ? 'KASH_BTC' : 'KASH_ETH',
+                    decimals: 18,
+                  },
+                };
+                try {
+                  const provider = await connector?.getProvider();
+                  if (provider && typeof (provider as any).request === 'function') {
+                    await (provider as any).request({
+                      method: 'wallet_watchAsset',
+                      params,
+                    });
+                  }
+                } catch (e) {
+                  console.warn('wallet_watchAsset failed:', e);
+                }
+              }}
+              disabled={!address}
+              className="text-xs text-indigo-600 hover:text-indigo-700 font-medium transition cursor-pointer whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Add token to wallet"
+            >
+              + Add to wallet
+            </button>
+          </div>
+        </div>
       </div>
     </>
   );

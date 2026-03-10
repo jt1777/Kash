@@ -217,12 +217,12 @@ cd bot && npm run build && npm start
 
 ### 7. Frontend
 
-In **`frontend/.env.local`** (or your env):
+In **`frontend/.env.local`** (and root `.env` for scripts):
 
 ```env
-NEXT_PUBLIC_KASH_YIELD_BTC=<KashYieldBtc from step 3>
-NEXT_PUBLIC_KASH_TOKEN_BTC=<KashTokenBtc from step 3>
-NEXT_PUBLIC_MOCK_WBTC=<same as WBTC_ADDRESS from step 2>
+KASH_YIELD_BTC_ADDRESS=<KashYieldBtc from step 3>
+KASH_TOKEN_BTC=<KashTokenBtc from step 3>
+MOCK_WBTC=<same as WBTC_ADDRESS from step 2>
 ```
 
 Ensure **`frontend/lib/contracts/addresses.ts`** (or equivalent) uses these for the BTC product.

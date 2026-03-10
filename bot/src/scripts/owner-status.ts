@@ -7,8 +7,8 @@
  * - Hyperliquid: USDC in spot, wBTC/ETH in spot, perp positions (ETH/BTC: size, collateral, active)
  *
  * Usage:
- *   PRODUCT=eth KASH_YIELD_ADDRESS=0x... npm run owner:status
- *   PRODUCT=btc KASH_YIELD_ADDRESS=0x... AAVE_POOL_ADDRESS=0x... npm run owner:status
+ *   PRODUCT=eth KASH_YIELD_ETH_ADDRESS=0x... npm run owner:status
+ *   PRODUCT=btc KASH_YIELD_BTC_ADDRESS=0x... AAVE_POOL_ADDRESS=0x... npm run owner:status
  */
 
 import { ethers } from 'ethers';

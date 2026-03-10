@@ -28,6 +28,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
   const kashYield = isBtc ? CONTRACTS.kashYieldBtc! : CONTRACTS.kashYieldEth;
   const depositToken = isBtc ? MINT_TOKEN_BTC : MINT_TOKEN_ETH;
   const [amount, setAmount] = useState('');
+  const [hideSettled, setHideSettled] = useState(false);
 
   const { data: balance } = useBalance({ address });
   const nativeBalance = balance?.value ?? 0n;
@@ -82,6 +83,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
   });
 
   const batchProcessed = batchInfo ? (batchInfo as readonly [bigint, bigint, boolean, bigint, bigint])[2] : true;
+  const mintSettled = batchProcessed && pendingMintRequest && pendingMintRequest.amountIn > 0n;
   const canCancelMint = Boolean(
     address &&
     currentBatchCycle !== undefined &&
@@ -284,6 +286,23 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
           <p className="text-sm text-amber-800">
             Amount exceeds your wBTC balance. Use <strong>Max</strong> or reduce the amount.
           </p>
+        </div>
+      )}
+
+      {/* Settled mint: success message */}
+      {mintSettled && !hideSettled && (
+        <div className="rounded-lg border border-green-200 bg-green-50 p-3 flex items-start justify-between gap-2">
+          <p className="text-sm text-green-800 font-medium">Your mint request for this batch has been settled! KASH tokens have been minted to your wallet.</p>
+          <button
+            type="button"
+            onClick={() => setHideSettled(true)}
+            className="text-green-600 hover:text-green-800 transition shrink-0 cursor-pointer"
+            aria-label="Dismiss"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
         </div>
       )}
 

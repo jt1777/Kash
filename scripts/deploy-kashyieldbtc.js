@@ -6,11 +6,11 @@
 // Usage:
 //   npx hardhat run scripts/deploy-kashyieldbtc.js --network arbitrumSepolia
 //
-// Env (required for configuration after deploy):
-//   WBTC_ADDRESS         — wBTC (or MockWBTC) contract address
-//   AAVE_POOL_ADDRESS    — Aave pool (or MockAaveV3) address
-//   USDC_ADDRESS         — USDC (or MockUSDC) address for HL and Aave
-//   BTC_ORACLE_ADDRESS   — BTC/USD price feed (or MockChainlinkPriceFeed) address
+// Env (required for configuration after deploy). Use any of the listed names.
+//   wBTC:    WBTC_ADDRESS or MOCK_WBTC
+//   Aave:    AAVE_POOL_ADDRESS, AAVE_POOL, or MOCK_AAVE_ADDRESS
+//   USDC:    USDC_ADDRESS or MOCK_USDC_ADDRESS
+//   Oracle:  BTC_ORACLE_ADDRESS or BTC_ORACLE
 //
 // Env (optional):
 //   BOT_ADDRESS          — bot/keeper for performUpkeep; defaults to deployer
@@ -34,22 +34,27 @@ async function main() {
 
   const botAddress = process.env.BOT_ADDRESS || deployer.address;
 
-  const wbtcAddress = process.env.WBTC_ADDRESS || process.env.MOCK_WBTC || process.env.NEXT_PUBLIC_MOCK_WBTC;
-  const aavePoolAddress = process.env.AAVE_POOL_ADDRESS;
-  const usdcAddress = process.env.USDC_ADDRESS;
+  const wbtcAddress = process.env.WBTC_ADDRESS || process.env.MOCK_WBTC;
+  const aavePoolAddress =
+    process.env.AAVE_POOL_ADDRESS ||
+    process.env.AAVE_POOL ||
+    process.env.MOCK_AAVE_ADDRESS;
+  const usdcAddress = process.env.USDC_ADDRESS || process.env.MOCK_USDC_ADDRESS;
   const btcOracleAddress = process.env.BTC_ORACLE_ADDRESS || process.env.BTC_ORACLE;
 
   if (!wbtcAddress || !hre.ethers.isAddress(wbtcAddress)) {
-    throw new Error("Set WBTC_ADDRESS (or MOCK_WBTC / NEXT_PUBLIC_MOCK_WBTC) to existing wBTC contract");
+    throw new Error("Set WBTC_ADDRESS (or MOCK_WBTC) in .env to existing wBTC contract");
   }
   if (!aavePoolAddress || !hre.ethers.isAddress(aavePoolAddress)) {
-    throw new Error("Set AAVE_POOL_ADDRESS to existing Aave pool (or MockAaveV3)");
+    throw new Error(
+      "Set AAVE_POOL_ADDRESS (or AAVE_POOL / MOCK_AAVE_ADDRESS) in .env to existing Aave pool or MockAaveV3 address"
+    );
   }
   if (!usdcAddress || !hre.ethers.isAddress(usdcAddress)) {
-    throw new Error("Set USDC_ADDRESS to existing USDC (or MockUSDC)");
+    throw new Error("Set USDC_ADDRESS (or MOCK_USDC_ADDRESS) in .env to existing USDC or MockUSDC");
   }
   if (!btcOracleAddress || !hre.ethers.isAddress(btcOracleAddress)) {
-    throw new Error("Set BTC_ORACLE_ADDRESS (or BTC_ORACLE) to existing BTC/USD price feed");
+    throw new Error("Set BTC_ORACLE_ADDRESS (or BTC_ORACLE) in .env to existing BTC/USD price feed");
   }
 
   console.log("Using existing:");
@@ -85,10 +90,9 @@ async function main() {
   console.log("  BTC feed (existing):", btcOracleAddress);
   console.log("====================================\n");
 
-  console.log("Add to frontend/.env.local and bot/.env:");
+  console.log("Add to .env, frontend/.env.local, and bot/.env:");
   console.log(`  KASH_YIELD_BTC_ADDRESS=${kashYieldBtcAddress}`);
-  console.log(`  NEXT_PUBLIC_KASH_YIELD_BTC=${kashYieldBtcAddress}`);
-  console.log(`  NEXT_PUBLIC_KASH_TOKEN_BTC=${kashTokenBtcAddress}`);
+  console.log(`  KASH_TOKEN_BTC=${kashTokenBtcAddress}`);
   console.log("");
 
   const deploymentsDir = path.join(__dirname, "..", "deployments");

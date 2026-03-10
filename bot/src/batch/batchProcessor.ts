@@ -406,8 +406,8 @@ export class BatchProcessor {
     console.log(`   Net amount: ${ethers.formatEther(amount)} USD${step !== 'full' ? ` [step=${step} only]` : ''}\n`);
 
     try {
-      if (step === 'full' || step === 'aave') await this.handleNetMintAave(amount);
-      if (step === 'full' || step === 'hl') await this.handleNetMintHyperliquid(amount);
+      if (step === 'full' || step === 'ops' || step === 'aave') await this.handleNetMintAave(amount);
+      if (step === 'full' || step === 'ops' || step === 'hl') await this.handleNetMintHyperliquid(amount);
       console.log('   ✅ NET_MINT complete!\n');
     } catch (error: any) {
       console.error('❌ Failed to handle NET_MINT:', error.message);
@@ -487,8 +487,8 @@ export class BatchProcessor {
     console.log(`   Net amount: ${ethers.formatEther(amountUSD)} USD${step !== 'full' ? ` [step=${step} only]` : ''}\n`);
 
     try {
-      if (step === 'full' || step === 'hl') await this.handleNetRedeemHyperliquid(amountUSD);
-      if (step === 'full' || step === 'aave') await this.handleNetRedeemAave(amountUSD);
+      if (step === 'full' || step === 'ops' || step === 'hl') await this.handleNetRedeemHyperliquid(amountUSD);
+      if (step === 'full' || step === 'ops' || step === 'aave') await this.handleNetRedeemAave(amountUSD);
       console.log('   ✅ NET_REDEEM complete!\n');
     } catch (error: any) {
       console.error('❌ Failed to handle NET_REDEEM:', error.message);

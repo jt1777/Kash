@@ -10,9 +10,10 @@ export function validateConfig(): void {
 
   // Check contract address
   if (!config.kashYieldAddress) {
-    errors.push('KASH_YIELD_ADDRESS is not set in environment variables');
+    const productVar = config.product === 'btc' ? 'KASH_YIELD_BTC_ADDRESS' : 'KASH_YIELD_ETH_ADDRESS';
+    errors.push(`${productVar} (or KASH_YIELD_ADDRESS) is not set in environment variables`);
   } else if (!ethers.isAddress(config.kashYieldAddress)) {
-    errors.push(`Invalid KASH_YIELD_ADDRESS format: ${config.kashYieldAddress}`);
+    errors.push(`Invalid contract address format: ${config.kashYieldAddress}`);
   }
 
   // Check RPC URL
@@ -44,7 +45,7 @@ export async function verifyContract(provider: ethers.Provider): Promise<void> {
       `  2. The address is incorrect\n` +
       `  3. You're connected to the wrong network\n\n` +
       `Please verify:\n` +
-      `  - KASH_YIELD_ADDRESS in .env matches your deployed contract\n` +
+      `  - KASH_YIELD_ETH_ADDRESS / KASH_YIELD_BTC_ADDRESS (or KASH_YIELD_ADDRESS) in .env match your deployed contract\n` +
       `  - RPC_URL points to the correct network (Arbitrum Mainnet/Testnet)`
     );
   }

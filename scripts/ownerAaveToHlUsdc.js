@@ -19,7 +19,6 @@ const USDC_DECIMALS = 6;
 async function main() {
   const kashYieldAddress =
     process.env.KASH_YIELD_BTC_ADDRESS ||
-    process.env.NEXT_PUBLIC_KASH_YIELD_BTC ||
     process.env.KASH_YIELD_ADDRESS;
 
   if (!kashYieldAddress || !hre.ethers.isAddress(kashYieldAddress)) {

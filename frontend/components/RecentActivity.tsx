@@ -265,8 +265,10 @@ export function RecentActivity() {
               cancelTarget?.batchCycle === item.batchCycle &&
               cancelTarget?.type === item.type;
             const isBtcContract = item.contractAddress?.toLowerCase() === (CONTRACTS.kashYieldBtc as string).toLowerCase();
-            const mintedLabel = item.type === 'mint' && processed
-              ? (isBtcContract ? 'Kash-BTC minted' : 'Kash-ETH minted')
+            const settledLabel = processed
+              ? item.type === 'mint'
+                ? (isBtcContract ? 'Kash-BTC minted' : 'Kash-ETH minted')
+                : (isBtcContract ? 'wBTC redeemed' : 'ETH redeemed')
               : null;
 
             return (
@@ -290,9 +292,9 @@ export function RecentActivity() {
                 >
                   {item.hash.slice(0, 10)}…{item.hash.slice(-8)}
                 </a>
-                {mintedLabel && (
+                {settledLabel && (
                   <span className="text-xs font-medium text-green-600 shrink-0">
-                    {mintedLabel}
+                    {settledLabel}
                   </span>
                 )}
                 {canCancel && (

@@ -15,8 +15,8 @@
 //   PRIVATE_KEY                 - owner wallet
 //   USER_ADDRESS                - recipient address
 //   PRODUCT                     - "btc" (default) or "eth"
-//   KASH_YIELD_BTC_ADDRESS      - KashYieldBtc (or NEXT_PUBLIC_KASH_YIELD_BTC); used when PRODUCT=btc
-//   KASH_YIELD_ETH_ADDRESS      - KashYieldETH (or NEXT_PUBLIC_KASH_YIELD_ETH); used when PRODUCT=eth
+//   KASH_YIELD_BTC_ADDRESS      - KashYieldBtc; used when PRODUCT=btc
+//   KASH_YIELD_ETH_ADDRESS      - KashYieldETH; used when PRODUCT=eth
 //
 // Amount (human-readable; default: all excess):
 //   WITHDRAW_AMOUNT=0.25        - withdraw 0.25 (wBTC or ETH)
@@ -141,11 +141,10 @@ async function main() {
   if (product === "btc") {
     const kashYieldBtcAddress =
       process.env.KASH_YIELD_BTC_ADDRESS ||
-      process.env.NEXT_PUBLIC_KASH_YIELD_BTC ||
       process.env.KASH_YIELD_ADDRESS;
     if (!kashYieldBtcAddress || !hre.ethers.isAddress(kashYieldBtcAddress)) {
       throw new Error(
-        "Set KASH_YIELD_BTC_ADDRESS or NEXT_PUBLIC_KASH_YIELD_BTC in .env"
+        "Set KASH_YIELD_BTC_ADDRESS in .env"
       );
     }
 
@@ -170,10 +169,10 @@ async function main() {
   } else {
     const kashYieldEthAddress =
       process.env.KASH_YIELD_ETH_ADDRESS ||
-      process.env.NEXT_PUBLIC_KASH_YIELD_ETH;
+      process.env.KASH_YIELD_ADDRESS;
     if (!kashYieldEthAddress || !hre.ethers.isAddress(kashYieldEthAddress)) {
       throw new Error(
-        "Set KASH_YIELD_ETH_ADDRESS or NEXT_PUBLIC_KASH_YIELD_ETH in .env"
+        "Set KASH_YIELD_ETH_ADDRESS in .env"
       );
     }
 

@@ -23,7 +23,8 @@ async function main() {
     throw new Error('PRIVATE_KEY not set in .env');
   }
   if (!config.kashYieldAddress) {
-    throw new Error('KASH_YIELD_ADDRESS (or KASH_YIELD_BTC_ADDRESS etc.) not set in .env');
+    const v = config.product === 'btc' ? 'KASH_YIELD_BTC_ADDRESS' : 'KASH_YIELD_ETH_ADDRESS';
+    throw new Error(`${v} (or KASH_YIELD_ADDRESS) not set in .env`);
   }
 
   const provider = new ethers.JsonRpcProvider(config.rpcUrl);

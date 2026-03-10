@@ -38,12 +38,11 @@ async function main() {
     product === "eth"
       ? process.env.KASH_YIELD_ETH_ADDRESS || process.env.KASH_YIELD_ADDRESS
       : process.env.KASH_YIELD_BTC_ADDRESS ||
-        process.env.NEXT_PUBLIC_KASH_YIELD_BTC ||
         process.env.KASH_YIELD_ADDRESS;
 
   if (!kashYieldAddress || !hre.ethers.isAddress(kashYieldAddress)) {
     throw new Error(
-      "Set KASH_YIELD_BTC_ADDRESS (or KASH_YIELD_ADDRESS / NEXT_PUBLIC_KASH_YIELD_BTC) in .env."
+      "Set KASH_YIELD_BTC_ADDRESS (or KASH_YIELD_ADDRESS) in .env."
     );
   }
 
