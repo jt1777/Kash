@@ -131,7 +131,11 @@ No bot code changes: it already handles the flow (spot buy/sell, ETH vs BTC by a
 
 ## Redeploy KashYieldBtc (Arbitrum Sepolia)
 
-Use this when you need a fresh KashYieldBtc deployment (e.g. after adding `processBatchPhase2ForCycle` or other contract changes). The script deploys the full mock stack; you then deploy MockHyperliquid and wire it up.
+Use this when you need a fresh KashYieldBtc deployment (e.g. after contract changes). The script **only deploys KashYieldBtc** (and its built-in **KashTokenBtc**). It uses **existing** wBTC, Aave pool, USDC, and BTC oracle from your `.env` — it does not deploy MockUSDC, MockWBTC, MockAaveV3, or the price feed.
+
+**Prerequisites:** You must already have wBTC (or MockWBTC), Aave pool (or MockAaveV3), USDC (or MockUSDC), and a BTC/USD price feed deployed. If you deployed the full stack in the past, use those addresses. For mainnet you will set these to real contract addresses and run the same script.
+
+**KASH-BTC token:** Each KashYieldBtc deployment creates a **new** KashTokenBtc in its constructor. There is no option to reuse an existing KASH-BTC token without a contract change.
 
 ### 1. Compile
 
@@ -139,36 +143,48 @@ Use this when you need a fresh KashYieldBtc deployment (e.g. after adding `proce
 npx hardhat compile
 ```
 
-### 2. Deploy KashYieldBtc + Mock Aave stack
+### 2. Set existing contract addresses in `.env`
+
+The deploy script reads these (all required):
+
+```env
+WBTC_ADDRESS=0x...          # wBTC or MockWBTC
+AAVE_POOL_ADDRESS=0x...     # Aave pool or MockAaveV3
+USDC_ADDRESS=0x...          # USDC or MockUSDC (for HL and Aave)
+BTC_ORACLE_ADDRESS=0x...    # BTC/USD price feed or MockChainlinkPriceFeed
+```
+
+Optional: `BOT_ADDRESS=0x...` (defaults to deployer).
+
+### 3. Deploy KashYieldBtc only
 
 ```bash
-# Optional: set bot address (defaults to deployer)
-export BOT_ADDRESS=0xYourBotWalletAddress
-
 npx hardhat run scripts/deploy-kashyieldbtc.js --network arbitrumSepolia
 ```
 
-Save the printed addresses: **KashYieldBtc**, **KashTokenBtc**, **MockUSDC**, **MockWBTC**, **MockAaveV3**, **BTC/USD Feed**.
+Save the printed **KashYieldBtc** and **KashTokenBtc** addresses. The script configures the new contract with your existing wBTC, Aave, USDC, and oracle.
 
-### 3. Deploy MockHyperliquid (same mock USDC/WBTC as KashYieldBtc)
+### 4. Deploy MockHyperliquid (if not already deployed)
+
+Use the same USDC and wBTC as in your `.env`:
 
 ```bash
-# Use MockUSDC and MockWBTC from step 2
-export MOCK_USDC_ADDRESS=<MockUSDC from step 2>
-export MOCK_WBTC_ADDRESS=<MockWBTC from step 2>
+# Match the addresses you used for KashYieldBtc
+export MOCK_USDC_ADDRESS=$USDC_ADDRESS
+export MOCK_WBTC_ADDRESS=$WBTC_ADDRESS
 
 npx hardhat run scripts/deploy-mock-hyperliquid-arbitrum-sepolia.js --network arbitrumSepolia
 ```
 
 Save the **MockHyperliquid** address.
 
-### 4. Configure KashYieldBtc
+### 5. Configure KashYieldBtc
 
 **Set Hyperliquid** (owner only):
 
 ```bash
-export KASH_YIELD_BTC_ADDRESS=<KashYieldBtc from step 2>
-export HYPERLIQUID_ADDRESS=<MockHyperliquid from step 3>
+export KASH_YIELD_BTC_ADDRESS=<KashYieldBtc from step 3>
+export HYPERLIQUID_ADDRESS=<MockHyperliquid from step 4>
 
 npx hardhat run scripts/setHyperliquid.js --network arbitrumSepolia
 ```
@@ -177,21 +193,20 @@ npx hardhat run scripts/setHyperliquid.js --network arbitrumSepolia
 
 ```bash
 export PRODUCT=btc
-export KASH_YIELD_BTC_ADDRESS=<KashYieldBtc from step 2>
+export KASH_YIELD_BTC_ADDRESS=<KashYieldBtc from step 3>
 # .env or export: PRIVATE_KEY of owner
 
 npx hardhat run scripts/setBotAddress.js --network arbitrumSepolia
-# Script reads BOT_ADDRESS from .env or prompt.
 ```
 
-### 5. Bot `.env` (bot folder)
+### 6. Bot `.env` (bot folder)
 
 ```env
 PRODUCT=btc
-KASH_YIELD_ADDRESS=<KashYieldBtc address from step 2>
+KASH_YIELD_ADDRESS=<KashYieldBtc address from step 3>
 ARBITRUM_SEPOLIA_RPC_URL=https://sepolia-rollup.arbitrum.io/rpc
 PRIVATE_KEY=<bot wallet private key — must be contract owner for ops>
-AAVE_USDC_ADDRESS=<MockUSDC address from step 2>
+AAVE_USDC_ADDRESS=<same as USDC_ADDRESS you used in step 2>
 ```
 
 Rebuild and run:
@@ -200,32 +215,31 @@ Rebuild and run:
 cd bot && npm run build && npm start
 ```
 
-### 6. Frontend
+### 7. Frontend
 
 In **`frontend/.env.local`** (or your env):
 
 ```env
-NEXT_PUBLIC_KASH_YIELD_BTC=<KashYieldBtc from step 2>
-NEXT_PUBLIC_KASH_TOKEN_BTC=<KashTokenBtc from step 2>
-NEXT_PUBLIC_MOCK_WBTC=<MockWBTC from step 2>
+NEXT_PUBLIC_KASH_YIELD_BTC=<KashYieldBtc from step 3>
+NEXT_PUBLIC_KASH_TOKEN_BTC=<KashTokenBtc from step 3>
+NEXT_PUBLIC_MOCK_WBTC=<same as WBTC_ADDRESS from step 2>
 ```
 
 Ensure **`frontend/lib/contracts/addresses.ts`** (or equivalent) uses these for the BTC product.
 
-### 7. Verify on Arbiscan (optional)
+### 8. Verify on Arbiscan (optional)
 
 ```bash
 # KashYieldBtc (constructor: botAddress)
 npx hardhat verify --network arbitrumSepolia <KASH_YIELD_BTC_ADDRESS> <BOT_ADDRESS>
-
-# MockUSDC, MockWBTC, MockAaveV3, MockHyperliquid — use constructor args from deploy scripts.
 ```
 
 ### Summary checklist
 
+- [ ] Existing wBTC, Aave pool, USDC, BTC oracle addresses in `.env` (WBTC_ADDRESS, AAVE_POOL_ADDRESS, USDC_ADDRESS, BTC_ORACLE_ADDRESS)
 - [ ] `npx hardhat compile`
-- [ ] Deploy KashYieldBtc stack; save all addresses
-- [ ] Deploy MockHyperliquid with same MockUSDC/MockWBTC
+- [ ] Deploy KashYieldBtc only; save KashYieldBtc and KashTokenBtc addresses
+- [ ] Deploy MockHyperliquid (if needed) with same USDC/wBTC
 - [ ] setHyperliquid on KashYieldBtc
 - [ ] setBotAddress on KashYieldBtc (if needed)
 - [ ] Bot `.env`: PRODUCT=btc, KASH_YIELD_ADDRESS, AAVE_USDC_ADDRESS
@@ -236,7 +250,7 @@ npx hardhat verify --network arbitrumSepolia <KASH_YIELD_BTC_ADDRESS> <BOT_ADDRE
 
 ## Later: BTC product (reference)
 
-1. Deploy **KashYieldBtc** and mocks as in "Redeploy KashYieldBtc" above.
+1. Ensure existing wBTC, Aave pool, USDC, and BTC oracle are in `.env`, then deploy **KashYieldBtc only** as in "Redeploy KashYieldBtc" above.
 2. Update frontend: add `kashYieldBtc` / `kashTokenBtc` to addresses; add wBTC to mint tokens in `MintForm`; in RedeemForm, use KASH_BTC when user selects “Receive wBTC.”
 3. Bot: set PRODUCT=btc (or run a second bot instance) and handle NET_MINT/NET_REDEEM for the BTC contract.
 

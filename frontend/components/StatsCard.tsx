@@ -25,13 +25,23 @@ export function StatsCard({ product = 'eth' }: { product?: Product }) {
     functionName: 'currentNAV',
   });
 
-  // Deposits: read only from chain (event logs), no contract view calls.
-  // MintRequested = user requested a mint (amountIn, batchCycle). BatchProcessed = batch settled.
-  // Settled ETH = sum of amountIn from MintRequested where batchCycle appears in BatchProcessed.
-  // A future smart contract should expose a view function that returns the total amount of ETH
-  // deposited by each wallet (e.g. totalDepositedEth(address user) returns uint256), so the
-  // front end can call it once instead of deriving from events.
-  // Block range for event fetches (some RPCs limit range; 500k blocks covers ~6 days on Arbitrum)
+  // Deposits: prefer contract view (getTotalDepositedBtc/Eth, getTotalRedeemedBtc/Eth) when available; else derive from events.
+  const depositViewName = isBtc ? 'getTotalDepositedBtc' : 'getTotalDepositedEth';
+  const redeemViewName = isBtc ? 'getTotalRedeemedBtc' : 'getTotalRedeemedEth';
+  const { data: totalDepositedFromView } = useReadContract({
+    address: kashYield,
+    abi: kashYieldABI,
+    functionName: depositViewName,
+    args: address ? [address] : undefined,
+  });
+  const { data: totalRedeemedFromView } = useReadContract({
+    address: kashYield,
+    abi: kashYieldABI,
+    functionName: redeemViewName,
+    args: address ? [address] : undefined,
+  });
+
+  // Fallback: event-based totals (used when contract has no view or view fails). Block range ~6 days on Arbitrum.
   const EVENT_BLOCK_RANGE = 500_000n;
 
   const { data: mintEvents } = useQuery({
@@ -131,11 +141,13 @@ export function StatsCard({ product = 'eth' }: { product?: Product }) {
     return sum;
   }, [tokensClaimedEvents, assetAddress]);
 
+  // Use view when available (new contracts), else event-derived totals
+  const depositedTotal = totalDepositedFromView ?? settledFromChain.settledEth;
+  const redeemedTotal = totalRedeemedFromView ?? totalRedeemed;
   const netDeposits = useMemo(() => {
-    const settled = settledFromChain.settledEth;
-    if (totalRedeemed >= settled) return 0n;
-    return settled - totalRedeemed;
-  }, [settledFromChain.settledEth, totalRedeemed]);
+    if (redeemedTotal >= depositedTotal) return 0n;
+    return depositedTotal - redeemedTotal;
+  }, [depositedTotal, redeemedTotal]);
 
   return (
     <>
@@ -177,12 +189,12 @@ export function StatsCard({ product = 'eth' }: { product?: Product }) {
             : '—'}
         </p>
         <p className="text-xs text-gray-500 mt-1">
-          {address ? (totalRedeemed > 0n ? 'Net (deposits − redeemed)' : '') : 'Connect wallet'}
+          {address ? (redeemedTotal > 0n ? 'Net (deposits − redeemed)' : '') : 'Connect wallet'}
         </p>
         {address && (mintEvents?.length ?? 0) > 0 && (
           <p className="text-xs text-gray-500 mt-0.5">
             {mintEvents!.length} request{mintEvents!.length !== 1 ? 's' : ''} · {settledFromChain.settledCount} settled
-            {totalRedeemed > 0n && ` · ${isBtc ? Number(formatUnits(totalRedeemed, 8)).toFixed(4) : Number(formatEther(totalRedeemed)).toFixed(4)} redeemed`}
+            {redeemedTotal > 0n && ` · ${isBtc ? Number(formatUnits(redeemedTotal, 8)).toFixed(4) : Number(formatEther(redeemedTotal)).toFixed(4)} redeemed`}
           </p>
         )}
       </div>

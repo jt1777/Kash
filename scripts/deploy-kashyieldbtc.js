@@ -1,16 +1,24 @@
 // scripts/deploy-kashyieldbtc.js
-// Deploys KashYieldBtc with full MockAave stack: MockUSDC, MockWBTC, MockAaveV3, MockChainlinkPriceFeed.
-// Does NOT deploy MockHyperliquid — deploy that separately and set via setHyperliquid.js.
-// Use for local testing (hardhat) or Arbitrum Sepolia.
+// Deploys only KashYieldBtc (and its built-in KashTokenBtc). Uses existing wBTC, Aave pool, USDC, and BTC oracle from env.
+// Does NOT deploy MockUSDC, MockWBTC, MockAaveV3, or price feed — use existing deployments (e.g. from a previous full deploy).
+// For mainnet you will change addresses in .env and redeploy this script.
 //
 // Usage:
-//   Local:    npx hardhat run scripts/deploy-kashyieldbtc.js
-//   Sepolia: npx hardhat run scripts/deploy-kashyieldbtc.js --network arbitrumSepolia
+//   npx hardhat run scripts/deploy-kashyieldbtc.js --network arbitrumSepolia
 //
-// Env: BOT_ADDRESS (optional) — bot/keeper address for performUpkeep; defaults to deployer.
+// Env (required for configuration after deploy):
+//   WBTC_ADDRESS         — wBTC (or MockWBTC) contract address
+//   AAVE_POOL_ADDRESS    — Aave pool (or MockAaveV3) address
+//   USDC_ADDRESS         — USDC (or MockUSDC) address for HL and Aave
+//   BTC_ORACLE_ADDRESS   — BTC/USD price feed (or MockChainlinkPriceFeed) address
 //
-// Output: Prints addresses. After full setup, add to frontend/.env.local and bot/.env (see DEPLOYMENT.md).
+// Env (optional):
+//   BOT_ADDRESS          — bot/keeper for performUpkeep; defaults to deployer
+//
+// KASH-BTC token: The contract creates a new KashTokenBtc in its constructor (one per KashYieldBtc).
+// To reuse an existing KASH-BTC token would require a contract change (e.g. constructor arg). Not done here.
 
+require("dotenv").config();
 const hre = require("hardhat");
 const fs = require("fs");
 const path = require("path");
@@ -19,84 +27,70 @@ async function main() {
   const [deployer] = await hre.ethers.getSigners();
   const network = hre.network.name;
 
-  console.log("Deploying KashYieldBtc + MockAave stack to", network);
+  console.log("Deploying KashYieldBtc only to", network);
   console.log("Deployer:", deployer.address);
   const balance = await hre.ethers.provider.getBalance(deployer.address);
   console.log("Balance:", hre.ethers.formatEther(balance), "ETH\n");
 
   const botAddress = process.env.BOT_ADDRESS || deployer.address;
 
-  // 1. MockUSDC (for Hyperliquid + MockAave borrow/repay)
-  const MockUSDC = await hre.ethers.getContractFactory("MockUSDC");
-  const usdc = await MockUSDC.deploy(1_000_000);
-  await usdc.waitForDeployment();
-  const usdcAddress = await usdc.getAddress();
-  console.log("✅ MockUSDC:", usdcAddress);
+  const wbtcAddress = process.env.WBTC_ADDRESS || process.env.MOCK_WBTC || process.env.NEXT_PUBLIC_MOCK_WBTC;
+  const aavePoolAddress = process.env.AAVE_POOL_ADDRESS;
+  const usdcAddress = process.env.USDC_ADDRESS;
+  const btcOracleAddress = process.env.BTC_ORACLE_ADDRESS || process.env.BTC_ORACLE;
 
-  // 2. MockWBTC
-  const MockWBTC = await hre.ethers.getContractFactory("MockWBTC");
-  const wbtc = await MockWBTC.deploy(100);
-  await wbtc.waitForDeployment();
-  const wbtcAddress = await wbtc.getAddress();
-  console.log("✅ MockWBTC:", wbtcAddress);
+  if (!wbtcAddress || !hre.ethers.isAddress(wbtcAddress)) {
+    throw new Error("Set WBTC_ADDRESS (or MOCK_WBTC / NEXT_PUBLIC_MOCK_WBTC) to existing wBTC contract");
+  }
+  if (!aavePoolAddress || !hre.ethers.isAddress(aavePoolAddress)) {
+    throw new Error("Set AAVE_POOL_ADDRESS to existing Aave pool (or MockAaveV3)");
+  }
+  if (!usdcAddress || !hre.ethers.isAddress(usdcAddress)) {
+    throw new Error("Set USDC_ADDRESS to existing USDC (or MockUSDC)");
+  }
+  if (!btcOracleAddress || !hre.ethers.isAddress(btcOracleAddress)) {
+    throw new Error("Set BTC_ORACLE_ADDRESS (or BTC_ORACLE) to existing BTC/USD price feed");
+  }
 
-  // 3. MockChainlinkPriceFeed (BTC/USD $60k)
-  const MockPriceFeed = await hre.ethers.getContractFactory("MockChainlinkPriceFeed");
-  const btcFeed = await MockPriceFeed.deploy(6000000000000n); // 8 decimals
-  await btcFeed.waitForDeployment();
-  const btcFeedAddress = await btcFeed.getAddress();
-  console.log("✅ Mock BTC/USD Feed:", btcFeedAddress);
+  console.log("Using existing:");
+  console.log("  wBTC:      ", wbtcAddress);
+  console.log("  Aave pool: ", aavePoolAddress);
+  console.log("  USDC:      ", usdcAddress);
+  console.log("  BTC feed:  ", btcOracleAddress);
+  console.log("  Bot:       ", botAddress);
+  console.log("");
 
-  // 4. MockAaveV3
-  const MockAaveV3 = await hre.ethers.getContractFactory("MockAaveV3");
-  const mockAave = await MockAaveV3.deploy(usdcAddress);
-  await mockAave.waitForDeployment();
-  const mockAaveAddress = await mockAave.getAddress();
-  await mockAave.setWbtcAddress(wbtcAddress);
-  console.log("✅ MockAaveV3:", mockAaveAddress);
-
-  await usdc.mint(mockAaveAddress, hre.ethers.parseUnits("50000", 6));
-  console.log("   Funded MockAave with 50,000 USDC");
-
-  // 5. KashYieldBtc
   const KashYieldBtc = await hre.ethers.getContractFactory("KashYieldBtc");
   const kashYieldBtc = await KashYieldBtc.deploy(botAddress);
   await kashYieldBtc.waitForDeployment();
   const kashYieldBtcAddress = await kashYieldBtc.getAddress();
   const kashTokenBtcAddress = await kashYieldBtc.kashTokenBtc();
   console.log("✅ KashYieldBtc:", kashYieldBtcAddress);
-  console.log("✅ KashTokenBtc:", kashTokenBtcAddress);
+  console.log("✅ KashTokenBtc (new):", kashTokenBtcAddress);
 
-  // 6. Configure KashYieldBtc
   await kashYieldBtc.setWbtcAddress(wbtcAddress);
-  await kashYieldBtc.setAavePool(mockAaveAddress);
-  await kashYieldBtc.setBtcOracle(btcFeedAddress);
+  await kashYieldBtc.setAavePool(aavePoolAddress);
+  await kashYieldBtc.setBtcOracle(btcOracleAddress);
   await kashYieldBtc.setUsdcAddress(usdcAddress);
   console.log("✅ Configured KashYieldBtc (wbtc, aave, oracle, usdc)");
 
-  // 7. Mint MockWBTC to deployer for testing
-  await wbtc.mint(deployer.address, hre.ethers.parseUnits("10", 8));
-  console.log("✅ Minted 10 mWBTC to deployer");
-
-  // Summary
   console.log("\n====================================");
-  console.log("📋 KASHYIELDBTC + MOCK AAVE STACK");
+  console.log("📋 KASHYIELDBTC (existing wBTC/Aave/USDC/oracle)");
   console.log("====================================");
   console.log("  KashYieldBtc:  ", kashYieldBtcAddress);
   console.log("  KashTokenBtc:  ", kashTokenBtcAddress);
-  console.log("  MockAaveV3:    ", mockAaveAddress);
-  console.log("  MockWBTC:      ", wbtcAddress);
-  console.log("  MockUSDC:      ", usdcAddress);
-  console.log("  BTC/USD Feed:  ", btcFeedAddress);
+  console.log("  wBTC (existing): ", wbtcAddress);
+  console.log("  Aave (existing):  ", aavePoolAddress);
+  console.log("  USDC (existing):  ", usdcAddress);
+  console.log("  BTC feed (existing):", btcOracleAddress);
   console.log("====================================\n");
 
-  console.log("Add to frontend/.env.local:");
+  console.log("Add to frontend/.env.local and bot/.env:");
+  console.log(`  KASH_YIELD_BTC_ADDRESS=${kashYieldBtcAddress}`);
   console.log(`  NEXT_PUBLIC_KASH_YIELD_BTC=${kashYieldBtcAddress}`);
   console.log(`  NEXT_PUBLIC_KASH_TOKEN_BTC=${kashTokenBtcAddress}`);
-  console.log(`  NEXT_PUBLIC_MOCK_WBTC=${wbtcAddress}`);
   console.log("");
 
-  // Save deployment
   const deploymentsDir = path.join(__dirname, "..", "deployments");
   if (!fs.existsSync(deploymentsDir)) fs.mkdirSync(deploymentsDir, { recursive: true });
   const info = {
@@ -106,10 +100,10 @@ async function main() {
     contracts: {
       kashYieldBtc: kashYieldBtcAddress,
       kashTokenBtc: kashTokenBtcAddress,
-      mockAave: mockAaveAddress,
-      mockWbtc: wbtcAddress,
-      mockUsdc: usdcAddress,
-      btcFeed: btcFeedAddress,
+      wbtcUsed: wbtcAddress,
+      aavePoolUsed: aavePoolAddress,
+      usdcUsed: usdcAddress,
+      btcOracleUsed: btcOracleAddress,
     },
   };
   const filepath = path.join(deploymentsDir, `kashyieldbtc-${network}-${Date.now()}.json`);

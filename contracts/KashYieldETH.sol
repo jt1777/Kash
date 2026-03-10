@@ -115,6 +115,11 @@ contract KashYieldETH {
 
     mapping(uint256 => uint256) public batchMintEthDeployedToAave;
 
+    /// @notice Total ETH (18 decimals) ever deposited by each user in batches that have been processed (Phase 2). Used by frontend Deposits card.
+    mapping(address => uint256) public totalDepositedEthByUser;
+    /// @notice Total ETH (18 decimals) ever redeemed (sent back) to each user. Net = totalDepositedEthByUser - totalRedeemedEthByUser.
+    mapping(address => uint256) public totalRedeemedEthByUser;
+
     uint256 public constant USER_WINDOW_END = 23 * 3600 + 50 * 60;
     uint256 public constant PROCESSING_WINDOW_START = 23 * 3600 + 50 * 60;
     uint256 public constant PROCESSING_WINDOW_END = 24 * 3600;
@@ -366,6 +371,7 @@ contract KashYieldETH {
                 uint256 userShare = (req.amountInUSD * totalDistributableKash) / batchTotalMintValueUSD[batchCycle];
                 kashTokenEth.transfer(user, userShare);
                 emit TokensClaimed(user, address(kashTokenEth), userShare, true);
+                totalDepositedEthByUser[user] += req.amountIn;
             }
         }
 
@@ -402,6 +408,7 @@ contract KashYieldETH {
                 uint256 ethAmount = (usdAfterFee * 1e18) / ethPrice;
                 payable(user).transfer(ethAmount);
                 emit TokensClaimed(user, ETH_ADDRESS, ethAmount, false);
+                totalRedeemedEthByUser[user] += ethAmount;
             }
         }
 
@@ -674,5 +681,15 @@ contract KashYieldETH {
 
     function getCurrentBatchCycle() external view returns (uint256) {
         return block.timestamp / 86400;
+    }
+
+    /// @notice Total ETH (18 decimals) deposited by user across all processed batches. For frontend Deposits card.
+    function getTotalDepositedEth(address user) external view returns (uint256) {
+        return totalDepositedEthByUser[user];
+    }
+
+    /// @notice Total ETH (18 decimals) redeemed (sent back) to user. Net = getTotalDepositedEth - getTotalRedeemedEth.
+    function getTotalRedeemedEth(address user) external view returns (uint256) {
+        return totalRedeemedEthByUser[user];
     }
 }

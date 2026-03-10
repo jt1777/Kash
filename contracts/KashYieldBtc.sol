@@ -111,6 +111,11 @@ contract KashYieldBtc {
 
     mapping(uint256 => uint256) public batchMintBtcDeployedToAave;
 
+    /// @notice Total wBTC (8 decimals) ever deposited by each user in batches that have been processed (Phase 2). Used by frontend Deposits card.
+    mapping(address => uint256) public totalDepositedBtcByUser;
+    /// @notice Total wBTC (8 decimals) ever redeemed (sent back) to each user. Net = totalDepositedBtcByUser - totalRedeemedBtcByUser.
+    mapping(address => uint256) public totalRedeemedBtcByUser;
+
     // TESTING: Time windows disabled - full 24h for both user and processing (revert for production)
     uint256 public constant USER_WINDOW_END = 24 * 3600;
     uint256 public constant PROCESSING_WINDOW_START = 0;
@@ -355,6 +360,7 @@ contract KashYieldBtc {
                 uint256 userShare = (req.amountInUSD * totalDistributableKash) / batchTotalMintValueUSD[batchCycle];
                 kashTokenBtc.transfer(user, userShare);
                 emit TokensClaimed(user, address(kashTokenBtc), userShare, true);
+                totalDepositedBtcByUser[user] += req.amountIn;
             }
         }
 
@@ -392,6 +398,7 @@ contract KashYieldBtc {
                 uint256 wbtcAmount = (usdAfterFee * (10 ** WBTC_DECIMALS)) / btcPrice;
                 IERC20(wbtcAddress).safeTransfer(user, wbtcAmount);
                 emit TokensClaimed(user, wbtcAddress, wbtcAmount, false);
+                totalRedeemedBtcByUser[user] += wbtcAmount;
             }
         }
 
@@ -661,5 +668,15 @@ contract KashYieldBtc {
 
     function getCurrentBatchCycle() external view returns (uint256) {
         return block.timestamp / 86400;
+    }
+
+    /// @notice Total wBTC (8 decimals) deposited by user across all processed batches. For frontend Deposits card.
+    function getTotalDepositedBtc(address user) external view returns (uint256) {
+        return totalDepositedBtcByUser[user];
+    }
+
+    /// @notice Total wBTC (8 decimals) redeemed (sent back) to user. Net = getTotalDepositedBtc - getTotalRedeemedBtc.
+    function getTotalRedeemedBtc(address user) external view returns (uint256) {
+        return totalRedeemedBtcByUser[user];
     }
 }
