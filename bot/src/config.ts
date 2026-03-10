@@ -91,6 +91,30 @@ export const config = {
   logLevel: process.env.LOG_LEVEL || 'info',
   /** When false, exit immediately if not in processing window instead of waiting */
   waitForProcessingWindow: process.env.WAIT_FOR_PROCESSING_WINDOW !== 'false',
+  /** When true, skip the processing-window check so the bot runs batch logic anytime (for testing; contract may still revert if it enforces the window) */
+  skipProcessingWindowCheck: process.env.SKIP_PROCESSING_WINDOW_CHECK === 'true',
+  /** Batch flow step: full (all 5) | phase1 | ops | nav | mark-done | phase2. Also hl | aave for ops sub-step only. */
+  batchStep: (() => {
+    const arg = process.argv.find((a) => a.startsWith('--step='));
+    const raw = arg ? arg.split('=')[1] : process.env.BATCH_STEP;
+    const step = (raw || 'full').toLowerCase();
+    const stepMap: Record<string, string> = {
+      '1': 'phase1', '2': 'ops', '3': 'nav', '4': 'mark-done', '5': 'phase2',
+      phase1: 'phase1', ops: 'ops', nav: 'nav', 'mark-done': 'mark-done', phase2: 'phase2',
+      hl: 'hl', aave: 'aave', full: 'full',
+    };
+    return (stepMap[step] || 'full') as 'full' | 'phase1' | 'ops' | 'nav' | 'mark-done' | 'phase2' | 'hl' | 'aave';
+  })(),
+  /** When set, run on this batch cycle only (ignore auto-selection). Use --batch=N or BATCH_CYCLE=N. */
+  batchCycleOverride: (() => {
+    const arg = process.argv.find((a) => a.startsWith('--batch='));
+    const raw = arg ? arg.split('=')[1] : process.env.BATCH_CYCLE;
+    if (raw === undefined || raw === '') return null;
+    const n = parseInt(raw, 10);
+    return Number.isNaN(n) || n < 0 ? null : BigInt(n);
+  })(),
+  /** When true, allow running steps on an already-processed batch (e.g. --step=ops to fix HL/Aave state). Use --allow-processed or ALLOW_PROCESSED_BATCH=true. Only ops (and hl/aave) are allowed on processed batches. */
+  allowProcessedBatch: process.argv.includes('--allow-processed') || process.env.ALLOW_PROCESSED_BATCH === 'true',
 
   // Strategy allocation (NET_MINT / NET_REDEEM)
   // Override via .env: AAVE_DEPOSIT_PCT=100, BORROW_LTV_PCT=70, SHORT_LEVERAGE=1.7

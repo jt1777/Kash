@@ -19,6 +19,7 @@
     "check:balance": "ts-node src/scripts/check-eth-balance.ts",
     "check:tokens": "ts-node src/scripts/check-token-balances.ts",
     "owner:status": "ts-node src/scripts/owner-status.ts",
+    "owner:recover-hl-usdc": "ts-node src/scripts/recover-hl-usdc-to-aave.ts",
     "check:aave-address": "ts-node src/scripts/check-aave-address.ts",
     "check:aave-eth": "ts-node src/scripts/check-aave-eth.ts",
     "update:aave-address": "ts-node src/scripts/update-aave-address.ts",

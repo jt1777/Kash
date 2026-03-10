@@ -98,6 +98,7 @@ export const kashYieldABI = [
   { inputs: [{ name: "amount", type: "uint256" }], name: "addCollateralToHyperliquid", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "symbol", type: "string" }, { name: "size", type: "uint256" }], name: "openShort", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "symbol", type: "string" }], name: "closeShort", outputs: [], stateMutability: "nonpayable", type: "function" },
+  { inputs: [{ name: "symbol", type: "string" }, { name: "closeSize", type: "uint256" }], name: "closeShort", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "usdcAmount", type: "uint256" }], name: "spotBuyOnHyperliquid", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "amount", type: "uint256" }], name: "spotSellOnHyperliquid", outputs: [], stateMutability: "payable", type: "function" },
   { inputs: [{ name: "orderId", type: "bytes32" }], name: "cancelHyperliquidOrder", outputs: [], stateMutability: "nonpayable", type: "function" },

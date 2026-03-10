@@ -12,6 +12,14 @@ const TOKEN_ADDRESSES = {
 const AAVE_POOL_ADDRESS = config.aavePoolAddress;
 const isBtc = config.product === 'btc';
 
+/** Minimum NAV (18 decimals). Prevents updateNAV(1) when supply is dust and (portfolio+yield)/supply truncates to 1. */
+const MIN_NAV = 10n ** 18n;
+
+const BATCH_STEP_NAMES = ['phase1', 'ops', 'nav', 'mark-done', 'phase2'] as const;
+function isSingleStepMode(): boolean {
+  return BATCH_STEP_NAMES.includes(config.batchStep as (typeof BATCH_STEP_NAMES)[number]);
+}
+
 /**
  * Batch Processor - Two-phase daily batch for KashYieldETH or KashYieldBtc.
  * Phase 1: performUpkeep() → indicative; handle NET_MINT/NET_REDEEM, updateNAV, markBatchOpsDone.
@@ -37,23 +45,37 @@ export class BatchProcessor {
 
     const isProcessingWindow = await this.kashYield.isProcessingWindow();
     if (!isProcessingWindow) {
-      console.log('⏳ Not in processing window (23:50-23:59 UTC)');
-      if (config.waitForProcessingWindow) {
-        console.log('   Waiting for processing window...');
-        await this.waitForProcessingWindow();
+      if (config.skipProcessingWindowCheck) {
+        console.log('⏳ Not in processing window (23:50-23:59 UTC); continuing anyway (SKIP_PROCESSING_WINDOW_CHECK=true)\n');
       } else {
-        console.log('   Exiting (set WAIT_FOR_PROCESSING_WINDOW=true to wait)');
-        return;
+        console.log('⏳ Not in processing window (23:50-23:59 UTC)');
+        if (config.waitForProcessingWindow) {
+          console.log('   Waiting for processing window...');
+          await this.waitForProcessingWindow();
+        } else {
+          console.log('   Exiting (set WAIT_FOR_PROCESSING_WINDOW=true to wait, or SKIP_PROCESSING_WINDOW_CHECK=true to run anyway for testing)');
+          return;
+        }
       }
     }
 
     const currentCycle = await this.kashYield.getCurrentBatchCycle();
+    const currentCycleBn = typeof currentCycle === 'bigint' ? currentCycle : BigInt(currentCycle.toString());
+
+    if (config.batchCycleOverride !== null) {
+      const cycle = config.batchCycleOverride;
+      console.log(`📅 Batch cycle: ${cycle} (override via --batch=${cycle} or BATCH_CYCLE)\n`);
+      const batchInfo = await this.kashYield.getBatchInfo(cycle);
+      await this.runBatch(cycle, batchInfo);
+      return;
+    }
+
     console.log(`📅 Batch cycle: ${currentCycle}\n`);
 
     // Check previous batches for incomplete work (phase 1: ops not done; phase 2: distribution not run)
     const lookback = 10; // check last 10 days of batches
     for (let i = 1; i <= lookback; i++) {
-      const prevCycle = currentCycle - BigInt(i);
+      const prevCycle = currentCycleBn - BigInt(i);
       if (prevCycle < 0n) break;
       const prevPhase = await this.kashYield.batchPhase(prevCycle);
       const prevInfo = await this.kashYield.getBatchInfo(prevCycle);
@@ -71,12 +93,13 @@ export class BatchProcessor {
       }
     }
 
-    const batchInfo = await this.kashYield.getBatchInfo(currentCycle);
-    await this.runBatch(currentCycle, batchInfo);
+    const batchInfo = await this.kashYield.getBatchInfo(currentCycleBn);
+    await this.runBatch(currentCycleBn, batchInfo);
   }
 
   /**
-   * Two-phase flow: Phase 1 → ops + updateNAV + markBatchOpsDone → Phase 2
+   * Two-phase flow: Phase 1 → ops + updateNAV + markBatchOpsDone → Phase 2.
+   * When BATCH_STEP is phase1|ops|nav|mark-done|phase2, runs only that step and exits.
    */
   private async runBatch(
     batchCycle: bigint,
@@ -85,73 +108,66 @@ export class BatchProcessor {
     const phase = await this.kashYield.batchPhase(batchCycle);
     const phaseNum = Number(phase);
 
-    if (batchInfo.processed) {
+    if (batchInfo.processed && !config.allowProcessedBatch) {
       console.log(`✅ Batch ${batchCycle} already processed (phase 3)\n`);
       return;
     }
+    if (batchInfo.processed && config.allowProcessedBatch) {
+      console.log(`⚠️  Batch ${batchCycle} is already processed; running with --allow-processed.\n`);
+    }
 
     const hasRequests = batchInfo.mintUsersCount > 0n || batchInfo.redeemUsersCount > 0n;
+
+    if (isSingleStepMode()) {
+      const step = config.batchStep as (typeof BATCH_STEP_NAMES)[number];
+      if (step === 'phase1') {
+        if (phaseNum !== 0) throw new Error(`Batch ${batchCycle} is in phase ${phaseNum}; step phase1 requires phase 0.`);
+        if (!hasRequests) {
+          console.log(`📭 Batch ${batchCycle} has no mint/redeem requests, skipping.\n`);
+          return;
+        }
+        await this.runStepPhase1(batchCycle);
+        return;
+      }
+      if (step === 'ops') {
+        if (phaseNum !== 1 && !(batchInfo.processed && config.allowProcessedBatch)) throw new Error(`Batch ${batchCycle} is in phase ${phaseNum}; run step phase1 first.`);
+        await this.runStepOps(batchCycle, batchInfo);
+        return;
+      }
+      if (step === 'nav') {
+        if (phaseNum !== 1) throw new Error(`Batch ${batchCycle} is in phase ${phaseNum}; run step ops first.`);
+        await this.runStepNav(batchCycle);
+        return;
+      }
+      if (step === 'mark-done') {
+        if (phaseNum !== 1) throw new Error(`Batch ${batchCycle} is in phase ${phaseNum}; run step nav first.`);
+        await this.runStepMarkDone(batchCycle);
+        return;
+      }
+      if (step === 'phase2') {
+        if (phaseNum !== 2) throw new Error(`Batch ${batchCycle} is in phase ${phaseNum}; run step mark-done first.`);
+        await this.runPhase2ForBatch(batchCycle);
+        return;
+      }
+    }
+
     if (phaseNum === 0) {
       if (!hasRequests) {
         console.log(`📭 Batch ${batchCycle} has no mint/redeem requests, skipping.\n`);
         return;
       }
-      console.log('🔄 Phase 1: Calling performUpkeep()...');
-      const tx1 = await this.kashYield.performUpkeep('0x');
-      const receipt1 = await tx1.wait();
-      console.log(`   ✅ Phase 1 done in block ${receipt1.blockNumber}\n`);
-
-      await this.handleEventsFromReceipt(receipt1);
-      const dailyYield = await getDailyYield(this.provider, {
-        kashYield: this.kashYield,
-        aavePoolAddress: AAVE_POOL_ADDRESS,
-        aaveUserAddress: config.aaveUserAddress || config.kashYieldAddress,
-      });
-      const tokenAddr = await (isBtc ? this.kashYield.kashTokenBtc() : this.kashYield.kashTokenEth()).catch(() => null);
-      const kashSupply = tokenAddr
-        ? await new ethers.Contract(tokenAddr, ['function totalSupply() view returns (uint256)'], this.provider).totalSupply()
-        : 0n;
-      const portfolioValueUSD = await this.estimatePortfolioValueUSD();
-      const { computeNAVFromPortfolioAndYield } = await import('./dailyYield');
-      let newNAV = computeNAVFromPortfolioAndYield(portfolioValueUSD, dailyYield.netYield, kashSupply);
-      if (newNAV === 0n) {
-        newNAV = await this.kashYield.currentNAV();
-        if (newNAV === 0n) newNAV = 1n * 10n ** 18n;
-        console.log(`   📈 KASH supply is 0, using current NAV for updateNAV`);
-      }
-      console.log('📈 Updating NAV and marking ops done...');
-      await (await this.kashYield.updateNAV(newNAV)).wait();
-      await (await this.kashYield.markBatchOpsDone(batchCycle)).wait();
-      console.log('   ✅ markBatchOpsDone\n');
-
+      await this.runStepPhase1(batchCycle);
+      await this.runStepOps(batchCycle, batchInfo);
+      await this.runStepNav(batchCycle);
+      await this.runStepMarkDone(batchCycle);
       await this.runPhase2ForBatch(batchCycle);
       return;
     }
 
     if (phaseNum === 1) {
-      // Phase 1 already ran; we do ops + updateNAV + markBatchOpsDone then Phase 2
-      const netPositionUSD = BigInt(batchInfo.totalMintUSD.toString()) - BigInt(batchInfo.totalRedeemUSD.toString());
-      if (netPositionUSD > 0n) await this.handleNetMint(netPositionUSD, ethers.ZeroAddress);
-      else if (netPositionUSD < 0n) await this.handleNetRedeem(-netPositionUSD, ethers.ZeroAddress);
-      const dailyYield = await getDailyYield(this.provider, {
-        kashYield: this.kashYield,
-        aavePoolAddress: AAVE_POOL_ADDRESS,
-        aaveUserAddress: config.aaveUserAddress || config.kashYieldAddress,
-      });
-      const tokenAddr = await (isBtc ? this.kashYield.kashTokenBtc() : this.kashYield.kashTokenEth()).catch(() => null);
-      const kashSupply = tokenAddr
-        ? await new ethers.Contract(tokenAddr, ['function totalSupply() view returns (uint256)'], this.provider).totalSupply()
-        : 0n;
-      const portfolioValueUSD = await this.estimatePortfolioValueUSD();
-      const { computeNAVFromPortfolioAndYield } = await import('./dailyYield');
-      let newNAV = computeNAVFromPortfolioAndYield(portfolioValueUSD, dailyYield.netYield, kashSupply);
-      if (newNAV === 0n) {
-        newNAV = await this.kashYield.currentNAV();
-        if (newNAV === 0n) newNAV = 1n * 10n ** 18n;
-        console.log(`   📈 KASH supply is 0, using current NAV for updateNAV`);
-      }
-      await (await this.kashYield.updateNAV(newNAV)).wait();
-      await (await this.kashYield.markBatchOpsDone(batchCycle)).wait();
+      await this.runStepOps(batchCycle, batchInfo);
+      await this.runStepNav(batchCycle);
+      await this.runStepMarkDone(batchCycle);
       await this.runPhase2ForBatch(batchCycle);
       return;
     }
@@ -161,7 +177,72 @@ export class BatchProcessor {
       return;
     }
 
+    if (phaseNum === 3 && config.allowProcessedBatch && (config.batchStep === 'ops' || config.batchStep === 'hl' || config.batchStep === 'aave')) {
+      console.log('Running ops step on processed batch (--allow-processed).');
+      await this.runStepOps(batchCycle, batchInfo);
+      return;
+    }
+
     console.log(`✅ Batch ${batchCycle} already finalized (phase ${phaseNum}).\n`);
+  }
+
+  /** Step 1: Call performUpkeep() (Phase 1 indicative). Batch must be phase 0 with requests. */
+  private async runStepPhase1(batchCycle: bigint): Promise<void> {
+    console.log('🔄 Step phase1: Calling performUpkeep()...');
+    const tx1 = await this.kashYield.performUpkeep('0x');
+    const receipt1 = await tx1.wait();
+    console.log(`   ✅ Phase 1 done in block ${receipt1.blockNumber}\n`);
+  }
+
+  /** Step 2: Handle NET_MINT/NET_REDEEM (HL + Aave). Batch must be phase 1. Respects --step=hl|aave. */
+  private async runStepOps(
+    batchCycle: bigint,
+    batchInfo: { totalMintUSD: bigint; totalRedeemUSD: bigint }
+  ): Promise<void> {
+    const netPositionUSD = BigInt(batchInfo.totalMintUSD.toString()) - BigInt(batchInfo.totalRedeemUSD.toString());
+    if (netPositionUSD > 0n) await this.handleNetMint(netPositionUSD, ethers.ZeroAddress);
+    else if (netPositionUSD < 0n) await this.handleNetRedeem(-netPositionUSD, ethers.ZeroAddress);
+  }
+
+  /** Step 3: Compute and call updateNAV(newNAV). Batch must be phase 1. */
+  private async runStepNav(batchCycle: bigint): Promise<void> {
+    const newNAV = await this.computeNewNAV();
+    console.log('📈 Step nav: Updating NAV...');
+    await (await this.kashYield.updateNAV(newNAV)).wait();
+    console.log('   ✅ updateNAV done\n');
+  }
+
+  /** Step 4: Call markBatchOpsDone(batchCycle). Batch must be phase 1. */
+  private async runStepMarkDone(batchCycle: bigint): Promise<void> {
+    console.log('📋 Step mark-done: Marking batch ops done...');
+    await (await this.kashYield.markBatchOpsDone(batchCycle)).wait();
+    console.log('   ✅ markBatchOpsDone\n');
+  }
+
+  /** Compute new NAV (18 decimals) from portfolio and yield; clamp to MIN_NAV. */
+  private async computeNewNAV(): Promise<bigint> {
+    const dailyYield = await getDailyYield(this.provider, {
+      kashYield: this.kashYield,
+      aavePoolAddress: AAVE_POOL_ADDRESS,
+      aaveUserAddress: config.aaveUserAddress || config.kashYieldAddress,
+    });
+    const tokenAddr = await (isBtc ? this.kashYield.kashTokenBtc() : this.kashYield.kashTokenEth()).catch(() => null);
+    const kashSupply = tokenAddr
+      ? await new ethers.Contract(tokenAddr, ['function totalSupply() view returns (uint256)'], this.provider).totalSupply()
+      : 0n;
+    const portfolioValueUSD = await this.estimatePortfolioValueUSD();
+    const { computeNAVFromPortfolioAndYield } = await import('./dailyYield');
+    let newNAV = computeNAVFromPortfolioAndYield(portfolioValueUSD, dailyYield.netYield, kashSupply);
+    if (newNAV === 0n) {
+      newNAV = await this.kashYield.currentNAV();
+      if (newNAV === 0n) newNAV = MIN_NAV;
+      console.log(`   📈 KASH supply is 0, using current NAV for updateNAV`);
+    }
+    if (newNAV > 0n && newNAV < MIN_NAV) {
+      newNAV = MIN_NAV;
+      console.log(`   📈 NAV clamped to minimum $1 (was dust from small supply)`);
+    }
+    return newNAV;
   }
 
   /**
@@ -234,13 +315,14 @@ export class BatchProcessor {
     const kashYieldAddr = config.kashYieldAddress?.toLowerCase() ?? (await this.kashYield.getAddress()).toLowerCase();
 
     for (const log of receipt.logs) {
+      let parsedLog: { name: string; args: unknown[] } | null = null;
       try {
         if (log.address.toLowerCase() !== kashYieldAddr) continue;
 
-        const parsedLog = iface.parseLog({
+        parsedLog = iface.parseLog({
           topics: log.topics as string[],
           data: log.data
-        });
+        }) as { name: string; args: unknown[] } | null;
 
         if (parsedLog && parsedLog.name === 'ProtocolInteraction') {
           eventsFound++;
@@ -263,7 +345,8 @@ export class BatchProcessor {
             await this.handleNetRedeem(amount, asset);
           }
         }
-      } catch {
+      } catch (err) {
+        if (parsedLog?.name === 'ProtocolInteraction') throw err;
         continue;
       }
     }
@@ -318,61 +401,14 @@ export class BatchProcessor {
    * @param amount Net mint amount in USD (18 decimals)
    */
   private async handleNetMint(amount: bigint, _asset: string): Promise<void> {
+    const step = config.batchStep;
     console.log(`💰 Handling NET_MINT (${isBtc ? 'BTC' : 'ETH'}) - Deploying capital...`);
-    console.log(`   Net amount: ${ethers.formatEther(amount)} USD\n`);
+    console.log(`   Net amount: ${ethers.formatEther(amount)} USD${step !== 'full' ? ` [step=${step} only]` : ''}\n`);
 
     try {
-      const amountUSD = amount;
-      const price = isBtc ? await this.kashYield.getBtcPrice() : await this.kashYield.getEthPrice();
-      const pct = BigInt(config.strategy.aaveDepositPct);
-      const depositAmountUSD = (amountUSD * pct) / 100n;
-      const depositAmount = isBtc
-        ? (depositAmountUSD * (10n ** 8n)) / price
-        : (depositAmountUSD * (10n ** 18n)) / price;
-
-      const aaveSupplied = await this.getAaveSuppliedAmount();
-      if (aaveSupplied >= depositAmount) {
-        console.log(`   Stage 1: Already deposited to Aave`);
-      } else {
-        const toDeposit = depositAmount - aaveSupplied;
-        console.log(`   Stage 1: Deposit ${config.strategy.aaveDepositPct}% to Aave`);
-        const txDeposit = await this.kashYield.depositToAave(toDeposit);
-        await txDeposit.wait();
-      }
-
-      // Step 2: Borrow 70% of deposit’s USD value as USDC, send to Hyperliquid as collateral
-      const ltv = BigInt(config.strategy.borrowLtvPct);
-      const borrowAmountUSD = (depositAmountUSD * ltv) / 100n;
-      const borrowUsdcUnits = borrowAmountUSD / (10n ** 12n);
-      console.log(`   Stage 2a: Borrow ${config.strategy.borrowLtvPct}% as USDC`);
-      const aaveDebt = await this.getAaveBorrowedAmount();
-      if (aaveDebt < borrowUsdcUnits) {
-        await this.borrowFromAave(TOKEN_ADDRESSES.AAVE_USDC, borrowUsdcUnits - aaveDebt);
-      }
-      const contractUsdc = await this.getContractUsdcBalance();
-      if (contractUsdc > 0n) {
-        console.log(`   Stage 2b: Deposit ${ethers.formatUnits(contractUsdc, 6)} USDC to Hyperliquid`);
-        await this.depositToHyperliquid(contractUsdc);
-      }
-
-      console.log(`   Stage 3: Spot buy ${isBtc ? 'wBTC' : 'ETH'} on Hyperliquid`);
-      const hlSpot = await this.getHyperliquidSpotBalance();
-      if (hlSpot >= borrowUsdcUnits) {
-        const txSpot = await this.kashYield.spotBuyOnHyperliquid(borrowUsdcUnits);
-        await txSpot.wait();
-      }
-
-      const shortSymbol = isBtc ? 'BTC' : 'ETH';
-      const hasShort = await this.hasHyperliquidShort(shortSymbol);
-      if (!hasShort) {
-        const leverageScaled = BigInt(Math.round(config.strategy.shortLeverage * 100));
-        const shortSizeUSD = (amountUSD * leverageScaled) / 100n;
-        console.log(`   Stage 4: Open ${config.strategy.shortLeverage}x ${shortSymbol} short`);
-        await this.openShortOnHyperliquid(shortSizeUSD, price, shortSymbol);
-      }
-
+      if (step === 'full' || step === 'aave') await this.handleNetMintAave(amount);
+      if (step === 'full' || step === 'hl') await this.handleNetMintHyperliquid(amount);
       console.log('   ✅ NET_MINT complete!\n');
-
     } catch (error: any) {
       console.error('❌ Failed to handle NET_MINT:', error.message);
       console.error('   Re-run the bot to resume from the last completed stage.');
@@ -380,53 +416,130 @@ export class BatchProcessor {
     }
   }
 
+  /** NET_MINT Aave only: deposit to Aave, borrow USDC. */
+  private async handleNetMintAave(amount: bigint): Promise<void> {
+    const price = isBtc ? await this.kashYield.getBtcPrice() : await this.kashYield.getEthPrice();
+    const pct = BigInt(config.strategy.aaveDepositPct);
+    const depositAmountUSD = (amount * pct) / 100n;
+    const depositAmount = isBtc
+      ? (depositAmountUSD * (10n ** 8n)) / price
+      : (depositAmountUSD * (10n ** 18n)) / price;
+
+    const aaveSupplied = await this.getAaveSuppliedAmount();
+    if (aaveSupplied >= depositAmount) {
+      console.log(`   [Aave] Stage 1: Already deposited to Aave`);
+    } else {
+      const toDeposit = depositAmount - aaveSupplied;
+      console.log(`   [Aave] Stage 1: Deposit ${config.strategy.aaveDepositPct}% to Aave`);
+      const txDeposit = await this.kashYield.depositToAave(toDeposit);
+      await txDeposit.wait();
+    }
+
+    const ltv = BigInt(config.strategy.borrowLtvPct);
+    const borrowAmountUSD = (depositAmountUSD * ltv) / 100n;
+    const borrowUsdcUnits = borrowAmountUSD / (10n ** 12n);
+    console.log(`   [Aave] Stage 2: Borrow ${config.strategy.borrowLtvPct}% as USDC`);
+    const aaveDebt = await this.getAaveBorrowedAmount();
+    if (aaveDebt < borrowUsdcUnits) {
+      await this.borrowFromAave(TOKEN_ADDRESSES.AAVE_USDC, borrowUsdcUnits - aaveDebt);
+    }
+  }
+
+  /** NET_MINT Hyperliquid only: deposit USDC to HL, spot buy, open short. Expects USDC in contract (e.g. after Aave borrow). */
+  private async handleNetMintHyperliquid(amount: bigint): Promise<void> {
+    const price = isBtc ? await this.kashYield.getBtcPrice() : await this.kashYield.getEthPrice();
+    const pct = BigInt(config.strategy.aaveDepositPct);
+    const depositAmountUSD = (amount * pct) / 100n;
+    const ltv = BigInt(config.strategy.borrowLtvPct);
+    const borrowAmountUSD = (depositAmountUSD * ltv) / 100n;
+    const borrowUsdcUnits = borrowAmountUSD / (10n ** 12n);
+
+    const contractUsdc = await this.getContractUsdcBalance();
+    if (contractUsdc > 0n) {
+      console.log(`   [HL] Stage 1: Deposit ${ethers.formatUnits(contractUsdc, 6)} USDC to Hyperliquid`);
+      await this.depositToHyperliquid(contractUsdc);
+    }
+
+    console.log(`   [HL] Stage 2: Spot buy ${isBtc ? 'wBTC' : 'ETH'} on Hyperliquid`);
+    const hlSpot = await this.getHyperliquidSpotBalance();
+    if (hlSpot >= borrowUsdcUnits) {
+      const txSpot = await this.kashYield.spotBuyOnHyperliquid(borrowUsdcUnits);
+      await txSpot.wait();
+    }
+
+    const shortSymbol = isBtc ? 'BTC' : 'ETH';
+    const hasShort = await this.hasHyperliquidShort(shortSymbol);
+    if (!hasShort) {
+      const leverageScaled = BigInt(Math.round(config.strategy.shortLeverage * 100));
+      const shortSizeUSD = (amount * leverageScaled) / 100n;
+      console.log(`   [HL] Stage 3: Open ${config.strategy.shortLeverage}x ${shortSymbol} short`);
+      await this.openShortOnHyperliquid(shortSizeUSD, price, shortSymbol);
+    }
+  }
+
   /**
    * Handle NET_REDEEM - Withdraw capital (reverse of NET_MINT).
-   *
-   * Unwind flow: 1) Cover short; 2) Send ETH from perp to spot on HL (API, real HL only);
-   * 3) Sell ETH for USDC on HL; 4) Withdraw USDC from HL; 5) Repay Aave; 6) Withdraw ETH from Aave.
-   *
-   * @param amountUSD Net redeem amount in USD (18 decimals)
+   * Can run as one step (full) or split: --step=hl (HL only) then --step=aave (Aave only).
    */
   private async handleNetRedeem(amountUSD: bigint, _asset: string): Promise<void> {
+    const step = config.batchStep;
     console.log(`💸 Handling NET_REDEEM (${isBtc ? 'BTC' : 'ETH'}) - Withdrawing capital...`);
-    console.log(`   Net amount: ${ethers.formatEther(amountUSD)} USD\n`);
+    console.log(`   Net amount: ${ethers.formatEther(amountUSD)} USD${step !== 'full' ? ` [step=${step} only]` : ''}\n`);
 
     try {
-      const shortSymbol = isBtc ? 'BTC' : 'ETH';
-      console.log(`   Step 1: Close ${shortSymbol} short on Hyperliquid`);
-      await this.closeShortOnHyperliquid(shortSymbol);
-
-      const ltv = BigInt(config.strategy.borrowLtvPct);
-      const usdcToWithdrawUSD = (amountUSD * ltv) / 100n;
-      const price = isBtc ? await this.kashYield.getBtcPrice() : await this.kashYield.getEthPrice();
-      // Spot sell: Mock HL uses 18 decimals for both eth and btc internal balances
-      const spotSellAmount = (usdcToWithdrawUSD * (10n ** 18n)) / price;
-      console.log(`   Step 1b: Spot sell ${isBtc ? 'wBTC' : 'ETH'} to USDC on Hyperliquid`);
-      const txSell = isBtc
-        ? await this.kashYield.spotSellOnHyperliquid(spotSellAmount)
-        : await this.kashYield.spotSellOnHyperliquid(spotSellAmount, { value: spotSellAmount });
-      await txSell.wait();
-
-      const usdcWithdrawUnits = usdcToWithdrawUSD / (10n ** 12n);
-      console.log(`   Step 2: Withdraw USDC from Hyperliquid`);
-      await this.withdrawFromHyperliquid(usdcWithdrawUnits);
-
-      console.log(`   Step 3: Repay Aave borrow with USDC`);
-      await this.repayToAave(TOKEN_ADDRESSES.AAVE_USDC, usdcWithdrawUnits);
-
-      const withdrawAmount = isBtc
-        ? (amountUSD * (10n ** 8n)) / price
-        : (amountUSD * (10n ** 18n)) / price;
-      console.log(`   Step 4: Withdraw ${isBtc ? Number(withdrawAmount) / 1e8 + ' wBTC' : ethers.formatEther(withdrawAmount) + ' ETH'} from Aave`);
-      const txWithdraw = await this.kashYield.withdrawFromAave(withdrawAmount);
-      await txWithdraw.wait();
-
+      if (step === 'full' || step === 'hl') await this.handleNetRedeemHyperliquid(amountUSD);
+      if (step === 'full' || step === 'aave') await this.handleNetRedeemAave(amountUSD);
       console.log('   ✅ NET_REDEEM complete!\n');
     } catch (error: any) {
       console.error('❌ Failed to handle NET_REDEEM:', error.message);
       throw error;
     }
+  }
+
+  /** NET_REDEEM Hyperliquid only: close short (partial or full), spot sell, withdraw USDC from HL. */
+  private async handleNetRedeemHyperliquid(amountUSD: bigint): Promise<void> {
+    const shortSymbol = isBtc ? 'BTC' : 'ETH';
+    console.log(`   [HL] Step 1: Close ${shortSymbol} short on Hyperliquid`);
+    await this.closeShortOnHyperliquid(shortSymbol, amountUSD);
+
+    const ltv = BigInt(config.strategy.borrowLtvPct);
+    const usdcToWithdrawUSD = (amountUSD * ltv) / 100n;
+    const price = isBtc ? await this.kashYield.getBtcPrice() : await this.kashYield.getEthPrice();
+    const spotSellAmount = (usdcToWithdrawUSD * (10n ** 18n)) / price;
+    console.log(`   [HL] Step 2: Spot sell ${isBtc ? 'wBTC' : 'ETH'} to USDC on Hyperliquid`);
+    const txSell = isBtc
+      ? await this.kashYield.spotSellOnHyperliquid(spotSellAmount)
+      : await this.kashYield.spotSellOnHyperliquid(spotSellAmount, { value: spotSellAmount });
+    await txSell.wait();
+
+    const usdcWithdrawUnits = usdcToWithdrawUSD / (10n ** 12n);
+    const spotBalance = await this.getHyperliquidSpotBalance();
+    const usdcWithdrawActual = spotBalance < usdcWithdrawUnits ? spotBalance : usdcWithdrawUnits;
+    if (usdcWithdrawActual === 0n) {
+      throw new Error('No USDC in Hyperliquid spot after sell – cannot withdraw');
+    }
+    if (spotBalance < usdcWithdrawUnits) {
+      console.log(`   ⚠️  Spot balance (${spotBalance}) less than requested (${usdcWithdrawUnits}); withdrawing available amount`);
+    }
+    console.log(`   [HL] Step 3: Withdraw USDC from Hyperliquid`);
+    await this.withdrawFromHyperliquid(usdcWithdrawActual);
+  }
+
+  /** NET_REDEEM Aave only: repay USDC, withdraw wBTC/ETH from Aave. Expects USDC already in contract (e.g. after HL withdraw). */
+  private async handleNetRedeemAave(amountUSD: bigint): Promise<void> {
+    const price = isBtc ? await this.kashYield.getBtcPrice() : await this.kashYield.getEthPrice();
+    console.log(`   [Aave] Step 1: Repay Aave borrow with USDC (contract balance)`);
+    const contractUsdc = await this.getContractUsdcBalance();
+    if (contractUsdc > 0n) {
+      await this.repayToAave(TOKEN_ADDRESSES.AAVE_USDC, contractUsdc);
+    }
+
+    const withdrawAmount = isBtc
+      ? (amountUSD * (10n ** 8n)) / price
+      : (amountUSD * (10n ** 18n)) / price;
+    console.log(`   [Aave] Step 2: Withdraw ${isBtc ? Number(withdrawAmount) / 1e8 + ' wBTC' : ethers.formatEther(withdrawAmount) + ' ETH'} from Aave`);
+    const txWithdraw = await this.kashYield.withdrawFromAave(withdrawAmount);
+    await txWithdraw.wait();
   }
 
   // ============================================================================
@@ -518,14 +631,49 @@ export class BatchProcessor {
   }
 
   /**
-   * Close short position on Hyperliquid in the same asset (ETH or BTC).
+   * Close short position on Hyperliquid (partial or full).
+   * If amountUSD is provided and contract supports it, closes only the size corresponding to amountUSD (same leverage as open).
+   * Otherwise or if closeSize >= position size, closes fully.
+   * If no active position and KASH supply > 0, throws invariant violation.
    */
-  private async closeShortOnHyperliquid(symbol: 'ETH' | 'BTC'): Promise<void> {
+  private async closeShortOnHyperliquid(symbol: 'ETH' | 'BTC', amountUSD?: bigint): Promise<void> {
     try {
-      console.log(`   → Closing ${symbol} short on Hyperliquid`);
-      const tx = await this.kashYield.closeShort(symbol);
-      await tx.wait();
-      console.log(`   ✅ Closed ${symbol} short on Hyperliquid`);
+      const [size, , , , isActive] = await this.kashYield.getHyperliquidPosition(symbol);
+      if (!isActive) {
+        const tokenAddr = await (isBtc ? this.kashYield.kashTokenBtc() : this.kashYield.kashTokenEth()).catch(() => null);
+        const kashSupply = tokenAddr
+          ? await new ethers.Contract(tokenAddr, ['function totalSupply() view returns (uint256)'], this.provider).totalSupply()
+          : 0n;
+        if (kashSupply > 0n) {
+          throw new Error(
+            `Invariant violated: KASH supply is ${kashSupply.toString()} but HL reports no active ${symbol} short. ` +
+            'Position may have been closed elsewhere or HL state is inconsistent.'
+          );
+        }
+        console.log(`   → No open ${symbol} short on Hyperliquid; skipping close`);
+        return;
+      }
+      const posSize = BigInt(size.toString());
+      let closeSize: bigint | null = null;
+      if (amountUSD != null && amountUSD > 0n && posSize > 0n) {
+        const price = isBtc ? await this.kashYield.getBtcPrice() : await this.kashYield.getEthPrice();
+        const leverageScaled = BigInt(Math.round(config.strategy.shortLeverage * 100));
+        const shortSizeUSD = (amountUSD * leverageScaled) / 100n;
+        closeSize = (shortSizeUSD * (10n ** 18n)) / price;
+        if (closeSize >= posSize) closeSize = null; // full close
+        else if (closeSize === 0n) closeSize = null;
+      }
+      if (closeSize != null && closeSize > 0n) {
+        console.log(`   → Partially closing ${symbol} short: ${ethers.formatEther(closeSize)} of ${ethers.formatEther(posSize)}`);
+        const tx = await this.kashYield.closeShort(symbol, closeSize);
+        await tx.wait();
+        console.log(`   ✅ Partially closed ${symbol} short on Hyperliquid`);
+      } else {
+        console.log(`   → Closing full ${symbol} short on Hyperliquid`);
+        const tx = await this.kashYield.closeShort(symbol);
+        await tx.wait();
+        console.log(`   ✅ Closed ${symbol} short on Hyperliquid`);
+      }
     } catch (error: any) {
       console.error(`   ❌ Failed to close short on Hyperliquid: ${error.message}`);
       throw error;

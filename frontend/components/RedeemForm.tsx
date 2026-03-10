@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadContract, useEstimateFeesPerGas } from 'wagmi';
 import { CONTRACTS, ARBITRUM_SEPOLIA_BLOCK_EXPLORER, HARDHAT_CHAIN_ID } from '@/lib/contracts/addresses';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
@@ -43,7 +43,7 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
     args: address ? [address] : undefined,
   });
 
-  const { data: allowance } = useReadContract({
+  const { data: allowance, refetch: refetchAllowance } = useReadContract({
     address: kashToken,
     abi: kashTokenABI,
     functionName: 'allowance',
@@ -84,12 +84,19 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
   const { writeContract: redeem, data: redeemHash, isPending: isRedeemPending } = useWriteContract();
   const { writeContract: cancelRedeem, data: cancelRedeemHash, isPending: isCancelRedeemPending } = useWriteContract();
 
-  const { isLoading: isApproveConfirming } = useWaitForTransactionReceipt({ hash: approveHash });
+  const { isLoading: isApproveConfirming, isSuccess: isApproveSuccess } = useWaitForTransactionReceipt({ hash: approveHash });
   const { isLoading: isRedeemConfirming, isSuccess: isRedeemSuccess } = useWaitForTransactionReceipt({ hash: redeemHash });
   const { isLoading: isCancelRedeemConfirming } = useWaitForTransactionReceipt({ hash: cancelRedeemHash });
 
   const parsedAmount = amount ? parseEther(amount) : BigInt(0);
   const needsApproval = allowance !== undefined && parsedAmount > BigInt(0) && allowance < parsedAmount;
+
+  // Refetch allowance after approve succeeds so UI updates and Submit Redeem Request becomes enabled
+  useEffect(() => {
+    if (isApproveSuccess && refetchAllowance) {
+      refetchAllowance();
+    }
+  }, [isApproveSuccess, refetchAllowance]);
 
   const handleApprove = async () => {
     if (!parsedAmount) return;

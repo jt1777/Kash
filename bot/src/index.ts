@@ -42,7 +42,17 @@ async function main() {
   console.log(`📡 Connected to RPC: ${config.rpcUrl}`);
   console.log(`📦 Product: ${config.product.toUpperCase()} (${productLabel})`);
   console.log(`📄 Contract Address: ${config.kashYieldAddress}`);
-  console.log(`🔗 Chain ID: ${config.chainId}\n`);
+  console.log(`🔗 Chain ID: ${config.chainId}`);
+  if (config.batchStep !== 'full') {
+    console.log(`🔀 Batch step: ${config.batchStep} only`);
+  }
+  if (config.batchCycleOverride !== null) {
+    console.log(`📅 Batch override: ${config.batchCycleOverride}`);
+  }
+  if (config.allowProcessedBatch) {
+    console.log('⚠️  Allow processed batch: yes (--allow-processed)');
+  }
+  console.log('');
 
   // Verify contract exists
   try {

@@ -69,6 +69,26 @@ export function StatsCard({ product = 'eth' }: { product?: Product }) {
     enabled: !!publicClient,
   });
 
+  // Redeemed amount (asset returned to user from Phase 2). TokensClaimed(..., isMint: false) = redeem payout.
+  const assetAddress = isBtc ? CONTRACTS.mockWbtc : ('0x0000000000000000000000000000000000000000' as `0x${string}`);
+  const { data: tokensClaimedEvents } = useQuery({
+    queryKey: ['tokensClaimedRedeem', address, publicClient?.chain?.id, kashYield],
+    queryFn: async () => {
+      if (!publicClient || !address) return [];
+      const blockNumber = await publicClient.getBlockNumber();
+      const fromBlock = blockNumber > EVENT_BLOCK_RANGE ? blockNumber - EVENT_BLOCK_RANGE : 0n;
+      const logs = await publicClient.getContractEvents({
+        address: kashYield,
+        abi: kashYieldABI,
+        eventName: 'TokensClaimed',
+        args: { user: address as `0x${string}` },
+        fromBlock,
+      });
+      return logs;
+    },
+    enabled: !!publicClient && !!address,
+  });
+
   const { data: kashBalance } = useReadContract({
     address: kashToken,
     abi: kashTokenABI,
@@ -95,6 +115,27 @@ export function StatsCard({ product = 'eth' }: { product?: Product }) {
     }
     return { settledEth, settledCount };
   }, [mintEvents, processedBatchCycles]);
+
+  const totalRedeemed = useMemo(() => {
+    if (!tokensClaimedEvents?.length) return 0n;
+    const assetLower = assetAddress.toLowerCase();
+    let sum = 0n;
+    for (const log of tokensClaimedEvents) {
+      const token = log.args.token;
+      const isMint = log.args.isMint;
+      const amount = log.args.amount;
+      if (token && typeof isMint === 'boolean' && !isMint && token.toLowerCase() === assetLower && amount !== undefined) {
+        sum += amount;
+      }
+    }
+    return sum;
+  }, [tokensClaimedEvents, assetAddress]);
+
+  const netDeposits = useMemo(() => {
+    const settled = settledFromChain.settledEth;
+    if (totalRedeemed >= settled) return 0n;
+    return settled - totalRedeemed;
+  }, [settledFromChain.settledEth, totalRedeemed]);
 
   return (
     <>
@@ -126,21 +167,22 @@ export function StatsCard({ product = 'eth' }: { product?: Product }) {
         </div>
         <p className="text-3xl font-bold text-gray-900 leading-tight">
           {address
-            ? settledFromChain.settledEth > 0n
+            ? netDeposits > 0n
               ? isBtc
-                ? `${Number(formatUnits(settledFromChain.settledEth, 8)).toLocaleString(undefined, { maximumFractionDigits: 6 })} wBTC`
-                : `${Number(formatEther(settledFromChain.settledEth)).toLocaleString(undefined, { maximumFractionDigits: 4 })} ETH`
+                ? `${Number(formatUnits(netDeposits, 8)).toLocaleString(undefined, { maximumFractionDigits: 6 })} wBTC`
+                : `${Number(formatEther(netDeposits)).toLocaleString(undefined, { maximumFractionDigits: 4 })} ETH`
               : isBtc
                 ? '0.00 wBTC'
                 : '0.00 ETH'
             : '—'}
         </p>
         <p className="text-xs text-gray-500 mt-1">
-          {address ? '' : 'Connect wallet'}
+          {address ? (totalRedeemed > 0n ? 'Net (deposits − redeemed)' : '') : 'Connect wallet'}
         </p>
         {address && (mintEvents?.length ?? 0) > 0 && (
           <p className="text-xs text-gray-500 mt-0.5">
             {mintEvents!.length} request{mintEvents!.length !== 1 ? 's' : ''} · {settledFromChain.settledCount} settled
+            {totalRedeemed > 0n && ` · ${isBtc ? Number(formatUnits(totalRedeemed, 8)).toFixed(4) : Number(formatEther(totalRedeemed)).toFixed(4)} redeemed`}
           </p>
         )}
       </div>

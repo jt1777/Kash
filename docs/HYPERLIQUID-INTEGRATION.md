@@ -73,13 +73,87 @@ function getOpenOrderIds(address account) external view returns (bytes32[] memor
 
 KashYieldETH uses **USDC** for Hyperliquid (its `usdcAddress`); the mock accepts USDC or USDT. Deploy the mock with `scripts/deploy-mock-hyperliquid-arbitrum-sepolia.js`, then set that address on KashYieldETH via `setHyperliquid(mockAddress)`.
 
-### Real Hyperliquid
+### Our interface is the contract (names do not “switch” in KashYield)
+
+KashYield **only** calls the address in `hyperliquidAddress` via the **`IHyperliquid`** interface. The function names and signatures are fixed in our codebase:
+
+| Our name (IHyperliquid) | Used by KashYield for |
+|------------------------|------------------------|
+| `depositToSpotWallet(stableToken, amount)` | Sending USDC to HL as collateral |
+| `withdrawFromSpotWallet(stableToken, amount)` | Pulling USDC back to the contract |
+| `tradeSpot(tokenIn, tokenOut, amountIn)` | Spot buy/sell (e.g. wBTC↔USDC) |
+| `openPerpPosition(symbol, size, isLong)` | Opening or adding to a short |
+| `closePerpPosition(symbol)` | Full close |
+| `closePerpPosition(symbol, closeSize)` | Partial close |
+| `getSpotBalance(user)` | Reading USDC balance on HL |
+| `getPosition(user, symbol)` | Reading perp size/collateral/active |
+| `cancelOrder(orderId)` / `getOpenOrderIds(account)` | Orders (mock: no-op) |
+
+**We never change these names in KashYield.** Whatever is at `hyperliquidAddress` must implement exactly this interface. On testnet that’s **MockHyperliquid**; on mainnet it must be an **adapter** (see below).
+
+### Mainnet: adapter pattern (real HL has different names/API)
+
+Real Hyperliquid on Arbitrum mainnet does **not** expose this interface:
+
+- The **bridge** (e.g. `0x2Df1c51...`) has its own function names (e.g. deposit/withdraw with different signatures).
+- **Perp trading** is done on the Hyperliquid chain via **REST API**, not on-chain.
+
+So you don’t “switch” our function names to HL’s. You add a layer that speaks both:
+
+1. **Deploy an adapter contract** on Arbitrum that:
+   - **Implements `IHyperliquid`** (our names and signatures).
+   - **Internally** calls the real HL bridge (e.g. `depositToSpotWallet` → bridge’s `deposit` or equivalent) and/or triggers off-chain execution (e.g. keeper that calls HL API when `openPerpPosition` / `closePerpPosition` is invoked).
+2. **Point KashYield at the adapter:** `setHyperliquid(adapterAddress)`.
+3. KashYield keeps calling the same `IHyperliquid` functions; the adapter translates to whatever the real HL uses (bridge + API).
+
+So: **our names stay; the adapter maps them to real HL.**
+
+### Mapping: IHyperliquid → real Hyperliquid (reference for adapter)
+
+When implementing the mainnet adapter, map as follows. Real HL ABIs and API docs may use different names; this table is the intended behavior.
+
+| IHyperliquid (our name) | Real HL (typical) | Notes |
+|-------------------------|-------------------|--------|
+| `depositToSpotWallet(usdc, amount)` | Bridge `deposit` / `sendUsd` etc. | USDC (6 decimals) to HL spot. |
+| `withdrawFromSpotWallet(usdc, amount)` | Bridge `withdraw` / `withdrawUsd` | USDC from HL spot to `msg.sender`. |
+| `getSpotBalance(user)` | Bridge balance view or API balance | Return USDC (6 decimals) for `user`. |
+| `openPerpPosition(symbol, size, isLong)` | API `order` / `market_open` or future on-chain | Symbol "ETH"/"BTC"; size in asset units (HL may use different decimals). |
+| `closePerpPosition(symbol)` | API close full position or equivalent | Full close for `symbol`. |
+| `closePerpPosition(symbol, closeSize)` | API reduce position by `closeSize` | Partial close; same units as `openPerpPosition`. |
+| `getPosition(user, symbol)` | API `user_state` / positions | Return size, collateral, entryPrice, isLong, isActive (match our units/meaning). |
+| `tradeSpot(tokenIn, tokenOut, amountIn)` | API spot trade or HL spot market | Map token addresses to HL asset names; return `amountOut` in same decimals as `tokenOut`. |
+
+Exact bridge/API names and ABI must be taken from official Hyperliquid docs; the adapter implements the translation and keeps our interface stable.
+
+### Behavioral spec: how we know “real” matches testing
+
+We ensure behavior is consistent in two ways.
+
+1. **Single source of truth: IHyperliquid behavior**  
+   Define what each function must do from KashYield’s perspective (preconditions, units, postconditions). The **mock** is implemented to this spec for tests. The **mainnet adapter** must be implemented to the same spec when talking to the real bridge/API. No “switching” of names in KashYield; only the implementation behind the interface changes (mock vs adapter).
+
+2. **Behavioral expectations (summary)**  
+   - **Spot:** `depositToSpotWallet` increases the user’s USDC balance on HL; `withdrawFromSpotWallet` decreases it and sends USDC to the user. `getSpotBalance(user)` returns that balance (6 decimals).  
+   - **Perps:** `openPerpPosition(symbol, size, isLong)` opens or adds to a position; `closePerpPosition(symbol)` closes 100%; `closePerpPosition(symbol, closeSize)` closes that many asset units (or full if `closeSize >= size`). `getPosition` returns current size, collateral, entry price, direction, and whether the position is active.  
+   - **Spot trade:** `tradeSpot(in, out, amountIn)` swaps and returns `amountOut` in the same decimals as `out`.  
+   Units (e.g. size/collateral in 18 vs 8 decimals) must be documented and matched by both mock and adapter so KashYield’s math stays correct.
+
+3. **Testing and verification**  
+   - **Unit/integration tests:** Run against **MockHyperliquid**; they validate that KashYield + bot logic behave correctly for the defined interface.  
+   - **Mainnet adapter:** Implement the adapter to satisfy the same behavioral spec using real HL bridge + API. Manually or via integration tests (e.g. testnet with real HL API), verify: deposit → open short → getPosition → partial/full close → withdraw, and that `getSpotBalance` / `getPosition` return values consistent with what KashYield expects (units and semantics).  
+   - **Checklist:** Before mainnet, confirm each IHyperliquid function used in production has been verified against real HL (bridge + API) in a testnet or staging environment.
+
+With this, “how we know the real functions perform the same as testing” is: **same interface and same documented behavior**; mock and adapter are two implementations of that contract; tests and a short verification checklist cover the real integration.
+
+**Canonical interface:** The exact function signatures KashYield uses are in `contracts/KashYieldBtc.sol` and `contracts/KashYieldETH.sol` (the `interface IHyperliquid { ... }` block). Any mainnet adapter must implement that interface; no changes to KashYield are required to “switch” to real HL names.
+
+### Real Hyperliquid (summary)
 
 The actual integration would use:
 
 1. **Deposit to L1** → Bridge USDC to Hyperliquid (e.g. bridge contract on Arbitrum)
 2. **API** → Open/close perp positions via REST API (real HL may not expose perps on-chain)
-3. **Or** an adapter contract that implements `IHyperliquid` and forwards to bridge/API
+3. **Adapter contract** that implements `IHyperliquid` and forwards to bridge/API (see above)
 
 ## Important: Hyperliquid Architecture
 

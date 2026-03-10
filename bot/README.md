@@ -175,8 +175,45 @@ Shows:
 - Or the bot will skip HL operations
 
 ### "Not in processing window"
-- Batch processing only works between 23:50-23:59 UTC
-- The bot will wait for the window automatically
+- Batch processing only works between 23:50-23:59 UTC (unless the contract uses testing constants for full 24h)
+- Set `WAIT_FOR_PROCESSING_WINDOW=true` to have the bot wait for the window, or set `SKIP_PROCESSING_WINDOW_CHECK=true` to run the batch logic anyway for testing (the contract may still revert if it enforces the window)
+
+### Five-step batch flow
+The batch is split into five steps so each can be run individually. If any step errors, fix the issue and re-run that step (or the next). Default remains a full run (all five in sequence).
+
+| Step | Name        | Action |
+|------|-------------|--------|
+| 1    | `phase1`    | Call `performUpkeep()` (Phase 1 indicative; batch moves to phase 1) |
+| 2    | `ops`       | Handle NET_MINT/NET_REDEEM (HL + Aave) |
+| 3    | `nav`       | Compute and call `updateNAV(newNAV)` |
+| 4    | `mark-done` | Call `markBatchOpsDone(batchCycle)` (batch moves to phase 2) |
+| 5    | `phase2`    | Run Phase 2 distribution (mint KASH, pay redeemers) |
+
+**How the bot picks the target batch (no batch number needed)**  
+The bot does not detect "failure" directly; it detects **incomplete** batches from on-chain state. Each run it:
+
+1. Gets the current batch cycle (today).
+2. Looks back over the last **10** batch cycles.
+3. Treats a batch as **incomplete** if:
+   - **Phase 1 orphan:** batch phase is 1 and there is net mint/redeem (ops may not be done), or
+   - **Phase 2 orphan:** batch phase is 2 but the batch is **not** marked processed (Phase 2 distribution did not run or did not finish).
+4. Runs **one** batch per start: the **first** incomplete batch found (oldest first), or the **current** cycle if none are incomplete.
+
+So if a step errors (e.g. "No active position" during ops), the batch stays in phase 1 or 2 and is not marked processed. The next run will pick that batch automatically. You can **override** the target batch with `--batch=N` or `BATCH_CYCLE=N` to run all 5 steps (or a single step) on that historical batch. If that batch is already processed (phase 3), the bot will exit unless you pass **`--allow-processed`** (or `ALLOW_PROCESSED_BATCH=true`): then you can run **only the ops step** (`--step=ops`, `--step=hl`, or `--step=aave`) to fix HL/Aave state that never completed (e.g. after a failed redeem). If Phase 2 ran and the contract marked the batch processed but you did not receive tokens, the bot will not retry that batch (contract state says done); use owner-status or events to investigate.
+
+Run a single step: `npm start -- --step=phase1` or `BATCH_STEP=nav npm start`. Numeric shorthand: `--step=1` … `--step=5` (e.g. `npm start -- --step=3` for NAV only). To run on a specific batch: `npm start -- --batch=20520` or `BATCH_CYCLE=20520 npm start`. To run ops (or hl/aave) on an already-processed batch: `npm start -- --batch=20521 --step=hl --allow-processed` then `--step=aave --allow-processed`. The bot picks the target batch (current cycle or first incomplete orphan, or the override batch if set) and runs only that step, then exits. If the batch is in the wrong phase for the requested step, the bot errors with a clear message (e.g. "Run step phase1 first"). When running step 2 (ops), you can still use `--step=hl` or `--step=aave` to run only the Hyperliquid or Aave part of the ops (see below).
+
+### Running only Hyperliquid or only Aave steps (Phase 1)
+Phase 1 NET_MINT and NET_REDEEM are split into **Hyperliquid** steps (deposit/withdraw HL, spot buy/sell, open/close short) and **Aave** steps (deposit/withdraw, borrow/repay). You can run one set at a time for testing or recovery:
+
+- **HL only:** `npm start -- --step=hl` or `BATCH_STEP=hl npm start`
+  - NET_MINT: deposit USDC to HL, spot buy, open short.
+  - NET_REDEEM: close short, spot sell, withdraw USDC from HL.
+- **Aave only:** `npm start -- --step=aave` or `BATCH_STEP=aave npm start`
+  - NET_MINT: deposit to Aave, borrow USDC.
+  - NET_REDEEM: repay USDC to Aave, withdraw wBTC/ETH from Aave.
+
+Order for a full run: for NET_MINT run Aave first then HL; for NET_REDEEM run HL first then Aave. If one step fails, fix state and re-run that step (or the other) without re-running the whole batch.
 
 ## License
 

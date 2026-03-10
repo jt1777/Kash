@@ -25,6 +25,10 @@ function parseNAV(v) {
     const [base, exp] = s.toLowerCase().split("e");
     return BigInt(Number(base) * 10 ** Number(exp));
   }
+  // Decimal like "1.01" => 1.01e18 (18 decimals)
+  if (/^\d+(\.\d+)?$/.test(s)) {
+    return hre.ethers.parseEther(s);
+  }
   return BigInt(s);
 }
 

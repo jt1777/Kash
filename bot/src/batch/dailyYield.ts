@@ -84,9 +84,10 @@ export async function getDailyYield(
 }
 
 /**
- * Compute NAV to use for this batch: (portfolioValueUSD + netYield) / totalKashSupply.
+ * Compute NAV to use for this batch (18 decimals: 1e18 = $1 per token).
+ * NAV = (portfolioValueUSD + netYield) * 1e18 / totalKashSupply so the result is in 18 decimals.
  * Call updateNAV(newNAV) before processBatch() so redeems use this NAV.
- * All amounts in 18 decimals.
+ * All inputs in 18 decimals.
  */
 export function computeNAVFromPortfolioAndYield(
   portfolioValueUSD: bigint,
@@ -94,5 +95,6 @@ export function computeNAVFromPortfolioAndYield(
   totalKashSupply: bigint
 ): bigint {
   if (totalKashSupply === 0n) return 0n;
-  return (portfolioValueUSD + netYield) / totalKashSupply;
+  const totalValue = portfolioValueUSD + netYield;
+  return (totalValue * (10n ** 18n)) / totalKashSupply;
 }

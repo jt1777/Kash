@@ -28,6 +28,7 @@ interface IHyperliquid {
     function tradeSpot(address tokenIn, address tokenOut, uint256 amountIn) external payable returns (uint256 amountOut);
     function openPerpPosition(string calldata symbol, uint256 size, bool isLong) external;
     function closePerpPosition(string calldata symbol) external;
+    function closePerpPosition(string calldata symbol, uint256 closeSize) external;
     function getSpotBalance(address user) external view returns (uint256);
     function getPosition(address user, string calldata symbol) external view returns (
         uint256 size,
@@ -483,6 +484,14 @@ contract KashYieldETH {
         require(hyperliquidAddress != address(0), "Hyperliquid not set");
         IHyperliquid(hyperliquidAddress).closePerpPosition(symbol);
         emit ProtocolInteraction("HL_CLOSE_SHORT", ETH_ADDRESS, 0);
+    }
+
+    /// @notice Partially or fully close short. closeSize in asset units (18 decimals for mock).
+    function closeShort(string calldata symbol, uint256 closeSize) external onlyOwner {
+        require(hyperliquidAddress != address(0), "Hyperliquid not set");
+        require(closeSize > 0, "Close size must be > 0");
+        IHyperliquid(hyperliquidAddress).closePerpPosition(symbol, closeSize);
+        emit ProtocolInteraction("HL_CLOSE_SHORT", ETH_ADDRESS, closeSize);
     }
 
     function spotBuyOnHyperliquid(uint256 usdcAmount) external onlyOwner {

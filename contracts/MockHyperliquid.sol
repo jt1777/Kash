@@ -136,19 +136,50 @@ contract MockHyperliquid {
     // PERP TRADING (unchanged logic, uses spotBalances)
     // ========================
 
+    /// @notice Open a new perp position or add to an existing one (same symbol and direction).
     function openPerpPosition(string memory symbol, uint256 size, bool isLong) external {
         require(size > 0, "Size must be > 0");
         bytes32 symHash = keccak256(bytes(symbol));
         require(symHash == keccak256("ETH") || symHash == keccak256("BTC"), "Only ETH/BTC");
 
         uint256 assetId = symHash == keccak256("ETH") ? 0 : 1;
-        require(!perpPositions[msg.sender][assetId].isActive, "Position active");
+        Position storage pos = perpPositions[msg.sender][assetId];
 
         uint256 price = assetId == 0 ? ethPriceUsd : btcPriceUsd;
         uint256 collateralUsd18 = (size * price) / 10**18 / 10;
         uint256 collateralStable = collateralUsd18 / 10**12;
         uint256 collateralAsset = size / 10;
 
+        if (pos.isActive) {
+            require(pos.isLong == isLong, "Cannot add opposite direction");
+            // Add to existing position: pull collateral for new size
+            if (assetId == 0) {
+                if (ethBalance[msg.sender] >= collateralAsset) {
+                    ethBalance[msg.sender] -= collateralAsset;
+                } else {
+                    require(spotBalances[msg.sender] >= collateralStable, "Insufficient collateral");
+                    spotBalances[msg.sender] -= collateralStable;
+                }
+            } else {
+                if (btcBalance[msg.sender] >= collateralAsset) {
+                    btcBalance[msg.sender] -= collateralAsset;
+                } else {
+                    require(spotBalances[msg.sender] >= collateralStable, "Insufficient collateral");
+                    spotBalances[msg.sender] -= collateralStable;
+                }
+            }
+            // VWAP entry price
+            uint256 oldSize = pos.size;
+            uint256 oldCollateral = pos.collateral;
+            uint256 oldEntry = pos.entryPrice;
+            pos.entryPrice = (oldSize * oldEntry + size * price) / (oldSize + size);
+            pos.size = oldSize + size;
+            pos.collateral = oldCollateral + collateralStable;
+            emit PerpPositionOpened(msg.sender, symbol, size, collateralStable, isLong, price);
+            return;
+        }
+
+        // New position
         if (assetId == 0) {
             if (ethBalance[msg.sender] >= collateralAsset) {
                 ethBalance[msg.sender] -= collateralAsset;
@@ -177,25 +208,49 @@ contract MockHyperliquid {
         emit PerpPositionOpened(msg.sender, symbol, size, collateralStable, isLong, price);
     }
 
+    /// @notice Close entire perp position (backward compatible).
     function closePerpPosition(string memory symbol) external {
-        bytes32 symHash = keccak256(bytes(symbol));
-        require(symHash == keccak256("ETH") || symHash == keccak256("BTC"), "Only ETH/BTC");
-
-        uint256 assetId = symHash == keccak256("ETH") ? 0 : 1;
+        uint256 assetId = _symbolToAssetId(symbol);
         Position storage pos = perpPositions[msg.sender][assetId];
         require(pos.isActive, "No active position");
+        _closePerpPosition(symbol, assetId, pos.size);
+    }
+
+    /// @notice Close part or all of a perp position. If closeSize >= position size, closes fully.
+    function closePerpPosition(string memory symbol, uint256 closeSize) external {
+        uint256 assetId = _symbolToAssetId(symbol);
+        Position storage pos = perpPositions[msg.sender][assetId];
+        require(pos.isActive, "No active position");
+        uint256 sizeToClose = closeSize >= pos.size ? pos.size : closeSize;
+        require(sizeToClose > 0, "Close size must be > 0");
+        _closePerpPosition(symbol, assetId, sizeToClose);
+    }
+
+    function _symbolToAssetId(string memory symbol) internal pure returns (uint256) {
+        bytes32 symHash = keccak256(bytes(symbol));
+        require(symHash == keccak256("ETH") || symHash == keccak256("BTC"), "Only ETH/BTC");
+        return symHash == keccak256("ETH") ? 0 : 1;
+    }
+
+    function _closePerpPosition(string memory symbol, uint256 assetId, uint256 closeSize) internal {
+        Position storage pos = perpPositions[msg.sender][assetId];
+        require(closeSize <= pos.size && closeSize > 0, "Invalid close size");
 
         uint256 exitPrice = assetId == 0 ? ethPriceUsd : btcPriceUsd;
+        uint256 posSize = pos.size;
+        uint256 posCollateral = pos.collateral;
+        uint256 posEntry = pos.entryPrice;
 
-        int256 priceDiff = int256(exitPrice) - int256(pos.entryPrice);
+        // Proportional PnL and collateral for the closed portion
+        int256 priceDiff = int256(exitPrice) - int256(posEntry);
         int256 direction = pos.isLong ? int256(1) : int256(-1);
-        int256 pnlUsd18 = (int256(pos.size) * priceDiff * direction) / int256(pos.entryPrice);
+        int256 pnlUsd18 = (int256(closeSize) * priceDiff * direction) / int256(posEntry);
         int256 pnlStable = pnlUsd18 / int256(10**12);
-
-        int256 finalCollateral = int256(pos.collateral) + pnlStable;
+        uint256 collateralReturn = (posCollateral * closeSize) / posSize;
+        int256 finalCollateral = int256(collateralReturn) + pnlStable;
         require(finalCollateral >= 0, "Liquidated");
 
-        uint256 collateralAsset = pos.size / 10;
+        uint256 collateralAsset = closeSize / 10;
         if (assetId == 0) {
             ethBalance[msg.sender] += collateralAsset;
         } else {
@@ -207,7 +262,14 @@ contract MockHyperliquid {
 
         emit PerpPositionClosed(msg.sender, symbol, pnlStable, uint256(finalCollateral));
 
-        pos.isActive = false;
+        if (closeSize >= posSize) {
+            pos.isActive = false;
+            pos.size = 0;
+            pos.collateral = 0;
+        } else {
+            pos.size = posSize - closeSize;
+            pos.collateral = posCollateral - collateralReturn;
+        }
     }
 
     // ========================
