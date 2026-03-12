@@ -162,7 +162,7 @@ Optional: `BOT_ADDRESS=0x...` (defaults to deployer).
 npx hardhat run scripts/deploy-kashyieldbtc.js --network arbitrumSepolia
 ```
 
-Save the printed **KashYieldBtc** and **KashTokenBtc** addresses. The script configures the new contract with your existing wBTC, Aave, USDC, and oracle.
+Save the printed **KashYieldBtc** and **KashTokenBtc** addresses and copy to all 3 .env files. The script configures the new contract with your existing wBTC, Aave, USDC, and oracle.
 
 ### 4. Deploy MockHyperliquid (if not already deployed)
 

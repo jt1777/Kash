@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadContract, useBalance, useEstimateFeesPerGas } from 'wagmi';
 import { CONTRACTS, ARBITRUM_SEPOLIA_BLOCK_EXPLORER, HARDHAT_CHAIN_ID } from '@/lib/contracts/addresses';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
@@ -29,6 +29,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
   const depositToken = isBtc ? MINT_TOKEN_BTC : MINT_TOKEN_ETH;
   const [amount, setAmount] = useState('');
   const [hideSettled, setHideSettled] = useState(false);
+  const [hadPendingBeforeBatch, setHadPendingBeforeBatch] = useState(false);
 
   const { data: balance } = useBalance({ address });
   const nativeBalance = balance?.value ?? 0n;
@@ -73,17 +74,27 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
     abi: kashYieldABI,
     functionName: 'getBatchInfo',
     args: currentBatchCycle !== undefined ? [currentBatchCycle] : undefined,
+    query: { refetchInterval: 15000 },
   });
 
-  const { data: pendingMintRequest } = useReadContract({
+  const { data: cycleDurationSecondsRaw } = useReadContract({
+    address: kashYield,
+    abi: kashYieldABI,
+    functionName: 'cycleDurationSeconds',
+  });
+  const cycleDuration = cycleDurationSecondsRaw !== undefined ? Number(cycleDurationSecondsRaw) : 86400;
+  const isShortCycle = cycleDuration < 86400;
+
+  const { data: pendingMintRequest, refetch: refetchPendingMint } = useReadContract({
     address: kashYield,
     abi: kashYieldABI,
     functionName: 'getPendingMintRequest',
     args: address && currentBatchCycle !== undefined ? [address, currentBatchCycle] : undefined,
+    query: { refetchInterval: 15000 },
   });
 
-  const batchProcessed = batchInfo ? (batchInfo as readonly [bigint, bigint, boolean, bigint, bigint])[2] : true;
-  const mintSettled = batchProcessed && pendingMintRequest && pendingMintRequest.amountIn > 0n;
+  // Only treat as processed when we have batch info; otherwise show pending/cancel state
+  const batchProcessed = batchInfo ? (batchInfo as readonly [bigint, bigint, boolean, bigint, bigint])[2] : false;
   const canCancelMint = Boolean(
     address &&
     currentBatchCycle !== undefined &&
@@ -92,6 +103,31 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
     pendingMintRequest &&
     pendingMintRequest.amountIn > 0n
   );
+
+  // localStorage key scoped to wallet + cycle + product so it persists across page refreshes
+  const pendingStorageKey = useMemo(
+    () => address && currentBatchCycle !== undefined
+      ? `kash-mint-pending-${address}-${currentBatchCycle}-${product}`
+      : null,
+    [address, currentBatchCycle, product]
+  );
+
+  // Load persisted flag on mount / when cycle changes
+  useEffect(() => {
+    if (!pendingStorageKey) return;
+    setHadPendingBeforeBatch(localStorage.getItem(pendingStorageKey) === '1');
+  }, [pendingStorageKey]);
+
+  // Record that a pre-batch request exists the moment the cancel button becomes available
+  useEffect(() => {
+    if (canCancelMint && pendingStorageKey) {
+      localStorage.setItem(pendingStorageKey, '1');
+      setHadPendingBeforeBatch(true);
+    }
+  }, [canCancelMint, pendingStorageKey]);
+
+  // "settled" = batch ran AND we have proof the request was submitted before the batch ran
+  const mintSettled = batchProcessed && hadPendingBeforeBatch && Boolean(pendingMintRequest?.amountIn && pendingMintRequest.amountIn > 0n);
 
   const { writeContract: approve, data: approveHash, isPending: isApprovePending, error: approveError } = useWriteContract();
   const { writeContract: mint, data: mintHash, isPending: isMintPending, error: mintError } = useWriteContract();
@@ -107,6 +143,13 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
       refetchAllowance();
     }
   }, [isApproveSuccess, refetchAllowance]);
+
+  // Refetch pending request after mint confirms so cancel button and status update immediately
+  useEffect(() => {
+    if (isMintSuccess) {
+      refetchPendingMint();
+    }
+  }, [isMintSuccess, refetchPendingMint]);
 
   // Helper to safely render error cause
   const renderErrorCause = (error: typeof mintError) => {
@@ -289,13 +332,18 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
         </div>
       )}
 
+
       {/* Settled mint: success message */}
       {mintSettled && !hideSettled && (
         <div className="rounded-lg border border-green-200 bg-green-50 p-3 flex items-start justify-between gap-2">
           <p className="text-sm text-green-800 font-medium">Your mint request for this batch has been settled! KASH tokens have been minted to your wallet.</p>
           <button
             type="button"
-            onClick={() => setHideSettled(true)}
+            onClick={() => {
+              setHideSettled(true);
+              if (pendingStorageKey) localStorage.removeItem(pendingStorageKey);
+              setHadPendingBeforeBatch(false);
+            }}
             className="text-green-600 hover:text-green-800 transition shrink-0 cursor-pointer"
             aria-label="Dismiss"
           >

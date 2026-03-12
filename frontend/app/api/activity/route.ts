@@ -66,6 +66,8 @@ type ArbiscanTx = {
 export async function GET(request: NextRequest) {
   const address = request.nextUrl.searchParams.get('address');
   const limit = Math.min(Number(request.nextUrl.searchParams.get('limit')) || 20, 50);
+  // Accept cycle duration from frontend (reads it from the contract); falls back to 86400
+  const cycleDuration = Math.max(60, Number(request.nextUrl.searchParams.get('cycleDuration') || '86400'));
 
   if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) {
     return NextResponse.json({ error: 'Invalid address' }, { status: 400 });
@@ -98,7 +100,7 @@ export async function GET(request: NextRequest) {
       const selector = input.slice(0, 10);
 
       const ts = parseInt(tx.timeStamp, 10);
-      const batchCycle = Math.floor(ts / 86400);
+      const batchCycle = Math.floor(ts / cycleDuration);
       const contractAddress = tx.to || '';
 
       if (selector === SELECTOR_REQUEST_MINT) {

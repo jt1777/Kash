@@ -199,9 +199,48 @@ The bot does not detect "failure" directly; it detects **incomplete** batches fr
    - **Phase 2 orphan:** batch phase is 2 but the batch is **not** marked processed (Phase 2 distribution did not run or did not finish).
 4. Runs **one** batch per start: the **first** incomplete batch found (oldest first), or the **current** cycle if none are incomplete.
 
-So if a step errors (e.g. "No active position" during ops), the batch stays in phase 1 or 2 and is not marked processed. The next run will pick that batch automatically. You can **override** the target batch with `--batch=N` or `BATCH_CYCLE=N` to run all 5 steps (or a single step) on that historical batch. If that batch is already processed (phase 3), the bot will exit unless you pass **`--allow-processed`** (or `ALLOW_PROCESSED_BATCH=true`): then you can run **only the ops step** (`--step=ops`, `--step=hl`, or `--step=aave`) to fix HL/Aave state that never completed (e.g. after a failed redeem). If Phase 2 ran and the contract marked the batch processed but you did not receive tokens, the bot will not retry that batch (contract state says done); use owner-status or events to investigate.
+**Recovery: when a step errors mid-batch**
 
-Run a single step: `npm start -- --step=phase1` or `BATCH_STEP=nav npm start`. Numeric shorthand: `--step=1` … `--step=5` (e.g. `npm start -- --step=3` for NAV only). To run on a specific batch: `npm start -- --batch=20520` or `BATCH_CYCLE=20520 npm start`. To run ops (or hl/aave) on an already-processed batch: `npm start -- --batch=20521 --step=hl --allow-processed` then `--step=aave --allow-processed`. The bot picks the target batch (current cycle or first incomplete orphan, or the override batch if set) and runs only that step, then exits. If the batch is in the wrong phase for the requested step, the bot errors with a clear message (e.g. "Run step phase1 first"). When running step 2 (ops), you can still use `--step=hl` or `--step=aave` to run only the Hyperliquid or Aave part of the ops (see below).
+If a step errors (e.g. "No active position" during ops), the batch stays in phase 1 or 2 and is not marked processed. The next bot run will detect it as an incomplete orphan and pick it up automatically — no manual intervention needed in most cases.
+
+**Targeting a specific batch cycle**
+
+By default the bot targets the current cycle (or the first incomplete orphan). To run on a specific historical batch:
+
+```bash
+npm start -- --batch=20523            # run all 5 steps on batch 20523
+npm start -- --batch=20523 --step=ops # run only the ops step on batch 20523
+```
+
+The `BATCH_CYCLE=N` environment variable is equivalent to `--batch=N`.
+
+**Re-running ops on an already-processed batch (`--allow-processed`)**
+
+If a batch reached phase 3 (processed) but the capital operations (Aave/Hyperliquid) never completed — for example the mint batch finalized but wBTC was never deployed — you can re-run the ops step using `--allow-processed`:
+
+```bash
+# Example: batch 20523 is phase=3 processed=true, but Aave/HL ops never ran
+npm start -- --batch=20523 --step=ops --allow-processed
+
+# Or run HL and Aave separately:
+npm start -- --batch=20523 --step=hl   --allow-processed
+npm start -- --batch=20523 --step=aave --allow-processed
+```
+
+`--allow-processed` only unlocks `--step=ops`, `--step=hl`, and `--step=aave`. It cannot re-run phase1, nav, mark-done, or phase2 on a finalized batch.
+
+> **Note:** If Phase 2 ran and the contract marked the batch processed, but tokens were not received, the bot cannot retry the distribution (contract state says done). Use `npm run owner:status` or check on-chain events to investigate.
+
+**Quick reference: common flags**
+
+| Flag | Env var equivalent | Description |
+|------|--------------------|-------------|
+| `--step=<name>` | `BATCH_STEP=<name>` | Run a single step (`phase1`, `ops`, `nav`, `mark-done`, `phase2`, `hl`, `aave`) |
+| `--step=1` … `--step=5` | — | Numeric shorthand for steps 1–5 |
+| `--batch=N` | `BATCH_CYCLE=N` | Target a specific batch cycle number |
+| `--allow-processed` | `ALLOW_PROCESSED_BATCH=true` | Allow ops steps on an already-finalized batch |
+
+If the batch is in the wrong phase for the requested step, the bot exits with a clear message (e.g. `"Batch 20524 is in phase 0; run step phase1 first"`). Fix the prerequisite step, then re-run.
 
 ### Running only Hyperliquid or only Aave steps (Phase 1)
 Phase 1 NET_MINT and NET_REDEEM are split into **Hyperliquid** steps (deposit/withdraw HL, spot buy/sell, open/close short) and **Aave** steps (deposit/withdraw, borrow/repay). You can run one set at a time for testing or recovery:

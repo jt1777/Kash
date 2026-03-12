@@ -121,19 +121,22 @@ contract KashYieldBtc {
     uint256 public constant PROCESSING_WINDOW_START = 0;
     uint256 public constant PROCESSING_WINDOW_END = 24 * 3600;
 
+    /// @notice Duration of one batch cycle in seconds. Default 86400 (1 day). Owner can lower for testing (e.g. 300 = 5 min cycles).
+    uint256 public cycleDurationSeconds = 86400;
+
     modifier onlyOwner() {
         require(msg.sender == owner, "Only owner");
         _;
     }
 
     modifier onlyUserWindow() {
-        uint256 timeOfDay = block.timestamp % 86400;
+        uint256 timeOfDay = block.timestamp % cycleDurationSeconds;
         require(timeOfDay < USER_WINDOW_END, "User window closed");
         _;
     }
 
     modifier onlyProcessingWindow() {
-        uint256 timeOfDay = block.timestamp % 86400;
+        uint256 timeOfDay = block.timestamp % cycleDurationSeconds;
         require(timeOfDay >= PROCESSING_WINDOW_START && timeOfDay < PROCESSING_WINDOW_END, "Not in processing window");
         _;
     }
@@ -155,11 +158,17 @@ contract KashYieldBtc {
         kashTokenBtc = new KashTokenBtc();
         kashTokenBtc.transferOwnership(address(this));
 
-        currentBatchCycle = block.timestamp / 86400;
+        currentBatchCycle = block.timestamp / cycleDurationSeconds;
     }
 
     function setBotAddress(address _botAddress) external onlyOwner {
         botAddress = _botAddress;
+    }
+
+    /// @notice Set batch cycle duration. Use 86400 for production (1 day). Lower values enable rapid testing (e.g. 300 = 5-min cycles).
+    function setCycleDurationSeconds(uint256 _seconds) external onlyOwner {
+        require(_seconds >= 60, "Min 60s");
+        cycleDurationSeconds = _seconds;
     }
 
     function setKeeperRegistry(address _keeperRegistry) external onlyOwner {
@@ -170,7 +179,7 @@ contract KashYieldBtc {
         require(amount > 0, "Amount > 0");
         IERC20(wbtcAddress).safeTransferFrom(msg.sender, address(this), amount);
 
-        uint256 batchCycle = block.timestamp / 86400;
+        uint256 batchCycle = block.timestamp / cycleDurationSeconds;
 
         userMintRequests[msg.sender][batchCycle] = MintRequest({
             user: msg.sender,
@@ -195,7 +204,7 @@ contract KashYieldBtc {
 
         kashTokenBtc.transferFrom(msg.sender, address(this), kashAmount);
 
-        uint256 batchCycle = block.timestamp / 86400;
+        uint256 batchCycle = block.timestamp / cycleDurationSeconds;
 
         userRedeemRequests[msg.sender][batchCycle] = RedeemRequest({
             user: msg.sender,
@@ -242,14 +251,14 @@ contract KashYieldBtc {
 
     // Chainlink Upkeep
     function checkUpkeep(bytes calldata /* checkData */) external view returns (bool upkeepNeeded, bytes memory performData) {
-        uint256 batchCycle = block.timestamp / 86400;
-        uint256 timeOfDay = block.timestamp % 86400;
+        uint256 batchCycle = block.timestamp / cycleDurationSeconds;
+        uint256 timeOfDay = block.timestamp % cycleDurationSeconds;
         upkeepNeeded = (timeOfDay >= PROCESSING_WINDOW_START && timeOfDay < PROCESSING_WINDOW_END) && !batchProcessed[batchCycle];
         performData = "";
     }
 
     function performUpkeep(bytes calldata /* performData */) external onlyBotOrKeeper {
-        uint256 batchCycle = block.timestamp / 86400;
+        uint256 batchCycle = block.timestamp / cycleDurationSeconds;
         uint8 phase = batchPhase[batchCycle];
         if (phase == 0) {
             processBatchPhase1();
@@ -260,7 +269,7 @@ contract KashYieldBtc {
 
     // Phase 1: Indicative calcs
     function processBatchPhase1() internal onlyProcessingWindow {
-        uint256 batchCycle = block.timestamp / 86400;
+        uint256 batchCycle = block.timestamp / cycleDurationSeconds;
         require(batchPhase[batchCycle] == 0, "Phase started");
 
         uint256 btcPrice = getBtcPrice(); // Fixed price for batch
@@ -313,7 +322,7 @@ contract KashYieldBtc {
 
     // Phase 2: Final distributions with exact NAV (current cycle only, time-gated)
     function processBatchPhase2() internal onlyProcessingWindow {
-        uint256 batchCycle = block.timestamp / 86400;
+        uint256 batchCycle = block.timestamp / cycleDurationSeconds;
         require(batchPhase[batchCycle] == 2, "Ops not done");
         _processBatchPhase2(batchCycle);
     }
@@ -321,7 +330,7 @@ contract KashYieldBtc {
     /// @notice Run Phase 2 for a specific batch (e.g. orphaned batch). Bot/keeper only. No time window.
     function processBatchPhase2ForCycle(uint256 batchCycle) external onlyBotOrKeeper {
         require(batchPhase[batchCycle] == 2, "Ops not done");
-        require(batchCycle != block.timestamp / 86400, "Use performUpkeep for current");
+        require(batchCycle != block.timestamp / cycleDurationSeconds, "Use performUpkeep for current");
         _processBatchPhase2(batchCycle);
     }
 
@@ -573,7 +582,7 @@ contract KashYieldBtc {
 
     /// @notice Returns wBTC reserved for users: unprocessed cycle (mint + redeem estimate), or if processed then mint wBTC not yet deployed to Aave.
     function getReservedBtc() public view returns (uint256) {
-        uint256 currentCycle = block.timestamp / 86400;
+        uint256 currentCycle = block.timestamp / cycleDurationSeconds;
         uint256 reserved = 0;
 
         if (!batchProcessed[currentCycle]) {
@@ -595,6 +604,46 @@ contract KashYieldBtc {
         require(batchMintBtcDeployedToAave[batchCycle] + amount <= minted, "Exceeds mint wBTC for cycle");
         batchMintBtcDeployedToAave[batchCycle] += amount;
         emit ProtocolInteraction("MINT_BTC_DEPLOYED", wbtcAddress, amount);
+    }
+
+    /// @notice Manually process orphaned redeem requests for one or more users in a single
+    /// atomic transaction. All KASH burns and wBTC transfers happen together — if the contract
+    /// has insufficient wBTC for any user the entire transaction reverts, so no partial payouts.
+    /// Use when redeem requests are stuck in an already-processed cycle.
+    function ownerManuallyProcessRedeem(address[] calldata users, uint256 batchCycle) external onlyOwner {
+        require(users.length > 0, "No users provided");
+
+        uint256 btcPrice = getBtcPrice();
+
+        // First pass: calculate total wBTC needed and validate all requests exist.
+        // Reverts here if any user has no request, before any state changes.
+        uint256 totalWbtcNeeded = 0;
+        for (uint256 i = 0; i < users.length; i++) {
+            RedeemRequest storage req = userRedeemRequests[users[i]][batchCycle];
+            require(req.kashAmount > 0, "No pending redeem request for user");
+            uint256 usdValue = (req.kashAmount * currentNAV) / 1e18;
+            uint256 usdAfterFee = usdValue * (10000 - feeBps) / 10000;
+            totalWbtcNeeded += (usdAfterFee * (10 ** WBTC_DECIMALS)) / btcPrice;
+        }
+        require(IERC20(wbtcAddress).balanceOf(address(this)) >= totalWbtcNeeded, "Insufficient wBTC in contract");
+
+        // Second pass: burn KASH and send wBTC for each user.
+        for (uint256 i = 0; i < users.length; i++) {
+            address user = users[i];
+            RedeemRequest storage req = userRedeemRequests[user][batchCycle];
+            uint256 usdValue = (req.kashAmount * currentNAV) / 1e18;
+            uint256 usdAfterFee = usdValue * (10000 - feeBps) / 10000;
+            uint256 wbtcAmount = (usdAfterFee * (10 ** WBTC_DECIMALS)) / btcPrice;
+
+            uint256 kashToBurn = req.kashAmount;
+            delete userRedeemRequests[user][batchCycle];
+
+            kashTokenBtc.burn(address(this), kashToBurn);
+            IERC20(wbtcAddress).safeTransfer(user, wbtcAmount);
+
+            emit TokensClaimed(user, wbtcAddress, wbtcAmount, false);
+        }
+        emit ProtocolInteraction("OWNER_MANUAL_REDEEM", wbtcAddress, totalWbtcNeeded);
     }
 
     /// @notice Withdraw only excess wBTC to the owner. Cannot withdraw reserved wBTC.
@@ -633,12 +682,12 @@ contract KashYieldBtc {
     }
 
     function isUserWindow() public view returns (bool) {
-        uint256 timeOfDay = block.timestamp % 86400;
+        uint256 timeOfDay = block.timestamp % cycleDurationSeconds;
         return timeOfDay < USER_WINDOW_END;
     }
 
     function isProcessingWindow() public view returns (bool) {
-        uint256 timeOfDay = block.timestamp % 86400;
+        uint256 timeOfDay = block.timestamp % cycleDurationSeconds;
         return timeOfDay >= PROCESSING_WINDOW_START && timeOfDay < PROCESSING_WINDOW_END;
     }
 
@@ -667,7 +716,7 @@ contract KashYieldBtc {
     }
 
     function getCurrentBatchCycle() external view returns (uint256) {
-        return block.timestamp / 86400;
+        return block.timestamp / cycleDurationSeconds;
     }
 
     /// @notice Total wBTC (8 decimals) deposited by user across all processed batches. For frontend Deposits card.

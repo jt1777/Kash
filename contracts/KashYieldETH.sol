@@ -57,6 +57,9 @@ event ProtocolInteraction(string action, address indexed asset, uint256 amount);
 contract KashYieldETH {
     using SafeERC20 for IERC20;
 
+    // ETH has 18 decimals
+    uint256 public constant ETH_DECIMALS = 18;
+
     // Core state
     address payable public owner;
     KashTokenEth public kashTokenEth;
@@ -120,9 +123,13 @@ contract KashYieldETH {
     /// @notice Total ETH (18 decimals) ever redeemed (sent back) to each user. Net = totalDepositedEthByUser - totalRedeemedEthByUser.
     mapping(address => uint256) public totalRedeemedEthByUser;
 
-    uint256 public constant USER_WINDOW_END = 23 * 3600 + 50 * 60;
-    uint256 public constant PROCESSING_WINDOW_START = 23 * 3600 + 50 * 60;
+    // TESTING: Time windows disabled - full 24h for both user and processing (revert for production)
+    uint256 public constant USER_WINDOW_END = 24 * 3600;
+    uint256 public constant PROCESSING_WINDOW_START = 0;
     uint256 public constant PROCESSING_WINDOW_END = 24 * 3600;
+
+    /// @notice Duration of one batch cycle in seconds. Default 86400 (1 day). Owner can lower for testing (e.g. 300 = 5 min cycles).
+    uint256 public cycleDurationSeconds = 86400;
 
     modifier onlyOwner() {
         require(msg.sender == owner, "Only owner");
@@ -130,13 +137,13 @@ contract KashYieldETH {
     }
 
     modifier onlyUserWindow() {
-        uint256 timeOfDay = block.timestamp % 86400;
+        uint256 timeOfDay = block.timestamp % cycleDurationSeconds;
         require(timeOfDay < USER_WINDOW_END, "User window closed");
         _;
     }
 
     modifier onlyProcessingWindow() {
-        uint256 timeOfDay = block.timestamp % 86400;
+        uint256 timeOfDay = block.timestamp % cycleDurationSeconds;
         require(timeOfDay >= PROCESSING_WINDOW_START && timeOfDay < PROCESSING_WINDOW_END, "Not in processing window");
         _;
     }
@@ -158,13 +165,19 @@ contract KashYieldETH {
         kashTokenEth = new KashTokenEth();
         kashTokenEth.transferOwnership(address(this));
 
-        currentBatchCycle = block.timestamp / 86400;
+        currentBatchCycle = block.timestamp / cycleDurationSeconds;
     }
 
     receive() external payable {}
 
     function setBotAddress(address _botAddress) external onlyOwner {
         botAddress = _botAddress;
+    }
+
+    /// @notice Set batch cycle duration. Use 86400 for production (1 day). Lower values enable rapid testing (e.g. 300 = 5-min cycles).
+    function setCycleDurationSeconds(uint256 _seconds) external onlyOwner {
+        require(_seconds >= 60, "Min 60s");
+        cycleDurationSeconds = _seconds;
     }
 
     function setKeeperRegistry(address _keeperRegistry) external onlyOwner {
@@ -182,7 +195,7 @@ contract KashYieldETH {
             actualAmount = amount;
         }
 
-        uint256 batchCycle = block.timestamp / 86400;
+        uint256 batchCycle = block.timestamp / cycleDurationSeconds;
 
         userMintRequests[msg.sender][batchCycle] = MintRequest({
             user: msg.sender,
@@ -207,7 +220,7 @@ contract KashYieldETH {
 
         kashTokenEth.transferFrom(msg.sender, address(this), kashAmount);
 
-        uint256 batchCycle = block.timestamp / 86400;
+        uint256 batchCycle = block.timestamp / cycleDurationSeconds;
 
         userRedeemRequests[msg.sender][batchCycle] = RedeemRequest({
             user: msg.sender,
@@ -254,14 +267,14 @@ contract KashYieldETH {
 
     // Chainlink Upkeep
     function checkUpkeep(bytes calldata /* checkData */) external view returns (bool upkeepNeeded, bytes memory performData) {
-        uint256 batchCycle = block.timestamp / 86400;
-        uint256 timeOfDay = block.timestamp % 86400;
+        uint256 batchCycle = block.timestamp / cycleDurationSeconds;
+        uint256 timeOfDay = block.timestamp % cycleDurationSeconds;
         upkeepNeeded = (timeOfDay >= PROCESSING_WINDOW_START && timeOfDay < PROCESSING_WINDOW_END) && !batchProcessed[batchCycle];
         performData = "";
     }
 
     function performUpkeep(bytes calldata /* performData */) external onlyBotOrKeeper {
-        uint256 batchCycle = block.timestamp / 86400;
+        uint256 batchCycle = block.timestamp / cycleDurationSeconds;
         uint8 phase = batchPhase[batchCycle];
         if (phase == 0) {
             processBatchPhase1();
@@ -272,7 +285,7 @@ contract KashYieldETH {
 
     // Phase 1: Indicative calcs
     function processBatchPhase1() internal onlyProcessingWindow {
-        uint256 batchCycle = block.timestamp / 86400;
+        uint256 batchCycle = block.timestamp / cycleDurationSeconds;
         require(batchPhase[batchCycle] == 0, "Phase started");
 
         uint256 ethPrice = getEthPrice(); // Fixed price for batch
@@ -283,7 +296,8 @@ contract KashYieldETH {
         for (uint256 i = 0; i < minters.length; i++) {
             MintRequest storage req = userMintRequests[minters[i]][batchCycle];
             if (req.amountIn > 0) {
-                req.amountInUSD = (req.amountIn * ethPrice) / 1e18; // Assuming price 18 dec
+                // ETH amount (18 decimals) * ethPrice (18 decimals) / 1e18 = USD in 18 decimals
+                req.amountInUSD = (req.amountIn * ethPrice) / (10 ** ETH_DECIMALS);
                 totalMintUSD += req.amountInUSD;
             }
         }
@@ -324,7 +338,7 @@ contract KashYieldETH {
 
     // Phase 2: Final distributions with exact NAV (current cycle only, time-gated)
     function processBatchPhase2() internal onlyProcessingWindow {
-        uint256 batchCycle = block.timestamp / 86400;
+        uint256 batchCycle = block.timestamp / cycleDurationSeconds;
         require(batchPhase[batchCycle] == 2, "Ops not done");
         _processBatchPhase2(batchCycle);
     }
@@ -332,7 +346,7 @@ contract KashYieldETH {
     /// @notice Run Phase 2 for a specific batch (e.g. orphaned batch). Bot/keeper only. No time window.
     function processBatchPhase2ForCycle(uint256 batchCycle) external onlyBotOrKeeper {
         require(batchPhase[batchCycle] == 2, "Ops not done");
-        require(batchCycle != block.timestamp / 86400, "Use performUpkeep for current");
+        require(batchCycle != block.timestamp / cycleDurationSeconds, "Use performUpkeep for current");
         _processBatchPhase2(batchCycle);
     }
 
@@ -383,7 +397,7 @@ contract KashYieldETH {
             if (req.kashAmount > 0) {
                 uint256 usdValue = (req.kashAmount * exactNAV) / 1e18;
                 uint256 usdAfterFee = usdValue * (10000 - feeBps) / 10000;
-                totalRedeemEthNeeded += (usdAfterFee * 1e18) / ethPrice;
+                totalRedeemEthNeeded += (usdAfterFee * (10 ** ETH_DECIMALS)) / ethPrice;
             }
         }
 
@@ -405,7 +419,7 @@ contract KashYieldETH {
             if (req.kashAmount > 0) {
                 uint256 usdValue = (req.kashAmount * exactNAV) / 1e18;
                 uint256 usdAfterFee = usdValue * (10000 - feeBps) / 10000;
-                uint256 ethAmount = (usdAfterFee * 1e18) / ethPrice;
+                uint256 ethAmount = (usdAfterFee * (10 ** ETH_DECIMALS)) / ethPrice;
                 payable(user).transfer(ethAmount);
                 emit TokensClaimed(user, ETH_ADDRESS, ethAmount, false);
                 totalRedeemedEthByUser[user] += ethAmount;
@@ -586,13 +600,13 @@ contract KashYieldETH {
 
     /// @notice Returns ETH reserved for users: unprocessed cycle (mint + redeem estimate), or if processed then mint ETH not yet deployed to Aave.
     function getReservedEth() public view returns (uint256) {
-        uint256 currentCycle = block.timestamp / 86400;
+        uint256 currentCycle = block.timestamp / cycleDurationSeconds;
         uint256 reserved = 0;
 
         if (!batchProcessed[currentCycle]) {
             reserved += batchTotalMintEth[currentCycle];
             uint256 redeemUsdEstimate = (batchTotalRedeemKash[currentCycle] * currentNAV) / 1e18;
-            uint256 redeemEthEstimate = (redeemUsdEstimate * (10000 - feeBps) / 10000 * 1e18) / getEthPrice();
+            uint256 redeemEthEstimate = (redeemUsdEstimate * (10000 - feeBps) / 10000 * (10 ** ETH_DECIMALS)) / getEthPrice();
             reserved += redeemEthEstimate;
         } else {
             uint256 minted = batchTotalMintEth[currentCycle];
@@ -608,6 +622,46 @@ contract KashYieldETH {
         require(batchMintEthDeployedToAave[batchCycle] + amount <= minted, "Exceeds mint ETH for cycle");
         batchMintEthDeployedToAave[batchCycle] += amount;
         emit ProtocolInteraction("MINT_ETH_DEPLOYED", ETH_ADDRESS, amount);
+    }
+
+    /// @notice Manually process orphaned redeem requests for one or more users in a single
+    /// atomic transaction. All KASH burns and ETH transfers happen together — if the contract
+    /// has insufficient ETH for any user the entire transaction reverts, so no partial payouts.
+    /// Use when redeem requests are stuck in an already-processed cycle.
+    function ownerManuallyProcessRedeem(address[] calldata users, uint256 batchCycle) external onlyOwner {
+        require(users.length > 0, "No users provided");
+
+        uint256 ethPrice = getEthPrice();
+
+        // First pass: calculate total ETH needed and validate all requests exist.
+        // Reverts here if any user has no request, before any state changes.
+        uint256 totalEthNeeded = 0;
+        for (uint256 i = 0; i < users.length; i++) {
+            RedeemRequest storage req = userRedeemRequests[users[i]][batchCycle];
+            require(req.kashAmount > 0, "No pending redeem request for user");
+            uint256 usdValue = (req.kashAmount * currentNAV) / 1e18;
+            uint256 usdAfterFee = usdValue * (10000 - feeBps) / 10000;
+            totalEthNeeded += (usdAfterFee * (10 ** ETH_DECIMALS)) / ethPrice;
+        }
+        require(address(this).balance >= totalEthNeeded, "Insufficient ETH in contract");
+
+        // Second pass: burn KASH and send ETH for each user.
+        for (uint256 i = 0; i < users.length; i++) {
+            address user = users[i];
+            RedeemRequest storage req = userRedeemRequests[user][batchCycle];
+            uint256 usdValue = (req.kashAmount * currentNAV) / 1e18;
+            uint256 usdAfterFee = usdValue * (10000 - feeBps) / 10000;
+            uint256 ethAmount = (usdAfterFee * (10 ** ETH_DECIMALS)) / ethPrice;
+
+            uint256 kashToBurn = req.kashAmount;
+            delete userRedeemRequests[user][batchCycle];
+
+            kashTokenEth.burn(address(this), kashToBurn);
+            payable(user).transfer(ethAmount);
+
+            emit TokensClaimed(user, ETH_ADDRESS, ethAmount, false);
+        }
+        emit ProtocolInteraction("OWNER_MANUAL_REDEEM", ETH_ADDRESS, totalEthNeeded);
     }
 
     /// @notice Withdraw only excess ETH to the owner. Cannot withdraw reserved ETH.
@@ -646,12 +700,12 @@ contract KashYieldETH {
     }
 
     function isUserWindow() public view returns (bool) {
-        uint256 timeOfDay = block.timestamp % 86400;
+        uint256 timeOfDay = block.timestamp % cycleDurationSeconds;
         return timeOfDay < USER_WINDOW_END;
     }
 
     function isProcessingWindow() public view returns (bool) {
-        uint256 timeOfDay = block.timestamp % 86400;
+        uint256 timeOfDay = block.timestamp % cycleDurationSeconds;
         return timeOfDay >= PROCESSING_WINDOW_START && timeOfDay < PROCESSING_WINDOW_END;
     }
 
@@ -680,7 +734,7 @@ contract KashYieldETH {
     }
 
     function getCurrentBatchCycle() external view returns (uint256) {
-        return block.timestamp / 86400;
+        return block.timestamp / cycleDurationSeconds;
     }
 
     /// @notice Total ETH (18 decimals) deposited by user across all processed batches. For frontend Deposits card.

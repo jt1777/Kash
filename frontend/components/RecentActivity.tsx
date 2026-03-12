@@ -1,7 +1,7 @@
 'use client';
 
-import { useAccount, useReadContracts, useWriteContract, useWaitForTransactionReceipt, useEstimateFeesPerGas } from 'wagmi';
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useAccount, useReadContracts, useWriteContract, useWaitForTransactionReceipt, useEstimateFeesPerGas, useReadContract } from 'wagmi';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { ARBITRUM_SEPOLIA_CHAIN_ID, ARBITRUM_SEPOLIA_BLOCK_EXPLORER, CONTRACTS } from '@/lib/contracts/addresses';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 
@@ -19,9 +19,9 @@ type ActivityItem = {
   contractAddress?: string;
 };
 
-async function fetchActivity(address: string): Promise<{ list: ActivityItem[]; error?: string }> {
+async function fetchActivity(address: string, cycleDuration = 86400): Promise<{ list: ActivityItem[]; error?: string }> {
   const res = await fetch(
-    `/api/activity?address=${encodeURIComponent(address)}&limit=${ACTIVITY_LIMIT}&_=${Date.now()}`,
+    `/api/activity?address=${encodeURIComponent(address)}&limit=${ACTIVITY_LIMIT}&cycleDuration=${cycleDuration}&_=${Date.now()}`,
     { cache: 'no-store' }
   );
   const data = await res.json().catch(() => ({}));
@@ -50,18 +50,44 @@ export function RecentActivity() {
   const [isLoading, setIsLoading] = useState(false);
   const [cancelTarget, setCancelTarget] = useState<{ contractAddress: string; batchCycle: number; type: 'mint' | 'redeem' } | null>(null);
 
+  // Tracks which tx hashes were ever cancel-eligible (submitted before their batch ran).
+  // Persisted in localStorage so it survives page refreshes.
+  const [cancelEligibleHashes, setCancelEligibleHashes] = useState<Set<string>>(() => {
+    if (typeof window === 'undefined') return new Set<string>();
+    try { return new Set<string>(JSON.parse(localStorage.getItem('kash-cancel-eligible-hashes') || '[]')); }
+    catch { return new Set<string>(); }
+  });
+
+  // Read cycle duration from each contract so the API uses the correct batch cycle calculation
+  const { data: ethCycleDurationRaw } = useReadContract({
+    address: CONTRACTS.kashYieldEth,
+    abi: kashYieldABI,
+    functionName: 'cycleDurationSeconds',
+  });
+  const { data: btcCycleDurationRaw } = useReadContract({
+    address: CONTRACTS.kashYieldBtc as `0x${string}` | undefined,
+    abi: kashYieldABI,
+    functionName: 'cycleDurationSeconds',
+    query: { enabled: !!CONTRACTS.kashYieldBtc },
+  });
+  // Use the minimum of the two durations so the API resolution covers both contracts
+  const cycleDuration = Math.min(
+    ethCycleDurationRaw ? Number(ethCycleDurationRaw) : 86400,
+    btcCycleDurationRaw ? Number(btcCycleDurationRaw) : 86400,
+  );
+
   const load = useCallback(async () => {
     if (!address) return;
     setIsLoading(true);
     setLoadError(null);
     try {
-      const { list, error } = await fetchActivity(address);
+      const { list, error } = await fetchActivity(address, cycleDuration);
       setActivities(list);
       setLoadError(error ?? null);
     } finally {
       setIsLoading(false);
     }
-  }, [address]);
+  }, [address, cycleDuration]);
 
   useEffect(() => {
     if (address && isArbitrumSepolia) load();
@@ -74,6 +100,7 @@ export function RecentActivity() {
   // For each activity: getBatchInfo (processed?) and getPendingMintRequest/getPendingRedeemRequest (still has request?)
   const readConfigs: { address: `0x${string}`; abi: typeof kashYieldABI; functionName: 'getBatchInfo' | 'getPendingMintRequest' | 'getPendingRedeemRequest'; args: [bigint] | [string, bigint] }[] = [];
   const activityToConfigIndex: number[] = [];
+  const activityToConfigIndexRef = useRef<number[]>([]);
   activities.forEach((a, i) => {
     const contractAddress = a.contractAddress?.trim();
     if (!contractAddress || a.batchCycle == null || !address) return;
@@ -88,13 +115,16 @@ export function RecentActivity() {
     }
     activityToConfigIndex[i] = batchIdx;
   });
-  const { data: readResults } = useReadContracts({
+  activityToConfigIndexRef.current = activityToConfigIndex;
+
+  const { data: readResults, refetch: refetchOnChain } = useReadContracts({
     contracts: readConfigs,
-    query: { enabled: readConfigs.length > 0 },
+    query: { enabled: readConfigs.length > 0, refetchInterval: 15000 },
   });
   const canCancelByIndex = new Map<number, boolean>();
   const cancelledByIndex = new Map<number, boolean>();
   const processedByIndex = new Map<number, boolean>();
+  const hasRequestByIndex = new Map<number, boolean>();
   if (readResults && address) {
     type BatchResult = { status: 'success'; result: readonly [bigint, bigint, boolean, bigint, bigint] };
     type PendingResult = { status: 'success'; result: { amountIn?: bigint; kashAmount?: bigint } };
@@ -103,19 +133,62 @@ export function RecentActivity() {
       if (batchIdx === undefined) continue;
       const batchR = readResults[batchIdx] as BatchResult | undefined;
       const pendingR = readResults[batchIdx + 1] as PendingResult | undefined;
+      // Only treat as processed when we have a successful batch result; otherwise show pending/cancel state
       const processed = batchR?.status === 'success' && batchR.result
         ? batchR.result[2]
-        : true;
+        : false;
       const hasRequest = pendingR?.status === 'success' && pendingR.result
         ? activities[i].type === 'mint'
           ? (pendingR.result.amountIn ?? 0n) > 0n
           : (pendingR.result.kashAmount ?? 0n) > 0n
         : false;
       canCancelByIndex.set(i, !processed && hasRequest);
-      cancelledByIndex.set(i, !processed && !hasRequest);
+      // Only show "Transaction cancelled" when we've successfully read pending and there is no request
+      cancelledByIndex.set(i, !processed && pendingR?.status === 'success' && !hasRequest);
       processedByIndex.set(i, processed);
+      hasRequestByIndex.set(i, hasRequest);
     }
   }
+
+  // When a transaction becomes cancel-eligible (submitted before batch ran), record its hash
+  // in localStorage so we can still show "settled" correctly after a page refresh.
+  useEffect(() => {
+    if (!readResults || !address || activities.length === 0) return;
+    const indexMap = activityToConfigIndexRef.current;
+    setCancelEligibleHashes(prev => {
+      const updated = new Set(prev);
+      let changed = false;
+      type BatchResult = { status: 'success'; result: readonly [bigint, bigint, boolean, bigint, bigint] };
+      type PendingResult = { status: 'success'; result: { amountIn?: bigint; kashAmount?: bigint } };
+      for (let i = 0; i < activities.length; i++) {
+        const batchIdx = indexMap[i];
+        if (batchIdx === undefined) continue;
+        const batchR = readResults[batchIdx] as BatchResult | undefined;
+        const pendingR = readResults[batchIdx + 1] as PendingResult | undefined;
+        const processed = batchR?.status === 'success' && batchR.result ? batchR.result[2] : false;
+        const hasRequest = pendingR?.status === 'success' && pendingR.result
+          ? activities[i].type === 'mint'
+            ? (pendingR.result.amountIn ?? 0n) > 0n
+            : (pendingR.result.kashAmount ?? 0n) > 0n
+          : false;
+        if (!processed && hasRequest && !updated.has(activities[i].hash)) {
+          updated.add(activities[i].hash);
+          changed = true;
+        }
+      }
+      if (changed) {
+        localStorage.setItem('kash-cancel-eligible-hashes', JSON.stringify([...updated]));
+        return updated;
+      }
+      return prev;
+    });
+  }, [readResults, activities, address]);
+
+  // Combined refresh: re-fetch Etherscan activity list AND re-read on-chain batch/pending state
+  const handleRefresh = useCallback(async () => {
+    await load();
+    refetchOnChain();
+  }, [load, refetchOnChain]);
 
   const writeContractResult = useWriteContract();
   const { writeContract: writeCancel, data: cancelTxHash, isPending: isCancelPending, error: cancelError } = writeContractResult;
@@ -168,28 +241,28 @@ export function RecentActivity() {
     }
   }, [isCancelPending, cancelTxHash, cancelTarget]);
 
-  const handleCancelMint = (item: ActivityItem) => {
-    if (item.contractAddress == null || item.batchCycle == null) return;
+  const handleCancelMint = (item: ActivityItem, resolvedCycle: number) => {
+    if (item.contractAddress == null) return;
     setCancelFeedback(null);
-    setCancelTarget({ contractAddress: item.contractAddress, batchCycle: item.batchCycle, type: 'mint' });
+    setCancelTarget({ contractAddress: item.contractAddress, batchCycle: resolvedCycle, type: 'mint' });
     writeCancel({
       address: item.contractAddress as `0x${string}`,
       abi: kashYieldABI,
       functionName: 'cancelMintRequest',
-      args: [BigInt(item.batchCycle)],
+      args: [BigInt(resolvedCycle)],
       ...gasOptions,
     });
   };
 
-  const handleCancelRedeem = (item: ActivityItem) => {
-    if (item.contractAddress == null || item.batchCycle == null) return;
+  const handleCancelRedeem = (item: ActivityItem, resolvedCycle: number) => {
+    if (item.contractAddress == null) return;
     setCancelFeedback(null);
-    setCancelTarget({ contractAddress: item.contractAddress, batchCycle: item.batchCycle, type: 'redeem' });
+    setCancelTarget({ contractAddress: item.contractAddress, batchCycle: resolvedCycle, type: 'redeem' });
     writeCancel({
       address: item.contractAddress as `0x${string}`,
       abi: kashYieldABI,
       functionName: 'cancelRedeemRequest',
-      args: [BigInt(item.batchCycle)],
+      args: [BigInt(resolvedCycle)],
       ...gasOptions,
     });
   };
@@ -202,7 +275,7 @@ export function RecentActivity() {
         <h2 className="text-xl font-bold text-gray-900">Recent Activity</h2>
         <button
           type="button"
-          onClick={load}
+          onClick={handleRefresh}
           disabled={isLoading}
           className="text-sm text-gray-500 hover:text-gray-700 transition disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
         >
@@ -265,11 +338,16 @@ export function RecentActivity() {
               cancelTarget?.batchCycle === item.batchCycle &&
               cancelTarget?.type === item.type;
             const isBtcContract = item.contractAddress?.toLowerCase() === (CONTRACTS.kashYieldBtc as string).toLowerCase();
-            const settledLabel = processed
+            const hasReq = hasRequestByIndex.get(i) ?? false;
+            // Only show settled label when: batch ran AND request existed before batch ran
+            // (cancelEligibleHashes tracks hashes we observed as cancellable, i.e. pre-batch)
+            const settledLabel = processed && hasReq && cancelEligibleHashes.has(item.hash)
               ? item.type === 'mint'
                 ? (isBtcContract ? 'Kash-BTC minted' : 'Kash-ETH minted')
                 : (isBtcContract ? 'wBTC redeemed' : 'ETH redeemed')
               : null;
+            // Request exists on-chain and is waiting for the batch to run
+            const isPending = !processed && hasReq;
 
             return (
               <li
@@ -300,12 +378,15 @@ export function RecentActivity() {
                 {canCancel && (
                   <button
                     type="button"
-                    onClick={() => item.type === 'mint' ? handleCancelMint(item) : handleCancelRedeem(item)}
+                    onClick={() => item.type === 'mint' ? handleCancelMint(item, item.batchCycle ?? 0) : handleCancelRedeem(item, item.batchCycle ?? 0)}
                     disabled={isCancelPending || isCancellingThis}
                     className="text-xs font-medium text-amber-700 hover:text-amber-800 border border-amber-300 hover:border-amber-400 rounded px-2 py-1 shrink-0 disabled:opacity-50 disabled:cursor-not-allowed transition"
                   >
                     {isCancellingThis ? 'Cancelling…' : item.type === 'mint' ? 'Cancel mint' : 'Cancel redeem'}
                   </button>
+                )}
+                {isPending && !canCancel && (
+                  <span className="text-xs font-medium text-amber-600 shrink-0">Pending</span>
                 )}
                 {cancelled && (
                   <span className="text-xs font-medium text-gray-600 shrink-0">
