@@ -157,7 +157,9 @@ export class BatchProcessor {
         return;
       }
       await this.runStepPhase1(batchCycle);
-      await this.runStepOps(batchCycle, batchInfo);
+      // Re-read batchInfo after Phase 1 so totalMintUSD/totalRedeemUSD are set (Phase 1 writes them on-chain).
+      const batchInfoAfterPhase1 = await this.kashYield.getBatchInfo(batchCycle);
+      await this.runStepOps(batchCycle, batchInfoAfterPhase1);
       await this.runStepNav(batchCycle);
       await this.runStepMarkDone(batchCycle);
       await this.runPhase2ForBatch(batchCycle);
@@ -480,14 +482,23 @@ export class BatchProcessor {
   /**
    * Handle NET_REDEEM - Withdraw capital (reverse of NET_MINT).
    * Can run as one step (full) or split: --step=hl (HL only) then --step=aave (Aave only).
+   *
+   * Uses the fraction of total KASH supply being redeemed to determine exactly how much
+   * of each position (HL short, HL spot BTC, Aave wBTC) to unwind.  This is correct
+   * regardless of price movement — a USD/leverage-based close size drifts wrong when
+   * price has moved since the position was opened.
    */
   private async handleNetRedeem(amountUSD: bigint, _asset: string): Promise<void> {
     const step = config.batchStep;
     console.log(`💸 Handling NET_REDEEM (${isBtc ? 'BTC' : 'ETH'}) - Withdrawing capital...`);
     console.log(`   Net amount: ${ethers.formatEther(amountUSD)} USD${step !== 'full' ? ` [step=${step} only]` : ''}\n`);
 
+    const redeemFraction = await this.getRedeemFraction();
+    const pct = (Number(redeemFraction) / 1e16).toFixed(2);
+    console.log(`   Redeem fraction: ${pct}% of KASH supply\n`);
+
     try {
-      if (step === 'full' || step === 'ops' || step === 'hl') await this.handleNetRedeemHyperliquid(amountUSD);
+      if (step === 'full' || step === 'ops' || step === 'hl') await this.handleNetRedeemHyperliquid(redeemFraction);
       if (step === 'full' || step === 'ops' || step === 'aave') await this.handleNetRedeemAave(amountUSD);
       console.log('   ✅ NET_REDEEM complete!\n');
     } catch (error: any) {
@@ -496,36 +507,132 @@ export class BatchProcessor {
     }
   }
 
-  /** NET_REDEEM Hyperliquid only: close short (partial or full), spot sell, withdraw USDC from HL. */
-  private async handleNetRedeemHyperliquid(amountUSD: bigint): Promise<void> {
-    const shortSymbol = isBtc ? 'BTC' : 'ETH';
-    console.log(`   [HL] Step 1: Close ${shortSymbol} short on Hyperliquid`);
-    await this.closeShortOnHyperliquid(shortSymbol, amountUSD);
-
-    const ltv = BigInt(config.strategy.borrowLtvPct);
-    const usdcToWithdrawUSD = (amountUSD * ltv) / 100n;
-    const price = isBtc ? await this.kashYield.getBtcPrice() : await this.kashYield.getEthPrice();
-    const spotSellAmount = (usdcToWithdrawUSD * (10n ** 18n)) / price;
-    console.log(`   [HL] Step 2: Spot sell ${isBtc ? 'wBTC' : 'ETH'} to USDC on Hyperliquid`);
-    const txSell = isBtc
-      ? await this.kashYield.spotSellOnHyperliquid(spotSellAmount)
-      : await this.kashYield.spotSellOnHyperliquid(spotSellAmount, { value: spotSellAmount });
-    await txSell.wait();
-
-    const usdcWithdrawUnits = usdcToWithdrawUSD / (10n ** 12n);
-    const spotBalance = await this.getHyperliquidSpotBalance();
-    const usdcWithdrawActual = spotBalance < usdcWithdrawUnits ? spotBalance : usdcWithdrawUnits;
-    if (usdcWithdrawActual === 0n) {
-      throw new Error('No USDC in Hyperliquid spot after sell – cannot withdraw');
+  /**
+   * Compute the fraction of total KASH supply being redeemed (18-dec, 1e18 = 100%).
+   * Reads the actual KASH submitted by redeemers in the current batch directly from
+   * batchTotalRedeemKash — no NAV approximation needed.
+   */
+  private async getRedeemFraction(): Promise<bigint> {
+    try {
+      const tokenAddr = await (isBtc ? this.kashYield.kashTokenBtc() : this.kashYield.kashTokenEth()).catch(() => null);
+      if (!tokenAddr) return BigInt(1e18);
+      const kashToken = new ethers.Contract(tokenAddr, ['function totalSupply() view returns (uint256)'], this.provider);
+      const totalSupply = BigInt((await kashToken.totalSupply()).toString());
+      if (totalSupply === 0n) return BigInt(1e18);
+      const currentCycle = BigInt((await this.kashYield.getCurrentBatchCycle()).toString());
+      const redeemKash = BigInt((await this.kashYield.batchTotalRedeemKash(currentCycle)).toString());
+      if (redeemKash === 0n) return BigInt(1e18);
+      const fraction = (redeemKash * BigInt(1e18)) / totalSupply;
+      return fraction > BigInt(1e18) ? BigInt(1e18) : fraction;
+    } catch {
+      console.warn('   ⚠️  Could not compute redeem fraction; defaulting to 100%');
+      return BigInt(1e18);
     }
-    if (spotBalance < usdcWithdrawUnits) {
-      console.log(`   ⚠️  Spot balance (${spotBalance}) less than requested (${usdcWithdrawUnits}); withdrawing available amount`);
-    }
-    console.log(`   [HL] Step 3: Withdraw USDC from Hyperliquid`);
-    await this.withdrawFromHyperliquid(usdcWithdrawActual);
   }
 
-  /** NET_REDEEM Aave only: repay USDC, withdraw wBTC/ETH from Aave. Expects USDC already in contract (e.g. after HL withdraw). */
+  /**
+   * NET_REDEEM Hyperliquid: close the proportional share of the short, then sell only
+   * enough spot BTC to cover the Aave repayment (using any short P&L USDC first).
+   * Any remaining spot BTC is withdrawn as real wBTC via withdrawBtcFromHyperliquid so
+   * that Phase 2 has sufficient wBTC to pay the redeemer (falling-price case).
+   * If the available spot BTC is not enough to cover the Aave debt (rising-price case),
+   * all available BTC is sold and the residual is handled in handleNetRedeemAave.
+   */
+  private async handleNetRedeemHyperliquid(redeemFraction: bigint): Promise<void> {
+    const shortSymbol = isBtc ? 'BTC' : 'ETH';
+    const price = isBtc ? await this.kashYield.getBtcPrice() : await this.kashYield.getEthPrice();
+
+    // ── Step 1: Close proportional share of the HL short ──────────────────
+    const pct = (Number(redeemFraction) / 1e16).toFixed(2);
+    console.log(`   [HL] Step 1: Close ${pct}% of ${shortSymbol} short on Hyperliquid`);
+    const [posSize, , , , isActive] = await this.kashYield.getHyperliquidPosition(shortSymbol);
+    if (!isActive) {
+      const tokenAddr = await (isBtc ? this.kashYield.kashTokenBtc() : this.kashYield.kashTokenEth()).catch(() => null);
+      const kashSupply = tokenAddr
+        ? BigInt((await new ethers.Contract(tokenAddr, ['function totalSupply() view returns (uint256)'], this.provider).totalSupply()).toString())
+        : 0n;
+      if (kashSupply > 0n) {
+        throw new Error(`Invariant violated: KASH supply is ${kashSupply} but no active ${shortSymbol} short.`);
+      }
+      console.log(`   → No open ${shortSymbol} short; skipping`);
+    } else {
+      const fullSize = BigInt(posSize.toString());
+      const closeSize = (fullSize * redeemFraction) / BigInt(1e18);
+      if (closeSize >= fullSize) {
+        const tx = await this.kashYield['closeShort(string)'](shortSymbol);
+        await tx.wait();
+        console.log(`   ✅ Closed full ${shortSymbol} short`);
+      } else {
+        const tx = await this.kashYield['closeShort(string,uint256)'](shortSymbol, closeSize);
+        await tx.wait();
+        console.log(`   ✅ Partially closed ${shortSymbol} short: ${ethers.formatEther(closeSize)} of ${ethers.formatEther(fullSize)}`);
+      }
+    }
+
+    // ── Step 2: Determine how much spot BTC to sell ────────────────────────
+    // After closing, HL spotBalances may contain USDC from a profitable short (falling price).
+    // We only need to sell enough BTC to cover the Aave debt not already covered by that USDC.
+    // Any BTC beyond that is kept and withdrawn as real wBTC for the redeemer.
+    const hlSpotUsdc = await this.getHyperliquidSpotBalance();            // 6-dec
+    const aaveDebt   = await this.getAaveBorrowedAmount();                // 6-dec
+    const aaveDebtProportional = (aaveDebt * redeemFraction) / BigInt(1e18); // 6-dec
+    const usdcGap6dec = hlSpotUsdc >= aaveDebtProportional ? 0n : aaveDebtProportional - hlSpotUsdc;
+    // Convert USDC gap to BTC units (18-dec): gap_usd18 / price_18dec
+    const btcToSell = usdcGap6dec > 0n
+      ? (usdcGap6dec * BigInt(1e12) * BigInt(1e18)) / price   // usdcGap→18dec, then /price
+      : 0n;
+
+    // ── Step 3: Read available exchange asset balance (BTC or ETH) ────────
+    // getExchangeAssetBalance() calls IPerpExchange(adapter).getAssetBalance(),
+    // which returns the internal 18-dec ledger balance on whichever exchange is active.
+    let hlBtcBalance = 0n;
+    try {
+      hlBtcBalance = BigInt((await this.kashYield.getExchangeAssetBalance()).toString());
+    } catch {
+      console.warn('   ⚠️  Could not read exchange asset balance; spot sell skipped');
+    }
+
+    const btcToSellActual = btcToSell < hlBtcBalance ? btcToSell : hlBtcBalance;
+    const btcToKeep       = hlBtcBalance - btcToSellActual;
+
+    // ── Step 4: Sell BTC for USDC ──────────────────────────────────────────
+    if (btcToSellActual > 0n) {
+      console.log(`   [HL] Step 2: Spot sell ${ethers.formatEther(btcToSellActual)} ${shortSymbol} to USDC`);
+      const txSell = isBtc
+        ? await this.kashYield.spotSellOnHyperliquid(btcToSellActual)
+        : await this.kashYield.spotSellOnHyperliquid(btcToSellActual, { value: btcToSellActual });
+      await txSell.wait();
+      console.log(`   ✅ Spot sold`);
+    } else {
+      console.log(`   [HL] Step 2: No spot sell needed (short P&L USDC covers Aave debt)`);
+    }
+
+    // ── Step 5: Withdraw remaining BTC from HL as real wBTC (falling-price profit) ──
+    if (btcToKeep > 0n) {
+      console.log(`   [HL] Step 3: Withdraw ${ethers.formatEther(btcToKeep)} ${shortSymbol} from HL as wBTC`);
+      try {
+        const tx = await this.kashYield.withdrawBtcFromHyperliquid(btcToKeep);
+        await tx.wait();
+        console.log(`   ✅ wBTC withdrawn from HL to contract`);
+      } catch (e: any) {
+        console.warn(`   ⚠️  withdrawBtcFromHyperliquid failed: ${e.message}`);
+        console.warn(`       For testing: ensure MockHL is seeded via fundWithWbtc() before running.`);
+      }
+    }
+
+    // ── Step 6: Withdraw all USDC from HL ─────────────────────────────────
+    const spotBalanceFinal = await this.getHyperliquidSpotBalance();
+    if (spotBalanceFinal > 0n) {
+      console.log(`   [HL] Step 4: Withdraw ${ethers.formatUnits(spotBalanceFinal, 6)} USDC from HL`);
+      await this.withdrawFromHyperliquid(spotBalanceFinal);
+    }
+  }
+
+  /**
+   * NET_REDEEM Aave: repay USDC debt, then withdraw the redeemer's wBTC.
+   * If BTC price rose and the HL unwind didn't fully cover the Aave debt,
+   * a residual balance will remain — logged here as a warning (TODO: DEX swap).
+   */
   private async handleNetRedeemAave(amountUSD: bigint): Promise<void> {
     const price = isBtc ? await this.kashYield.getBtcPrice() : await this.kashYield.getEthPrice();
     console.log(`   [Aave] Step 1: Repay Aave borrow with USDC (contract balance)`);
@@ -534,10 +641,38 @@ export class BatchProcessor {
       await this.repayToAave(TOKEN_ADDRESSES.AAVE_USDC, contractUsdc);
     }
 
+    // Check whether debt was fully cleared (it may not be if price rose and
+    // spot asset proceeds were insufficient to cover the full borrow).
+    const remainingDebt = await this.getAaveBorrowedAmount();
+    if (remainingDebt > 0n) {
+      const assetDecimals = isBtc ? 8n : 18n;
+      const remainingAsset = isBtc
+        ? (remainingDebt * BigInt(1e12) * BigInt(1e8)) / price
+        : (remainingDebt * BigInt(1e12) * BigInt(1e18)) / price;
+      console.warn(`   ⚠️  Residual Aave debt: ${ethers.formatUnits(remainingDebt, 6)} USDC` +
+        ` (~${ethers.formatUnits(remainingAsset, Number(assetDecimals))} ${isBtc ? 'wBTC' : 'ETH'} at current price)`);
+
+      // If a spot DEX adapter is configured, use it to cover the residual via swapForUsdc.
+      const spotDexAddress = await this.kashYield.spotDexAddress().catch(() => null);
+      if (spotDexAddress && spotDexAddress !== ethers.ZeroAddress) {
+        console.log(`   [Aave] Step 1b: Withdrawing ${ethers.formatUnits(remainingAsset, Number(assetDecimals))} ${isBtc ? 'wBTC' : 'ETH'} from Aave`);
+        await (await this.kashYield.withdrawFromAave(remainingAsset)).wait();
+        console.log(`   [Aave] Step 1c: Swapping to USDC via spot DEX (swapForUsdc)`);
+        await (await this.kashYield.swapForUsdc(remainingAsset)).wait();
+        const newContractUsdc = await this.getContractUsdcBalance();
+        if (newContractUsdc > 0n) {
+          console.log(`   [Aave] Step 1d: Repaying ${ethers.formatUnits(newContractUsdc, 6)} USDC to Aave`);
+          await this.repayToAave(TOKEN_ADDRESSES.AAVE_USDC, newContractUsdc);
+        }
+      } else {
+        console.warn(`       Spot DEX not configured (setSpotDex). Manually swap ${isBtc ? 'wBTC' : 'ETH'} to USDC and repay Aave.`);
+      }
+    }
+
     const withdrawAmount = isBtc
       ? (amountUSD * (10n ** 8n)) / price
       : (amountUSD * (10n ** 18n)) / price;
-    console.log(`   [Aave] Step 2: Withdraw ${isBtc ? Number(withdrawAmount) / 1e8 + ' wBTC' : ethers.formatEther(withdrawAmount) + ' ETH'} from Aave`);
+    console.log(`   [Aave] Step 2: Withdraw ${isBtc ? ethers.formatUnits(withdrawAmount, 8) + ' wBTC' : ethers.formatEther(withdrawAmount) + ' ETH'} from Aave`);
     const txWithdraw = await this.kashYield.withdrawFromAave(withdrawAmount);
     await txWithdraw.wait();
   }
@@ -665,12 +800,12 @@ export class BatchProcessor {
       }
       if (closeSize != null && closeSize > 0n) {
         console.log(`   → Partially closing ${symbol} short: ${ethers.formatEther(closeSize)} of ${ethers.formatEther(posSize)}`);
-        const tx = await this.kashYield.closeShort(symbol, closeSize);
+        const tx = await this.kashYield['closeShort(string,uint256)'](symbol, closeSize);
         await tx.wait();
         console.log(`   ✅ Partially closed ${symbol} short on Hyperliquid`);
       } else {
         console.log(`   → Closing full ${symbol} short on Hyperliquid`);
-        const tx = await this.kashYield.closeShort(symbol);
+        const tx = await this.kashYield['closeShort(string)'](symbol);
         await tx.wait();
         console.log(`   ✅ Closed ${symbol} short on Hyperliquid`);
       }

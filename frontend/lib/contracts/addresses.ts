@@ -13,8 +13,8 @@ export const CONTRACTS = {
   kashYieldEth: addr('KASH_YIELD_ETH_ADDRESS', "0xf78854a9B5D28DdB1B35a60553e22481fE87d759"),
   kashTokenEth: addr('KASH_TOKEN_ETH', "0x0d590B388C3e01201852d623A5d7692ada376160"),
   // BTC product (KashYieldBtc + MockAave) — update these or set env when you redeploy
-  kashYieldBtc: addr('KASH_YIELD_BTC_ADDRESS', "0x0bE5829bB71364a3Bdb33E75b415728A8D92C340"),
-  kashTokenBtc: addr('KASH_TOKEN_BTC', "0xEe9a387B09d4723587BdA36Ef1CF9Eb1ceCDa000"),
+  kashYieldBtc: addr('KASH_YIELD_BTC_ADDRESS', "0x307f81b91D0396f54a30499b8C75e019C66abA47"),
+  kashTokenBtc: addr('KASH_TOKEN_BTC', "0xd7001987E7584D840F56719C77d876A7899bE3d3"),
   mockWbtc: addr('MOCK_WBTC', "0xeC5Bd373D1808F06Ae849FE5227859a8E3D3FE12"),
   tokens: {
     weth: "0x89c8C8AD33c4a9539361a2Cf1A908C4300F258D9" as `0x${string}`,

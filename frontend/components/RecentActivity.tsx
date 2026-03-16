@@ -171,7 +171,10 @@ export function RecentActivity() {
             ? (pendingR.result.amountIn ?? 0n) > 0n
             : (pendingR.result.kashAmount ?? 0n) > 0n
           : false;
-        if (!processed && hasRequest && !updated.has(activities[i].hash)) {
+        // Add hash when there is a request (pending or already processed) so we can show
+        // "Kash-BTC minted" / "wBTC redeemed" after batch runs, even if the user didn't
+        // have the page open while it was still pending.
+        if (hasRequest && !updated.has(activities[i].hash)) {
           updated.add(activities[i].hash);
           changed = true;
         }

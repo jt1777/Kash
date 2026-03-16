@@ -39,7 +39,7 @@ REPORT_GAS=false
 
 ---
 
-# Deployment checklist (KashYieldETH now, KashYieldBTC later)
+# Deployment checklist (ETH and BTC products)
 
 ## Recovering ETH from the old (pre-rename) contract
 
@@ -162,7 +162,7 @@ Optional: `BOT_ADDRESS=0x...` (defaults to deployer).
 npx hardhat run scripts/deploy-kashyieldbtc.js --network arbitrumSepolia
 ```
 
-Save the printed **KashYieldBtc** and **KashTokenBtc** addresses and copy to all 3 .env files. The script configures the new contract with your existing wBTC, Aave, USDC, and oracle.
+Save the printed **KashYieldBtc** and **KashTokenBtc** addresses and copy to all 3 .env files as well as the addresses.ts file in the frontend Contracts folder. The script configures the new contract with your existing wBTC, Aave, USDC, and oracle.
 
 ### 4. Deploy MockHyperliquid (if not already deployed)
 
@@ -176,7 +176,7 @@ export MOCK_WBTC_ADDRESS=$WBTC_ADDRESS
 npx hardhat run scripts/deploy-mock-hyperliquid-arbitrum-sepolia.js --network arbitrumSepolia
 ```
 
-Save the **MockHyperliquid** address.
+Save the **MockHyperliquid** address to root and bot .env files.
 
 ### 5. Configure KashYieldBtc
 
@@ -248,11 +248,14 @@ npx hardhat verify --network arbitrumSepolia <KASH_YIELD_BTC_ADDRESS> <BOT_ADDRE
 
 ---
 
-## Later: BTC product (reference)
+## Product overview
 
-1. Ensure existing wBTC, Aave pool, USDC, and BTC oracle are in `.env`, then deploy **KashYieldBtc only** as in "Redeploy KashYieldBtc" above.
-2. Update frontend: add `kashYieldBtc` / `kashTokenBtc` to addresses; add wBTC to mint tokens in `MintForm`; in RedeemForm, use KASH_BTC when user selects “Receive wBTC.”
-3. Bot: set PRODUCT=btc (or run a second bot instance) and handle NET_MINT/NET_REDEEM for the BTC contract.
+| Product        | Section                    | Contract / token          |
+|----------------|----------------------------|---------------------------|
+| **ETH**        | Now: ETH product only      | KashYieldETH, KashTokenEth |
+| **BTC (wBTC)** | Redeploy KashYieldBtc      | KashYieldBtc, KashTokenBtc |
+
+Use the ETH section to deploy and configure the ETH product; use the BTC section to deploy and configure the wBTC product. Both can run on the same chain (e.g. Arbitrum Sepolia). The bot uses `PRODUCT=btc` or `PRODUCT=eth` (and the corresponding `KASH_YIELD_*_ADDRESS`) to target one product per run.
 
 ---
 

@@ -25,7 +25,8 @@
     "update:aave-address": "ts-node src/scripts/update-aave-address.ts",
     "withdraw:mock-aave": "ts-node src/scripts/withdraw-from-mock-aave.ts",
     "reset:aave": "ts-node src/scripts/reset-aave.ts",
-    "close:aave": "ts-node src/scripts/close-aave-position.ts"
+    "close:aave": "ts-node src/scripts/close-aave-position.ts",
+    "set:btc-price": "ts-node src/scripts/setBtcPrice.ts"
   },
   "dependencies": {
     "ethers": "^6.13.0",

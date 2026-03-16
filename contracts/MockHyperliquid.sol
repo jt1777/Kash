@@ -241,16 +241,29 @@ contract MockHyperliquid {
         uint256 posCollateral = pos.collateral;
         uint256 posEntry = pos.entryPrice;
 
-        // Proportional PnL and collateral for the closed portion
+        // Proportional PnL and collateral for the closed portion.
+        // priceDiff and closeSize are both 18-dec, so the product is 36-dec.
+        // Dividing by 1e18 normalises to 18-dec USD. (Dividing by posEntry would give
+        // a result 1/price times too small — e.g. ~$0.19 instead of $8,500 for a
+        // 1.7 BTC short when price drops $5,000.)
         int256 priceDiff = int256(exitPrice) - int256(posEntry);
         int256 direction = pos.isLong ? int256(1) : int256(-1);
-        int256 pnlUsd18 = (int256(closeSize) * priceDiff * direction) / int256(posEntry);
+        int256 pnlUsd18 = (int256(closeSize) * priceDiff * direction) / int256(10**18);
         int256 pnlStable = pnlUsd18 / int256(10**12);
-        uint256 collateralReturn = (posCollateral * closeSize) / posSize;
-        int256 finalCollateral = int256(collateralReturn) + pnlStable;
+
+        // Collateral was taken as BTC (btcBalance), not USDC.
+        // pos.collateral stores the entry-price USDC equivalent, which is stale when price moves.
+        // Use the current-price USD value of the BTC being returned for the liquidation check;
+        // otherwise a rising price falsely shows the position as liquidated even though the BTC
+        // collateral gained enough value to cover the loss.
+        uint256 collateralAsset = closeSize / 10;
+        uint256 collateralCurrentUsd18 = (collateralAsset * exitPrice) / 10**18;
+        uint256 collateralCurrentStable = collateralCurrentUsd18 / 10**12;
+        int256 finalCollateral = int256(collateralCurrentStable) + pnlStable;
         require(finalCollateral >= 0, "Liquidated");
 
-        uint256 collateralAsset = closeSize / 10;
+        // Keep collateralReturn for partial-close position accounting (reducing pos.collateral).
+        uint256 collateralReturn = (posCollateral * closeSize) / posSize;
         if (assetId == 0) {
             ethBalance[msg.sender] += collateralAsset;
         } else {
@@ -323,6 +336,81 @@ contract MockHyperliquid {
 
     function setFundingRatePerDayBps(int256 _bps) external {
         fundingRatePerDayBps = _bps;
+    }
+
+    // ========================
+    // BTC WITHDRAWAL FROM SPOT WALLET
+    // ========================
+
+    /**
+     * @notice Seed MockHyperliquid with real wBTC so withdrawBtcFromSpotWallet can transfer it.
+     * In the real Hyperliquid, BTC bought on spot is held natively and can be withdrawn.
+     * The mock tracks BTC as an internal 18-dec ledger (btcBalance) without holding real wBTC,
+     * so tests that need actual wBTC transfers must pre-fund the mock via this helper.
+     * @param wbtcAmount Amount of wBTC to deposit (8 decimals).
+     */
+    function fundWithWbtc(uint256 wbtcAmount) external {
+        require(wbtcAddress != address(0), "wBTC not configured");
+        require(wbtcAmount > 0, "Amount must be > 0");
+        bool success = IERC20(wbtcAddress).transferFrom(msg.sender, address(this), wbtcAmount);
+        require(success, "Transfer failed");
+    }
+
+    /**
+     * @notice Withdraw BTC from the caller's internal spot balance as real wBTC ERC-20.
+     * @param amount Amount in 18-dec internal units (same scale as btcBalance).
+     *               Converted to 8-dec wBTC on transfer: wbtcOut = amount / 1e10.
+     *
+     * Use-case: after a NET_REDEEM unwind, the bot sells only enough spot BTC to cover
+     * the USDC needed for Aave repayment and keeps the remainder as wBTC here, then
+     * calls withdrawBtcFromHyperliquid on KashYieldBtc to bring it into the contract
+     * so Phase 2 can pay the redeemer.
+     *
+     * Requires MockHyperliquid to hold sufficient wBTC — call fundWithWbtc() during
+     * test setup or deployment to seed the pool.
+     */
+    function withdrawBtcFromSpotWallet(uint256 amount) external {
+        require(amount > 0, "Amount must be > 0");
+        require(wbtcAddress != address(0), "wBTC not configured");
+        require(btcBalance[msg.sender] >= amount, "Insufficient BTC balance");
+
+        // Convert 18-dec internal units to 8-dec wBTC (1 BTC = 1e18 internal = 1e8 wBTC)
+        uint256 wbtcAmount = amount / 1e10;
+        require(wbtcAmount > 0, "Amount too small (< 1e10 internal units)");
+        require(IERC20(wbtcAddress).balanceOf(address(this)) >= wbtcAmount, "Insufficient wBTC in pool - call fundWithWbtc first");
+
+        btcBalance[msg.sender] -= amount;
+        bool success = IERC20(wbtcAddress).transfer(msg.sender, wbtcAmount);
+        require(success, "Transfer failed");
+
+        emit SpotWithdrawn(msg.sender, wbtcAddress, wbtcAmount);
+    }
+
+    // ========================
+    // ETH WITHDRAWAL FROM SPOT WALLET
+    // ========================
+
+    /**
+     * @notice Withdraw ETH from the caller's internal spot balance as native ETH.
+     * @param amount Amount in 18-dec internal units (same scale as ethBalance, same as wei).
+     *
+     * Use-case: mirror of withdrawBtcFromSpotWallet for the ETH yield product.
+     * After a NET_REDEEM unwind the bot keeps excess ETH here and retrieves it via
+     * withdrawEthFromHyperliquid on KashYieldETH so Phase 2 can pay the redeemer.
+     *
+     * Requires MockHyperliquid to hold sufficient native ETH.
+     * Seed it by sending ETH directly to the mock address (receive() accepts it).
+     */
+    function withdrawEthFromSpotWallet(uint256 amount) external {
+        require(amount > 0, "Amount must be > 0");
+        require(ethBalance[msg.sender] >= amount, "Insufficient ETH balance");
+        require(address(this).balance >= amount, "Insufficient ETH in pool - fund mock with ETH first");
+
+        ethBalance[msg.sender] -= amount;
+        (bool success, ) = payable(msg.sender).call{value: amount}("");
+        require(success, "ETH transfer failed");
+
+        emit SpotWithdrawn(msg.sender, address(0), amount);
     }
 
     /// @notice No-op for mock (no order book). Real HL uses API for cancel.
