@@ -97,12 +97,15 @@ async function main() {
   console.log("Next steps — connect a perp exchange adapter:");
   console.log("  1. Deploy the HyperliquidAdapter:");
   console.log("       npx hardhat run scripts/deploy-hyperliquid-adapter.js --network", network);
-  console.log("  2. Register the adapter and start the 48h timelock:");
+  console.log("  2. Propose adapter registration (starts 48h timelock):");
   console.log(`       KASH_YIELD_BTC_ADDRESS=${kashYieldBtcAddress} HYPERLIQUID_ADDRESS=<adapter> \\`);
   console.log("       npx hardhat run scripts/setHyperliquid.js --network", network);
-  console.log("  3. After 48 hours, confirm the active exchange:");
-  console.log(`       KASH_YIELD_BTC_ADDRESS=${kashYieldBtcAddress} \\`);
-  console.log("       npx hardhat run scripts/confirmActivePerpExchange.js --network", network);
+  console.log("  3. After 48 hours, confirm the adapter registration:");
+  console.log(`       KASH_YIELD_BTC_ADDRESS=${kashYieldBtcAddress} EXCHANGE_NAME=HL \\`);
+  console.log("       npx hardhat run scripts/confirmPerpExchange.js --network", network);
+  console.log("  4. Immediately activate HL as the live exchange:");
+  console.log(`       KASH_YIELD_BTC_ADDRESS=${kashYieldBtcAddress} EXCHANGE_NAME=HL \\`);
+  console.log("       npx hardhat run scripts/setActivePerpExchange.js --network", network);
   console.log("");
 
   const deploymentsDir = path.join(__dirname, "..", "deployments");

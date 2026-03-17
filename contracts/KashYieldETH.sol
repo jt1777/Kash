@@ -51,7 +51,7 @@ error FeeTooHigh();
 error InvalidAdapter();
 error ExchangeNotRegistered();
 error NoActivePerpExchange();
-error NoSwitchProposed();
+error NoPendingAdapter();
 error TimelockNotExpired();
 error SlippageTooHigh();
 error SpotDexNotSet();
@@ -69,7 +69,7 @@ event TokensClaimed(address indexed user, address indexed token, uint256 amount,
 event NAVUpdateExecuted(uint256 newNAV, uint256 timestamp);
 event ProtocolInteraction(string action, address indexed asset, uint256 amount);
 event ExchangeRegistered(string indexed name, address adapter);
-event ExchangeSwitchProposed(string indexed name, uint256 readyAt);
+event AdapterProposed(string indexed name, address adapter, uint256 readyAt);
 event ExchangeSwitchConfirmed(string indexed name, address adapter);
 event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
 event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
@@ -80,8 +80,9 @@ event OwnershipTransferred(address indexed previousOwner, address indexed newOwn
  * Integrates Aave V3 for collateral/borrowing and any IPerpExchange adapter for hedging.
  *
  * EXCHANGE REGISTRY: perpExchanges maps string names ("HL", "GMX", "ASTER", ...) to adapter
- * addresses. activePerpExchange selects which one is used. Switching is timelocked 48 hours.
- * Adding a new exchange never requires redeploying or modifying this contract.
+ * addresses. activePerpExchange selects which one is used. Registering a new adapter requires
+ * a 48-hour timelock (propose → confirm). Switching the active exchange is immediate once the
+ * adapter is confirmed. Adding a new exchange never requires redeploying this contract.
  */
 contract KashYieldETH is ReentrancyGuard {
     using SafeERC20 for IERC20;
@@ -109,9 +110,12 @@ contract KashYieldETH is ReentrancyGuard {
     mapping(string => address) public perpExchanges;
     string public activePerpExchange;
 
-    string  private pendingExchangeSwitch;
-    uint256 public  exchangeSwitchReadyAt;
-    uint256 public  constant EXCHANGE_SWITCH_DELAY = 48 hours;
+    // Adapter registration timelock: proposed adapters wait 48 hours before they can be confirmed.
+    // The very first adapter bypasses the timelock so the protocol can be used immediately on deploy.
+    bool    private anyAdapterConfirmed;
+    mapping(string => address) private pendingAdapters;
+    mapping(string => uint256) public  adapterReadyAt;
+    uint256 public constant EXCHANGE_SWITCH_DELAY = 48 hours;
 
     // ── Spot DEX ─────────────────────────────────────────────────────────
     address public spotDexAddress;
@@ -242,26 +246,36 @@ contract KashYieldETH is ReentrancyGuard {
 
     // ── Exchange registry ─────────────────────────────────────────────────
 
+    /// @notice Register a new adapter. First-ever registration is immediate; all subsequent ones
+    ///         require a 48-hour timelock (propose here → confirmPerpExchange after delay).
     function setPerpExchange(string calldata name, address adapter) external onlyOwner {
         if (adapter == address(0)) revert InvalidAdapter();
-        perpExchanges[name] = adapter;
-        emit ExchangeRegistered(name, adapter);
+        if (!anyAdapterConfirmed) {
+            perpExchanges[name] = adapter;
+            anyAdapterConfirmed = true;
+            emit ExchangeRegistered(name, adapter);
+            return;
+        }
+        pendingAdapters[name] = adapter;
+        adapterReadyAt[name]  = block.timestamp + EXCHANGE_SWITCH_DELAY;
+        emit AdapterProposed(name, adapter, adapterReadyAt[name]);
     }
 
-    function proposeActivePerpExchange(string calldata name) external onlyOwner {
+    /// @notice Confirm a previously proposed adapter after the 48-hour timelock has elapsed.
+    function confirmPerpExchange(string calldata name) external onlyOwner {
+        if (adapterReadyAt[name] == 0) revert NoPendingAdapter();
+        if (block.timestamp < adapterReadyAt[name]) revert TimelockNotExpired();
+        perpExchanges[name] = pendingAdapters[name];
+        emit ExchangeRegistered(name, perpExchanges[name]);
+        delete pendingAdapters[name];
+        delete adapterReadyAt[name];
+    }
+
+    /// @notice Immediately set the active perp exchange (adapter must already be confirmed).
+    function setActivePerpExchange(string calldata name) external onlyOwner {
         if (perpExchanges[name] == address(0)) revert ExchangeNotRegistered();
-        pendingExchangeSwitch = name;
-        exchangeSwitchReadyAt = block.timestamp + EXCHANGE_SWITCH_DELAY;
-        emit ExchangeSwitchProposed(name, exchangeSwitchReadyAt);
-    }
-
-    function confirmActivePerpExchange() external onlyOwner {
-        if (exchangeSwitchReadyAt == 0) revert NoSwitchProposed();
-        if (block.timestamp < exchangeSwitchReadyAt) revert TimelockNotExpired();
-        activePerpExchange = pendingExchangeSwitch;
-        pendingExchangeSwitch = "";
-        exchangeSwitchReadyAt = 0;
-        emit ExchangeSwitchConfirmed(activePerpExchange, perpExchanges[activePerpExchange]);
+        activePerpExchange = name;
+        emit ExchangeSwitchConfirmed(name, perpExchanges[name]);
     }
 
     function setSpotDex(address _spotDex) external onlyOwner { spotDexAddress = _spotDex; }
@@ -271,10 +285,19 @@ contract KashYieldETH is ReentrancyGuard {
         maxSwapSlippageBps = _bps;
     }
 
-    /// @notice Legacy compatibility: equivalent to setPerpExchange("HL", adapter).
+    /// @notice Legacy convenience: equivalent to setPerpExchange("HL", adapter).
+    ///         First-ever call is immediate; subsequent calls start a 48h timelock.
     function setHyperliquid(address adapter) external onlyOwner {
-        perpExchanges["HL"] = adapter;
-        emit ExchangeRegistered("HL", adapter);
+        if (adapter == address(0)) revert InvalidAdapter();
+        if (!anyAdapterConfirmed) {
+            perpExchanges["HL"] = adapter;
+            anyAdapterConfirmed = true;
+            emit ExchangeRegistered("HL", adapter);
+            return;
+        }
+        pendingAdapters["HL"] = adapter;
+        adapterReadyAt["HL"]  = block.timestamp + EXCHANGE_SWITCH_DELAY;
+        emit AdapterProposed("HL", adapter, adapterReadyAt["HL"]);
     }
 
     /// @notice Returns the HL adapter address (backwards-compat with bot / frontend).

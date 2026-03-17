@@ -51,21 +51,24 @@ async function main() {
   console.log("✅ KashTokenEth:", kashTokenEthAddress);
 
   // ============================================
-  // 2. Optional: register HyperliquidAdapter + propose activation
+  // 2. Optional: propose HyperliquidAdapter registration (step 1 of 3)
   // ============================================
   // HYPERLIQUID_ADDRESS must be the deployed HyperliquidAdapter address — not MockHL directly.
   // Deploy the adapter first: npx hardhat run scripts/deploy-hyperliquid-adapter.js
   const hyperliquidAddress = process.env.HYPERLIQUID_ADDRESS || "";
   if (hyperliquidAddress && hre.ethers.isAddress(hyperliquidAddress)) {
-    const tx1 = await kashYieldEth.setHyperliquid(hyperliquidAddress);
-    await tx1.wait();
-    console.log("✅ HyperliquidAdapter registered:", hyperliquidAddress);
-
-    const tx2 = await kashYieldEth.proposeActivePerpExchange("HL");
-    await tx2.wait();
-    const readyAt = await kashYieldEth.exchangeSwitchReadyAt();
-    console.log("✅ Exchange switch proposed. Timelock expires:", new Date(Number(readyAt) * 1000).toISOString());
-    console.log("   Run scripts/confirmActivePerpExchange.js after 48 hours to activate.");
+    const tx = await kashYieldEth.setHyperliquid(hyperliquidAddress);
+    await tx.wait();
+    const readyAt = await kashYieldEth.adapterReadyAt("HL");
+    const registered = await kashYieldEth.perpExchanges("HL");
+    if (registered !== hre.ethers.ZeroAddress && BigInt(readyAt.toString()) === 0n) {
+      console.log("✅ HyperliquidAdapter registered immediately (first-time bypass):", registered);
+      console.log("   Run scripts/setActivePerpExchange.js (EXCHANGE_NAME=HL) to activate.");
+    } else {
+      console.log("✅ HyperliquidAdapter proposed. Timelock expires:", new Date(Number(readyAt) * 1000).toISOString());
+      console.log("   Step 2: Run scripts/confirmPerpExchange.js (EXCHANGE_NAME=HL) after 48 hours.");
+      console.log("   Step 3: Run scripts/setActivePerpExchange.js (EXCHANGE_NAME=HL) to activate.");
+    }
   } else if (hyperliquidAddress) {
     console.warn("⚠️  HYPERLIQUID_ADDRESS env set but invalid; skipping.");
   }

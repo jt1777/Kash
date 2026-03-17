@@ -130,7 +130,7 @@ Before running the bot in production:
 2. ✅ Aave pool address set via `setAavePool.js`
 3. ✅ HyperliquidAdapter deployed via `deploy-hyperliquid-adapter.js`
 4. ✅ Adapter registered and exchange switch proposed via `setHyperliquid.js`
-5. ✅ Exchange switch confirmed via `confirmActivePerpExchange.js` (after 48h timelock)
+5. ✅ Adapter activated via `setActivePerpExchange.js` (immediate; for 2nd+ adapters: `confirmPerpExchange.js` after 48h first)
 6. ✅ Bot wallet has ETH for gas
 7. ✅ Bot wallet is contract owner (for privileged functions)
 8. ✅ Environment variables configured
@@ -175,7 +175,8 @@ Shows:
 ### "Hyperliquid address not set" / no active exchange
 - Ensure a `HyperliquidAdapter` is deployed (`deploy-hyperliquid-adapter.js`)
 - Run `setHyperliquid.js` to register the adapter and propose it as the active exchange
-- Run `confirmActivePerpExchange.js` after the 48-hour timelock to activate it
+- The first adapter registration is immediate — just run `setActivePerpExchange.js` after `setHyperliquid.js`
+- For 2nd+ adapter registrations, run `confirmPerpExchange.js` after the 48-hour timelock, then `setActivePerpExchange.js`
 - Until confirmed, the contract has no active exchange and the bot will skip HL operations
 
 ### "Not in processing window"

@@ -80,7 +80,7 @@ Save the printed **KashYieldETH** and **KashTokenEth** addresses. (KashTokenEth 
 
 ### 4. Deploy HyperliquidAdapter (ETH)
 
-The main `KashYieldETH` contract no longer talks to MockHyperliquid directly. It talks through an **adapter** that implements `IPerpExchange`. Deploy the adapter first:
+The main `KashYieldETH` contract never talks to MockHyperliquid directly — it always goes through an **adapter** implementing `IPerpExchange`. Deploy it first:
 
 ```bash
 # .env: MOCK_HL_ADDRESS=<MockHL from step 2>, USDC_ADDRESS=<USDC>, IS_ETH_ASSET=true
@@ -91,23 +91,30 @@ Save the printed **HyperliquidAdapter** address.
 
 ### 5. Configure KashYieldETH
 
-**Register the adapter and start the 48-hour timelock** (owner only):
+**Register and activate HL (first-time — no timelock):**
+
+Because this is the first adapter ever registered on this contract, the registration is **immediate** — no 48-hour wait.
 
 ```bash
+# Step 1: Register the adapter (immediate on first use)
 # .env: KASH_YIELD_ADDRESS=<KashYieldETH from step 3>, HYPERLIQUID_ADDRESS=<HyperliquidAdapter from step 4>
 npx hardhat run scripts/setHyperliquid.js --network arbitrumSepolia
+
+# Step 2: Activate HL as the live exchange (always immediate)
+KASH_YIELD_ADDRESS=<KashYieldETH from step 3> EXCHANGE_NAME=HL \
+npx hardhat run scripts/setActivePerpExchange.js --network arbitrumSepolia
 ```
 
-This registers the adapter under the key `"HL"` in `perpExchanges` and proposes it as the active exchange. A 48-hour timelock begins.
-
-**After 48 hours, confirm the switch** (owner only):
-
-```bash
-# .env: KASH_YIELD_ADDRESS=<KashYieldETH from step 3>
-npx hardhat run scripts/confirmActivePerpExchange.js --network arbitrumSepolia
-```
-
-> **Testing shortcut** — to skip the 48-hour wait in a local/testnet Hardhat session, fast-forward time before running the confirm script:
+> **Adding a second or later adapter (e.g. GMX, Aster):** All registrations after the first require a 48-hour timelock:
+> ```bash
+> # Propose (starts 48h timelock)
+> KASH_YIELD_ADDRESS=... EXCHANGE_NAME=GMX npx hardhat run scripts/confirmPerpExchange.js ...
+> # After 48h, confirm registration
+> KASH_YIELD_ADDRESS=... EXCHANGE_NAME=GMX npx hardhat run scripts/confirmPerpExchange.js --network arbitrumSepolia
+> # Then activate
+> KASH_YIELD_ADDRESS=... EXCHANGE_NAME=GMX npx hardhat run scripts/setActivePerpExchange.js --network arbitrumSepolia
+> ```
+> For Hardhat local/testnet testing, fast-forward the timelock:
 > ```javascript
 > await network.provider.send("evm_increaseTime", [48 * 3600 + 1]);
 > await network.provider.send("evm_mine");
@@ -217,23 +224,31 @@ Save the printed **HyperliquidAdapter** address (add `HL_ADAPTER_ADDRESS=...` to
 
 ### 6. Configure KashYieldBtc
 
-**Register the adapter and start the 48-hour timelock** (owner only):
+**Register and activate HL (first-time — no timelock):**
+
+Because this is the first adapter ever registered on this contract, the registration is **immediate** — no 48-hour wait.
 
 ```bash
+# Step 1: Register the adapter (immediate on first use)
 export KASH_YIELD_BTC_ADDRESS=<KashYieldBtc from step 3>
 export HYPERLIQUID_ADDRESS=<HyperliquidAdapter from step 5>
-
 npx hardhat run scripts/setHyperliquid.js --network arbitrumSepolia
+
+# Step 2: Activate HL as the live exchange (always immediate)
+KASH_YIELD_BTC_ADDRESS=<KashYieldBtc from step 3> EXCHANGE_NAME=HL \
+npx hardhat run scripts/setActivePerpExchange.js --network arbitrumSepolia
 ```
 
-**After 48 hours, confirm the switch** (owner only):
-
-```bash
-export KASH_YIELD_BTC_ADDRESS=<KashYieldBtc from step 3>
-npx hardhat run scripts/confirmActivePerpExchange.js --network arbitrumSepolia
-```
-
-> **Testing shortcut** — fast-forward the 48-hour timelock in a local/testnet session:
+> **Adding a second or later adapter (e.g. GMX, Aster):** All registrations after the first require a 48-hour timelock:
+> ```bash
+> # Propose (starts 48h timelock)
+> KASH_YIELD_BTC_ADDRESS=... EXCHANGE_NAME=GMX npx hardhat run scripts/setHyperliquid.js ...
+> # After 48h, confirm registration
+> KASH_YIELD_BTC_ADDRESS=... EXCHANGE_NAME=GMX npx hardhat run scripts/confirmPerpExchange.js --network arbitrumSepolia
+> # Then activate
+> KASH_YIELD_BTC_ADDRESS=... EXCHANGE_NAME=GMX npx hardhat run scripts/setActivePerpExchange.js --network arbitrumSepolia
+> ```
+> For Hardhat local/testnet testing, fast-forward the timelock:
 > ```javascript
 > await network.provider.send("evm_increaseTime", [48 * 3600 + 1]);
 > await network.provider.send("evm_mine");
@@ -293,8 +308,8 @@ npx hardhat verify --network arbitrumSepolia <HL_ADAPTER_ADDRESS> <MOCK_HL_ADDRE
 - [ ] Deploy KashYieldBtc only; save KashYieldBtc and KashTokenBtc addresses
 - [ ] Deploy MockHyperliquid (if needed) with same USDC/wBTC
 - [ ] Deploy HyperliquidAdapter (BTC) wrapping MockHyperliquid; save adapter address
-- [ ] `setHyperliquid.js`: register adapter + propose active exchange (starts 48h timelock)
-- [ ] After 48 hours: `confirmActivePerpExchange.js` to activate the exchange
+- [ ] `setHyperliquid.js`: register adapter (**immediate** — first-time bypass, no 48h wait)
+- [ ] `setActivePerpExchange.js` (EXCHANGE_NAME=HL) to activate HL
 - [ ] setBotAddress on KashYieldBtc (if needed)
 - [ ] Bot `.env`: PRODUCT=btc, KASH_YIELD_ADDRESS, AAVE_USDC_ADDRESS
 - [ ] Frontend env and addresses updated

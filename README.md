@@ -9,7 +9,7 @@ A capital-efficient yield strategy protocol. Users deposit ETH or wBTC and recei
 - **Configurable batch cycle**: Default 24-hour cycle (86400 s). Owner calls `setCycleDurationSeconds(uint256)` to shorten cycles for testing (e.g. 3600 s = 1-hour cycles) or extend them for production.
 - **Multi-exchange adapter pattern**: Perpetual exchange integrations (Hyperliquid, GMX, Aster DEX) are deployed as independent adapter contracts implementing `IPerpExchange`. The main contract holds a registry (`perpExchanges` mapping) and routes calls to the active adapter. New exchanges can be added without redeploying the main contract.
 - **Spot DEX integration**: An `ISpotDex` adapter (e.g. UniswapV3Adapter) enables on-chain asset ↔ USDC swaps for redemption rebalancing, with configurable slippage (`maxSwapSlippageBps`).
-- **48-hour timelock on exchange switching**: Changing the active perp exchange requires `proposeActivePerpExchange()` followed by `confirmActivePerpExchange()` after a 48-hour delay, preventing rushed governance changes.
+- **48-hour timelock on adapter registration**: The *first* adapter registered on a fresh deployment is immediate (no delay). Every subsequent adapter registration requires `setPerpExchange()` followed by `confirmPerpExchange()` after a 48-hour delay, preventing a compromised key from instantly adding a malicious adapter. Switching between already-confirmed adapters is always immediate via `setActivePerpExchange()`.
 - **Security**: `ReentrancyGuard` on all user-facing functions, two-step ownership transfer (`transferOwnership` / `acceptOwnership`), and custom Solidity errors (smaller bytecode, cheaper reverts).
 - **Aave**: Lending/borrowing for capital deployment (owner/bot).
 
@@ -38,11 +38,12 @@ A capital-efficient yield strategy protocol. Users deposit ETH or wBTC and recei
 | NAV | Owner/bot calls `updateNAV()` after capital ops, before `markBatchOpsDone()`; Phase 2 uses `currentNAV` |
 | Distribution | Phase 2 mints KASH to minters, sends assets to redeemers; no user claim step |
 | Exchange registry | `perpExchanges[string] → address`; `activePerpExchange` routes all exchange calls |
-| Exchange switching | `proposeActivePerpExchange(key)` starts 48-hour timelock; `confirmActivePerpExchange()` activates it |
+| Adapter registration | First adapter: immediate. Subsequent adapters: `setPerpExchange` starts 48h timelock; `confirmPerpExchange` registers |
+| Exchange switching | `setActivePerpExchange(key)` — immediate, no delay (adapter must already be confirmed) |
 | Spot swaps | `swapForUsdc()` / `swapFromUsdc()` call the registered `spotDexAddress` (UniswapV3Adapter) |
 | Ownership | Two-step: `transferOwnership()` + `acceptOwnership()` |
 
-**Owner config (no redeploy):** `setAavePool`, `setHyperliquid`, `setCycleDurationSeconds`, `setFeeBps`, `setSpotDex`, `setMaxSwapSlippageBps`, `pause`/`unpause`, `proposeActivePerpExchange`/`confirmActivePerpExchange`.
+**Owner config (no redeploy):** `setAavePool`, `setHyperliquid`, `setCycleDurationSeconds`, `setFeeBps`, `setSpotDex`, `setMaxSwapSlippageBps`, `pause`/`unpause`, `setPerpExchange`/`confirmPerpExchange`, `setActivePerpExchange`.
 
 ### Off-chain bot
 
@@ -85,11 +86,14 @@ npx hardhat run scripts/deploy-kashyieldbtc.js --network arbitrumSepolia
 # Deploy HyperliquidAdapter (run once per product; see docs/DEPLOYMENT.md for env vars)
 npx hardhat run scripts/deploy-hyperliquid-adapter.js --network arbitrumSepolia
 
-# Register adapter + start 48h timelock
+# Register adapter (immediate on first deploy — no 48h wait)
 npx hardhat run scripts/setHyperliquid.js --network arbitrumSepolia
 
-# Confirm active exchange after 48 hours
-npx hardhat run scripts/confirmActivePerpExchange.js --network arbitrumSepolia
+# Activate HL as the live exchange (always immediate)
+EXCHANGE_NAME=HL npx hardhat run scripts/setActivePerpExchange.js --network arbitrumSepolia
+
+# Adding a 2nd+ adapter later (e.g. GMX) requires the 48h timelock:
+#   scripts/setHyperliquid.js  →  wait 48h  →  scripts/confirmPerpExchange.js  →  scripts/setActivePerpExchange.js
 ```
 
 See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the full step-by-step checklist.
@@ -161,7 +165,7 @@ Liabilities:
 
 - **ReentrancyGuard**: All user-facing state-changing functions (`requestMint`, `requestRedeem`, `processBatch`) are protected against reentrancy.
 - **Two-step ownership** (`Ownable2Step`-equivalent): Ownership transfers require the new owner to explicitly accept, preventing accidental transfers to wrong addresses.
-- **48-hour timelock on exchange switching**: `proposeActivePerpExchange` starts a 48-hour countdown; `confirmActivePerpExchange` must be called after it expires. This prevents a compromised owner key from instantly redirecting funds to a malicious adapter.
+- **48-hour timelock on adapter registration**: The first adapter on a fresh contract is immediate (first-time bypass). Every adapter added after that requires `setPerpExchange` (or `setHyperliquid`) to start a 48-hour countdown, followed by `confirmPerpExchange` to complete the registration. This prevents a compromised owner key from instantly swapping in a malicious adapter. Switching between already-registered adapters via `setActivePerpExchange` is always immediate.
 - **Owner-only protocol interactions**: Aave deposits/borrows, exchange calls, and spot swaps are all `onlyOwner`.
 - **Configurable slippage**: `maxSwapSlippageBps` caps the price impact on any Uniswap swap performed by the contract.
 - **Emergency pause**: `pause()`/`unpause()` halts all user activity.
@@ -191,7 +195,7 @@ yieldproduct/
 │   ├── deploy-arbitrum-sepolia.js      # Deploy ETH product
 │   ├── deploy-hyperliquid-adapter.js   # Deploy HyperliquidAdapter
 │   ├── setHyperliquid.js               # Register adapter + propose activation
-│   ├── confirmActivePerpExchange.js    # Confirm active exchange after 48h timelock
+│   ├── confirmPerpExchange.js          # Confirm adapter registration after 48h timelock
 │   └── ...
 ├── test/
 ├── docs/
@@ -253,7 +257,7 @@ npx hardhat run scripts/deploy-kashyieldbtc.js --network arbitrumSepolia
 
 - **Frontend**: Live on Arbitrum Sepolia. Landing at `/`, app at `/app`. Mint (ETH), redeem (ETH/wETH/wBTC), stats (NAV, deposits from chain events, KASH balance), time-window status.
 - **Contracts**: `KashYieldETH`, `KashYieldBtc`, and their KASH tokens are deployed. Addresses are in `frontend/lib/contracts/addresses.ts`; update after each deploy (see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)).
-- **Exchange adapters**: Deploy `HyperliquidAdapter` and register it via `setHyperliquid.js`, then confirm activation after the 48-hour timelock with `confirmActivePerpExchange.js`. GMX and Aster adapters are available but require mainnet addresses.
+- **Exchange adapters**: Deploy `HyperliquidAdapter` and register it via `setHyperliquid.js` (immediate on first deploy), then activate with `setActivePerpExchange.js`. Adding GMX or Aster later requires the 48h timelock flow. Adapter contracts are available but require mainnet addresses for production.
 - **Spot DEX**: Deploy `UniswapV3Adapter` and set it on the contract via `setSpotDex(address)` to enable on-chain USDC ↔ asset swaps during redemptions.
 - **Bot**: Runs the 5-step batch flow (`phase1` → `ops` → `nav` → `mark-done` → `phase2`). See [bot/README.md](bot/README.md) and [bot/CHECKLIST.md](bot/CHECKLIST.md).
 

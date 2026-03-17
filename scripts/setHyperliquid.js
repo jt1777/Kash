@@ -1,10 +1,13 @@
 // scripts/setHyperliquid.js
-// Registers a HyperliquidAdapter on KashYieldETH or KashYieldBtc and proposes
-// it as the active perp exchange (step 1 of 2 in the timelock flow).
+// Proposes registering the HyperliquidAdapter on KashYieldETH or KashYieldBtc.
+// This is step 1 of 3 in the adapter setup flow:
 //
-// IMPORTANT: HYPERLIQUID_ADDRESS must be the address of the deployed HyperliquidAdapter
-// contract — NOT MockHyperliquid or the raw HL bridge directly.
-// Deploy the adapter first with: scripts/deploy-hyperliquid-adapter.js
+//   Step 1 (this script): setHyperliquid(adapterAddress)  — starts 48h timelock
+//   Step 2:               confirmPerpExchange.js "HL"      — after 48h; adapter goes live in registry
+//   Step 3:               setActivePerpExchange.js "HL"    — immediately makes HL the active exchange
+//
+// IMPORTANT: HYPERLIQUID_ADDRESS must be the deployed HyperliquidAdapter address.
+// Deploy the adapter first: npx hardhat run scripts/deploy-hyperliquid-adapter.js
 //
 // Usage (ETH product):
 //   HYPERLIQUID_ADDRESS=0x<adapter> npx hardhat run scripts/setHyperliquid.js --network arbitrumSepolia
@@ -12,16 +15,6 @@
 // Usage (BTC product):
 //   KASH_YIELD_BTC_ADDRESS=0x<kashYieldBtc> HYPERLIQUID_ADDRESS=0x<adapter> \
 //   npx hardhat run scripts/setHyperliquid.js --network arbitrumSepolia
-//
-// After running this script:
-//   - The adapter is registered in perpExchanges["HL"]
-//   - A 48-hour timelock switch to "HL" has been proposed
-//   - Wait 48 hours (or fast-forward in tests), then run:
-//       npx hardhat run scripts/confirmActivePerpExchange.js --network arbitrumSepolia
-//
-// To disable Hyperliquid:
-//   Set HYPERLIQUID_ADDRESS to 0x0000000000000000000000000000000000000000
-//   and run: owner calls setHyperliquid(address(0)) directly (no proposeActivePerpExchange needed)
 
 require("dotenv").config();
 const hre = require("hardhat");
@@ -66,36 +59,49 @@ async function main() {
     throw new Error(`Signer ${signer.address} is not the contract owner (${owner})`);
   }
 
-  // Step 1: Register the adapter under the "HL" key
-  console.log("\nStep 1: Registering HyperliquidAdapter as 'HL' exchange...");
-  const tx1 = await kashYield.setHyperliquid(HYPERLIQUID_ADDRESS);
-  console.log("  Tx:", tx1.hash);
-  await tx1.wait();
-  const registered = await kashYield.perpExchanges("HL");
-  console.log("  ✅ perpExchanges['HL'] =", registered);
+  console.log("\nRegistering HyperliquidAdapter...");
+  const tx = await kashYield.setHyperliquid(HYPERLIQUID_ADDRESS);
+  console.log("  Tx:", tx.hash);
+  await tx.wait();
 
-  // Step 2: Propose switching the active exchange to "HL"
-  console.log("\nStep 2: Proposing 'HL' as the active perp exchange (starts 48h timelock)...");
-  const tx2 = await kashYield.proposeActivePerpExchange("HL");
-  console.log("  Tx:", tx2.hash);
-  await tx2.wait();
+  // Detect which path was taken: immediate (first-time) or timelocked (subsequent)
+  const readyAt = await kashYield.adapterReadyAt("HL");
+  const registeredAddr = await kashYield.perpExchanges("HL");
+  const contractVar = isBtc ? `KASH_YIELD_BTC_ADDRESS=${kashYieldAddress}` : `KASH_YIELD_ADDRESS=${kashYieldAddress}`;
 
-  const readyAt = await kashYield.exchangeSwitchReadyAt();
-  const readyAtDate = new Date(Number(readyAt) * 1000).toISOString();
-  console.log("  ✅ Exchange switch proposed. Ready at:", readyAtDate);
-
-  console.log("\n====================================");
-  console.log("ACTION REQUIRED: Confirm after timelock");
-  console.log("====================================");
-  console.log(`  The 48-hour timelock expires at: ${readyAtDate}`);
-  console.log("  After that, run:");
-  console.log(`    KASH_YIELD_${isBtc ? "BTC_" : ""}ADDRESS=${kashYieldAddress} \\`);
-  console.log(`    npx hardhat run scripts/confirmActivePerpExchange.js --network ${network}`);
-  console.log("");
-  console.log("  For Hardhat local/testnet testing, fast-forward time with:");
-  console.log('    await network.provider.send("evm_increaseTime", [48 * 3600 + 1]);');
-  console.log('    await network.provider.send("evm_mine");');
-  console.log("====================================\n");
+  if (registeredAddr !== hre.ethers.ZeroAddress && BigInt(readyAt.toString()) === 0n) {
+    // First-time bypass: adapter is already live
+    console.log("  ✅ First-time registration: adapter confirmed immediately (no timelock).");
+    console.log("  perpExchanges[\"HL\"] =", registeredAddr);
+    console.log("\n====================================");
+    console.log("NEXT STEP");
+    console.log("====================================");
+    console.log("  Activate HL as the live exchange (immediate, no delay):");
+    console.log(`    ${contractVar} \\`);
+    console.log(`    EXCHANGE_NAME=HL npx hardhat run scripts/setActivePerpExchange.js --network ${network}`);
+    console.log("====================================\n");
+  } else {
+    // Timelocked path
+    const readyAtDate = new Date(Number(readyAt) * 1000).toISOString();
+    console.log("  ✅ Adapter proposed. Timelock expires:", readyAtDate);
+    console.log("\n====================================");
+    console.log("NEXT STEPS");
+    console.log("====================================");
+    console.log(`  Timelock expires at: ${readyAtDate}`);
+    console.log("");
+    console.log("  Step 2 — After 48 hours, confirm the adapter registration:");
+    console.log(`    ${contractVar} \\`);
+    console.log(`    EXCHANGE_NAME=HL npx hardhat run scripts/confirmPerpExchange.js --network ${network}`);
+    console.log("");
+    console.log("  Step 3 — Immediately activate HL as the live exchange:");
+    console.log(`    ${contractVar} \\`);
+    console.log(`    EXCHANGE_NAME=HL npx hardhat run scripts/setActivePerpExchange.js --network ${network}`);
+    console.log("");
+    console.log("  For Hardhat local/testnet testing, fast-forward time with:");
+    console.log('    await network.provider.send("evm_increaseTime", [48 * 3600 + 1]);');
+    console.log('    await network.provider.send("evm_mine");');
+    console.log("====================================\n");
+  }
 }
 
 main()
