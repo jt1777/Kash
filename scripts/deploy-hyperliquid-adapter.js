@@ -34,7 +34,7 @@ async function main() {
   console.log("Deploying HyperliquidAdapter to", network);
   console.log("Deployer:", deployer.address);
 
-  const hlAddress   = process.env.MOCK_HL_ADDRESS || process.env.HYPERLIQUID_MOCK_ADDRESS;
+  const hlAddress   = process.env.MOCK_HL_ADDRESS || process.env.HYPERLIQUID_MOCK_ADDRESS || process.env.HYPERLIQUID_ADDRESS;
   const usdcAddress = process.env.USDC_ADDRESS   || process.env.MOCK_USDC_ADDRESS;
   const wbtcAddress = process.env.WBTC_ADDRESS   || process.env.MOCK_WBTC;
   const isEth       = (process.env.IS_ETH_ASSET || "").toLowerCase() === "true";

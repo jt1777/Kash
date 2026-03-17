@@ -83,7 +83,7 @@ Save the printed **KashYieldETH** and **KashTokenEth** addresses. (KashTokenEth 
 The main `KashYieldETH` contract never talks to MockHyperliquid directly — it always goes through an **adapter** implementing `IPerpExchange`. Deploy it first:
 
 ```bash
-# .env: MOCK_HL_ADDRESS=<MockHL from step 2>, USDC_ADDRESS=<USDC>, IS_ETH_ASSET=true
+# .env: HYPERLIQUID_ADDRESS=<MockHL from step 2>, USDC_ADDRESS=<USDC>, IS_ETH_ASSET=true
 npx hardhat run scripts/deploy-hyperliquid-adapter.js --network arbitrumSepolia
 ```
 
@@ -126,6 +126,31 @@ npx hardhat run scripts/setActivePerpExchange.js --network arbitrumSepolia
 npx hardhat run scripts/setAavePool.js --network arbitrumSepolia
 ```
 
+### 5b. Deploy MockSpotDex (shared — serves both ETH and BTC products)
+
+One `MockSpotDex` instance handles both products. It holds all four swap rates (wBTC↔USDC and ETH↔USDC) and registers on both contracts in a single run. Deploy it once and set it on both contracts:
+
+```bash
+BTC_PRICE=45000 \
+ETH_PRICE=3000 \
+WBTC_ADDRESS=<wBTC from your .env> \
+USDC_ADDRESS=<USDC from your .env> \
+FUND_USDC=500000 \
+FUND_WBTC=10 \
+FUND_ETH=5 \
+KASH_YIELD_ADDRESS=<KashYieldETH from step 3> \
+KASH_YIELD_BTC_ADDRESS=<KashYieldBtc — if deployed; omit if deploying ETH product only> \
+npx hardhat run scripts/deploy-mock-spot-dex.js --network arbitrumSepolia
+```
+
+Save the printed **MockSpotDex** address (`MOCK_SPOT_DEX_ADDRESS=...` in `.env`).
+
+> **Price sync:** Whenever you change the BTC or ETH price on `MockChainlinkPriceFeed`, also update MockSpotDex:
+> ```bash
+> BTC_PRICE=<new> ETH_PRICE=<new> MOCK_SPOT_DEX_ADDRESS=<addr> WBTC_ADDRESS=<addr> USDC_ADDRESS=<addr> \
+> npx hardhat run scripts/update-mock-spot-dex-price.js --network arbitrumSepolia
+> ```
+
 ### 6. Verify contracts on Arbiscan
 
 ```bash
@@ -139,7 +164,7 @@ npx hardhat verify --network arbitrumSepolia <KASH_TOKEN_ETH_ADDRESS>
 npx hardhat verify --network arbitrumSepolia <MOCK_HYPER_ADDRESS> <USDC_ADDRESS> <USDT_ADDRESS> <WBTC_ADDRESS>
 
 # Verify HyperliquidAdapter (constructor args: hlAddress, usdcAddress, assetAddress, isEthAsset)
-npx hardhat verify --network arbitrumSepolia <HL_ADAPTER_ADDRESS> <MOCK_HL_ADDRESS> <USDC_ADDRESS> "0x0000000000000000000000000000000000000000" true
+npx hardhat verify --network arbitrumSepolia <HL_ADAPTER_ADDRESS> <HYPERLIQUID_ADDRESS> <USDC_ADDRESS> "0x0000000000000000000000000000000000000000" true
 ```
 
 ### 6. Update frontend
@@ -216,7 +241,7 @@ Save the **MockHyperliquid** address to root and bot `.env` files.
 ### 5. Deploy HyperliquidAdapter (BTC)
 
 ```bash
-# .env: MOCK_HL_ADDRESS=<MockHL from step 4>, USDC_ADDRESS=<USDC>, WBTC_ADDRESS=<wBTC>
+# .env: HYPERLIQUID_ADDRESS=<MockHL from step 4>, USDC_ADDRESS=<USDC>, WBTC_ADDRESS=<wBTC>
 npx hardhat run scripts/deploy-hyperliquid-adapter.js --network arbitrumSepolia
 ```
 
@@ -298,7 +323,7 @@ Ensure **`frontend/lib/contracts/addresses.ts`** (or equivalent) uses these for 
 npx hardhat verify --network arbitrumSepolia <KASH_YIELD_BTC_ADDRESS> <BOT_ADDRESS>
 
 # HyperliquidAdapter (constructor: hlAddress, usdcAddress, assetAddress, isEthAsset)
-npx hardhat verify --network arbitrumSepolia <HL_ADAPTER_ADDRESS> <MOCK_HL_ADDRESS> <USDC_ADDRESS> <WBTC_ADDRESS> false
+npx hardhat verify --network arbitrumSepolia <HL_ADAPTER_ADDRESS> <HYPERLIQUID_ADDRESS> <USDC_ADDRESS> <WBTC_ADDRESS> false
 ```
 
 ### Summary checklist
@@ -310,6 +335,7 @@ npx hardhat verify --network arbitrumSepolia <HL_ADAPTER_ADDRESS> <MOCK_HL_ADDRE
 - [ ] Deploy HyperliquidAdapter (BTC) wrapping MockHyperliquid; save adapter address
 - [ ] `setHyperliquid.js`: register adapter (**immediate** — first-time bypass, no 48h wait)
 - [ ] `setActivePerpExchange.js` (EXCHANGE_NAME=HL) to activate HL
+- [ ] `deploy-mock-spot-dex.js`: deploy MockSpotDex, fund with USDC + wBTC, register on KashYieldBtc
 - [ ] setBotAddress on KashYieldBtc (if needed)
 - [ ] Bot `.env`: PRODUCT=btc, KASH_YIELD_ADDRESS, AAVE_USDC_ADDRESS
 - [ ] Frontend env and addresses updated
