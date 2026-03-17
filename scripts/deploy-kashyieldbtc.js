@@ -94,6 +94,16 @@ async function main() {
   console.log(`  KASH_YIELD_BTC_ADDRESS=${kashYieldBtcAddress}`);
   console.log(`  KASH_TOKEN_BTC=${kashTokenBtcAddress}`);
   console.log("");
+  console.log("Next steps — connect a perp exchange adapter:");
+  console.log("  1. Deploy the HyperliquidAdapter:");
+  console.log("       npx hardhat run scripts/deploy-hyperliquid-adapter.js --network", network);
+  console.log("  2. Register the adapter and start the 48h timelock:");
+  console.log(`       KASH_YIELD_BTC_ADDRESS=${kashYieldBtcAddress} HYPERLIQUID_ADDRESS=<adapter> \\`);
+  console.log("       npx hardhat run scripts/setHyperliquid.js --network", network);
+  console.log("  3. After 48 hours, confirm the active exchange:");
+  console.log(`       KASH_YIELD_BTC_ADDRESS=${kashYieldBtcAddress} \\`);
+  console.log("       npx hardhat run scripts/confirmActivePerpExchange.js --network", network);
+  console.log("");
 
   const deploymentsDir = path.join(__dirname, "..", "deployments");
   if (!fs.existsSync(deploymentsDir)) fs.mkdirSync(deploymentsDir, { recursive: true });

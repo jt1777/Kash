@@ -128,11 +128,13 @@ Before running the bot in production:
 
 1. ✅ KashYield contract deployed on Arbitrum Sepolia
 2. ✅ Aave pool address set via `setAavePool.js`
-3. ✅ Hyperliquid address set via `setHyperliquid.js` (if using HL)
-4. ✅ Bot wallet has ETH for gas
-5. ✅ Bot wallet is contract owner (for privileged functions)
-6. ✅ Environment variables configured
-7. ✅ Validation passes (`npm run validate`)
+3. ✅ HyperliquidAdapter deployed via `deploy-hyperliquid-adapter.js`
+4. ✅ Adapter registered and exchange switch proposed via `setHyperliquid.js`
+5. ✅ Exchange switch confirmed via `confirmActivePerpExchange.js` (after 48h timelock)
+6. ✅ Bot wallet has ETH for gas
+7. ✅ Bot wallet is contract owner (for privileged functions)
+8. ✅ Environment variables configured
+9. ✅ Validation passes (`npm run validate`)
 
 ## Network: Arbitrum Sepolia
 
@@ -170,9 +172,11 @@ Shows:
 - Verify the contract is deployed at the address in `.env`
 - Check you're on the correct network (Arbitrum Sepolia = chain ID 421614)
 
-### "Hyperliquid address not set"
-- Run `setHyperliquid.js` to set the Hyperliquid contract address on KashYield
-- Or the bot will skip HL operations
+### "Hyperliquid address not set" / no active exchange
+- Ensure a `HyperliquidAdapter` is deployed (`deploy-hyperliquid-adapter.js`)
+- Run `setHyperliquid.js` to register the adapter and propose it as the active exchange
+- Run `confirmActivePerpExchange.js` after the 48-hour timelock to activate it
+- Until confirmed, the contract has no active exchange and the bot will skip HL operations
 
 ### "Not in processing window"
 - Batch processing only works between 23:50-23:59 UTC (unless the contract uses testing constants for full 24h)

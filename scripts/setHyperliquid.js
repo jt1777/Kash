@@ -1,26 +1,27 @@
 // scripts/setHyperliquid.js
-// Sets the Hyperliquid adapter/bridge address on KashYieldETH or KashYieldBtc.
-// Usage:
-//   ETH: npx hardhat run scripts/setHyperliquid.js --network arbitrumSepolia
-//   BTC: KASH_YIELD_BTC_ADDRESS=0x... npx hardhat run scripts/setHyperliquid.js --network arbitrumSepolia
+// Registers a HyperliquidAdapter on KashYieldETH or KashYieldBtc and proposes
+// it as the active perp exchange (step 1 of 2 in the timelock flow).
 //
-// What to put for HYPERLIQUID_ADDRESS:
+// IMPORTANT: HYPERLIQUID_ADDRESS must be the address of the deployed HyperliquidAdapter
+// contract — NOT MockHyperliquid or the raw HL bridge directly.
+// Deploy the adapter first with: scripts/deploy-hyperliquid-adapter.js
 //
-// 1) Arbitrum Sepolia (testnet) – use a DEPLOYED MockHyperliquid contract address.
-//    The contract expects an address that implements: depositToSpotWallet(stableToken, amount),
-//    withdrawFromSpotWallet(stableToken, amount), openPerpPosition(symbol, size, isLong),
-//    closePerpPosition(symbol), getSpotBalance(user), getPosition(user, symbol), etc.
-//    Deploy MockHyperliquid first (see contracts/MockHyperliquid.sol) with your
-//    Sepolia USDC/USDT/wBTC addresses, then put that deployed address here or in .env
-//    as HYPERLIQUID_ADDRESS.
+// Usage (ETH product):
+//   HYPERLIQUID_ADDRESS=0x<adapter> npx hardhat run scripts/setHyperliquid.js --network arbitrumSepolia
 //
-// 2) Arbitrum Mainnet – you can use the real Hyperliquid deposit bridge
-//    0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7 ONLY if it exposes the same interface.
-//    Often the bridge has a different ABI; then you need an adapter contract that
-//    wraps the bridge and implements the IHyperliquid interface.
+// Usage (BTC product):
+//   KASH_YIELD_BTC_ADDRESS=0x<kashYieldBtc> HYPERLIQUID_ADDRESS=0x<adapter> \
+//   npx hardhat run scripts/setHyperliquid.js --network arbitrumSepolia
 //
-// 3) To disable Hyperliquid – set address to 0x0000000000000000000000000000000000000000
-//    (or leave unset and don’t run this script). Owner can call setHyperliquid(0) later.
+// After running this script:
+//   - The adapter is registered in perpExchanges["HL"]
+//   - A 48-hour timelock switch to "HL" has been proposed
+//   - Wait 48 hours (or fast-forward in tests), then run:
+//       npx hardhat run scripts/confirmActivePerpExchange.js --network arbitrumSepolia
+//
+// To disable Hyperliquid:
+//   Set HYPERLIQUID_ADDRESS to 0x0000000000000000000000000000000000000000
+//   and run: owner calls setHyperliquid(address(0)) directly (no proposeActivePerpExchange needed)
 
 require("dotenv").config();
 const hre = require("hardhat");
@@ -32,37 +33,69 @@ async function main() {
 
   if (!HYPERLIQUID_ADDRESS || HYPERLIQUID_ADDRESS === "0x...") {
     throw new Error(
-      "Set HYPERLIQUID_ADDRESS in .env. " +
-        "Use a deployed MockHyperliquid address, or 0x0000000000000000000000000000000000000000 to disable."
+      "Set HYPERLIQUID_ADDRESS in .env to the deployed HyperliquidAdapter address.\n" +
+      "Deploy the adapter first: npx hardhat run scripts/deploy-hyperliquid-adapter.js"
     );
   }
   if (!hre.ethers.isAddress(HYPERLIQUID_ADDRESS)) {
-    throw new Error("Invalid HYPERLIQUID_ADDRESS");
+    throw new Error("Invalid HYPERLIQUID_ADDRESS: " + HYPERLIQUID_ADDRESS);
   }
 
   const kashYieldAddress = isBtc
     ? kashYieldBtcAddress
-    : process.env.KASH_YIELD_ADDRESS || "0x4C3910E93aB0c5983c6DEE003749485E525E5Db7";
+    : process.env.KASH_YIELD_ADDRESS;
   const contractName = isBtc ? "KashYieldBtc" : "KashYieldETH";
 
-  console.log("Network:", hre.network.name);
-  console.log(`${contractName}:`, kashYieldAddress);
-  console.log("Hyperliquid address:", HYPERLIQUID_ADDRESS);
-  console.log("\nConnecting to", contractName, "...");
-  const kashYield = await hre.ethers.getContractAt(contractName, kashYieldAddress);
+  if (!kashYieldAddress || !hre.ethers.isAddress(kashYieldAddress)) {
+    throw new Error(
+      `Set ${isBtc ? "KASH_YIELD_BTC_ADDRESS" : "KASH_YIELD_ADDRESS"} in .env.\n` +
+      `Current value: "${kashYieldAddress}"`
+    );
+  }
 
-  const owner = await kashYield.owner();
+  const network = hre.network.name;
+  console.log("Network:         ", network);
+  console.log(`${contractName}:  `, kashYieldAddress);
+  console.log("Adapter address: ", HYPERLIQUID_ADDRESS);
+
+  const kashYield = await hre.ethers.getContractAt(contractName, kashYieldAddress);
   const [signer] = await hre.ethers.getSigners();
+  const owner = await kashYield.owner();
+
   if (signer.address.toLowerCase() !== owner.toLowerCase()) {
     throw new Error(`Signer ${signer.address} is not the contract owner (${owner})`);
   }
-  console.log("Current Hyperliquid address:", await kashYield.hyperliquidAddress());
-  console.log("Setting Hyperliquid address...");
-  const tx = await kashYield.setHyperliquid(HYPERLIQUID_ADDRESS);
-  console.log("Transaction sent:", tx.hash);
-  await tx.wait();
-  console.log("✅ Hyperliquid address updated!");
-  console.log("New Hyperliquid address:", await kashYield.hyperliquidAddress());
+
+  // Step 1: Register the adapter under the "HL" key
+  console.log("\nStep 1: Registering HyperliquidAdapter as 'HL' exchange...");
+  const tx1 = await kashYield.setHyperliquid(HYPERLIQUID_ADDRESS);
+  console.log("  Tx:", tx1.hash);
+  await tx1.wait();
+  const registered = await kashYield.perpExchanges("HL");
+  console.log("  ✅ perpExchanges['HL'] =", registered);
+
+  // Step 2: Propose switching the active exchange to "HL"
+  console.log("\nStep 2: Proposing 'HL' as the active perp exchange (starts 48h timelock)...");
+  const tx2 = await kashYield.proposeActivePerpExchange("HL");
+  console.log("  Tx:", tx2.hash);
+  await tx2.wait();
+
+  const readyAt = await kashYield.exchangeSwitchReadyAt();
+  const readyAtDate = new Date(Number(readyAt) * 1000).toISOString();
+  console.log("  ✅ Exchange switch proposed. Ready at:", readyAtDate);
+
+  console.log("\n====================================");
+  console.log("ACTION REQUIRED: Confirm after timelock");
+  console.log("====================================");
+  console.log(`  The 48-hour timelock expires at: ${readyAtDate}`);
+  console.log("  After that, run:");
+  console.log(`    KASH_YIELD_${isBtc ? "BTC_" : ""}ADDRESS=${kashYieldAddress} \\`);
+  console.log(`    npx hardhat run scripts/confirmActivePerpExchange.js --network ${network}`);
+  console.log("");
+  console.log("  For Hardhat local/testnet testing, fast-forward time with:");
+  console.log('    await network.provider.send("evm_increaseTime", [48 * 3600 + 1]);');
+  console.log('    await network.provider.send("evm_mine");');
+  console.log("====================================\n");
 }
 
 main()

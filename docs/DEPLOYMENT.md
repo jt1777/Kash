@@ -78,32 +78,61 @@ npx hardhat run scripts/deploy-arbitrum-sepolia.js --network arbitrumSepolia
 
 Save the printed **KashYieldETH** and **KashTokenEth** addresses. (KashTokenEth is created in the constructor.)
 
-### 4. Configure KashYieldETH
+### 4. Deploy HyperliquidAdapter (ETH)
 
-- **Set Hyperliquid** (use the MockHyperliquid address from step 2 or your real HL adapter):
-
-  ```bash
-  # .env: KASH_YIELD_ADDRESS=<KashYieldETH from step 3>, HYPERLIQUID_ADDRESS=<MockHyperliquid from step 2>
-  npx hardhat run scripts/setHyperliquid.js --network arbitrumSepolia
-  ```
-
-- **Set Aave pool** (if different from built-in):
-
-  ```bash
-  npx hardhat run scripts/setAavePool.js --network arbitrumSepolia
-  ```
-
-### 5. Verify contracts on Arbiscan
+The main `KashYieldETH` contract no longer talks to MockHyperliquid directly. It talks through an **adapter** that implements `IPerpExchange`. Deploy the adapter first:
 
 ```bash
-# Verify KashYieldETH (use your deployed address and constructor args if required)
-npx hardhat verify --network arbitrumSepolia KASH_YIELD_ETH_ADDRESS
+# .env: MOCK_HL_ADDRESS=<MockHL from step 2>, USDC_ADDRESS=<USDC>, IS_ETH_ASSET=true
+npx hardhat run scripts/deploy-hyperliquid-adapter.js --network arbitrumSepolia
+```
 
-# Verify KashTokenEth (if deployed separately)
-npx hardhat verify --network arbitrumSepolia KASH_TOKEN_ETH_ADDRESS
+Save the printed **HyperliquidAdapter** address.
 
-# Verify MockHyperliquid (with constructor args as in your deploy script)
-npx hardhat verify --network arbitrumSepolia MOCK_HYPER_ADDRESS USDC_ADDRESS USDT_ADDRESS WBTC_ADDRESS
+### 5. Configure KashYieldETH
+
+**Register the adapter and start the 48-hour timelock** (owner only):
+
+```bash
+# .env: KASH_YIELD_ADDRESS=<KashYieldETH from step 3>, HYPERLIQUID_ADDRESS=<HyperliquidAdapter from step 4>
+npx hardhat run scripts/setHyperliquid.js --network arbitrumSepolia
+```
+
+This registers the adapter under the key `"HL"` in `perpExchanges` and proposes it as the active exchange. A 48-hour timelock begins.
+
+**After 48 hours, confirm the switch** (owner only):
+
+```bash
+# .env: KASH_YIELD_ADDRESS=<KashYieldETH from step 3>
+npx hardhat run scripts/confirmActivePerpExchange.js --network arbitrumSepolia
+```
+
+> **Testing shortcut** — to skip the 48-hour wait in a local/testnet Hardhat session, fast-forward time before running the confirm script:
+> ```javascript
+> await network.provider.send("evm_increaseTime", [48 * 3600 + 1]);
+> await network.provider.send("evm_mine");
+> ```
+
+**Set Aave pool** (if different from built-in):
+
+```bash
+npx hardhat run scripts/setAavePool.js --network arbitrumSepolia
+```
+
+### 6. Verify contracts on Arbiscan
+
+```bash
+# Verify KashYieldETH (constructor arg: botAddress)
+npx hardhat verify --network arbitrumSepolia <KASH_YIELD_ETH_ADDRESS> <BOT_ADDRESS>
+
+# Verify KashTokenEth (no constructor args)
+npx hardhat verify --network arbitrumSepolia <KASH_TOKEN_ETH_ADDRESS>
+
+# Verify MockHyperliquid (constructor args: usdc, usdt, wbtc)
+npx hardhat verify --network arbitrumSepolia <MOCK_HYPER_ADDRESS> <USDC_ADDRESS> <USDT_ADDRESS> <WBTC_ADDRESS>
+
+# Verify HyperliquidAdapter (constructor args: hlAddress, usdcAddress, assetAddress, isEthAsset)
+npx hardhat verify --network arbitrumSepolia <HL_ADAPTER_ADDRESS> <MOCK_HL_ADDRESS> <USDC_ADDRESS> "0x0000000000000000000000000000000000000000" true
 ```
 
 ### 6. Update frontend
@@ -169,37 +198,57 @@ Save the printed **KashYieldBtc** and **KashTokenBtc** addresses and copy to all
 Use the same USDC and wBTC as in your `.env`:
 
 ```bash
-# Match the addresses you used for KashYieldBtc
 export MOCK_USDC_ADDRESS=$USDC_ADDRESS
 export MOCK_WBTC_ADDRESS=$WBTC_ADDRESS
 
 npx hardhat run scripts/deploy-mock-hyperliquid-arbitrum-sepolia.js --network arbitrumSepolia
 ```
 
-Save the **MockHyperliquid** address to root and bot .env files.
+Save the **MockHyperliquid** address to root and bot `.env` files.
 
-### 5. Configure KashYieldBtc
+### 5. Deploy HyperliquidAdapter (BTC)
 
-**Set Hyperliquid** (owner only):
+```bash
+# .env: MOCK_HL_ADDRESS=<MockHL from step 4>, USDC_ADDRESS=<USDC>, WBTC_ADDRESS=<wBTC>
+npx hardhat run scripts/deploy-hyperliquid-adapter.js --network arbitrumSepolia
+```
+
+Save the printed **HyperliquidAdapter** address (add `HL_ADAPTER_ADDRESS=...` to `.env`).
+
+### 6. Configure KashYieldBtc
+
+**Register the adapter and start the 48-hour timelock** (owner only):
 
 ```bash
 export KASH_YIELD_BTC_ADDRESS=<KashYieldBtc from step 3>
-export HYPERLIQUID_ADDRESS=<MockHyperliquid from step 4>
+export HYPERLIQUID_ADDRESS=<HyperliquidAdapter from step 5>
 
 npx hardhat run scripts/setHyperliquid.js --network arbitrumSepolia
 ```
+
+**After 48 hours, confirm the switch** (owner only):
+
+```bash
+export KASH_YIELD_BTC_ADDRESS=<KashYieldBtc from step 3>
+npx hardhat run scripts/confirmActivePerpExchange.js --network arbitrumSepolia
+```
+
+> **Testing shortcut** — fast-forward the 48-hour timelock in a local/testnet session:
+> ```javascript
+> await network.provider.send("evm_increaseTime", [48 * 3600 + 1]);
+> await network.provider.send("evm_mine");
+> ```
 
 **Set bot address** (if not set at deploy, or to change it):
 
 ```bash
 export PRODUCT=btc
 export KASH_YIELD_BTC_ADDRESS=<KashYieldBtc from step 3>
-# .env or export: PRIVATE_KEY of owner
 
 npx hardhat run scripts/setBotAddress.js --network arbitrumSepolia
 ```
 
-### 6. Bot `.env` (bot folder)
+### 7. Bot `.env` (bot folder)
 
 ```env
 PRODUCT=btc
@@ -215,7 +264,7 @@ Rebuild and run:
 cd bot && npm run build && npm start
 ```
 
-### 7. Frontend
+### 8. Frontend
 
 In **`frontend/.env.local`** (and root `.env` for scripts):
 
@@ -227,11 +276,14 @@ MOCK_WBTC=<same as WBTC_ADDRESS from step 2>
 
 Ensure **`frontend/lib/contracts/addresses.ts`** (or equivalent) uses these for the BTC product.
 
-### 8. Verify on Arbiscan (optional)
+### 9. Verify on Arbiscan (optional)
 
 ```bash
 # KashYieldBtc (constructor: botAddress)
 npx hardhat verify --network arbitrumSepolia <KASH_YIELD_BTC_ADDRESS> <BOT_ADDRESS>
+
+# HyperliquidAdapter (constructor: hlAddress, usdcAddress, assetAddress, isEthAsset)
+npx hardhat verify --network arbitrumSepolia <HL_ADAPTER_ADDRESS> <MOCK_HL_ADDRESS> <USDC_ADDRESS> <WBTC_ADDRESS> false
 ```
 
 ### Summary checklist
@@ -240,7 +292,9 @@ npx hardhat verify --network arbitrumSepolia <KASH_YIELD_BTC_ADDRESS> <BOT_ADDRE
 - [ ] `npx hardhat compile`
 - [ ] Deploy KashYieldBtc only; save KashYieldBtc and KashTokenBtc addresses
 - [ ] Deploy MockHyperliquid (if needed) with same USDC/wBTC
-- [ ] setHyperliquid on KashYieldBtc
+- [ ] Deploy HyperliquidAdapter (BTC) wrapping MockHyperliquid; save adapter address
+- [ ] `setHyperliquid.js`: register adapter + propose active exchange (starts 48h timelock)
+- [ ] After 48 hours: `confirmActivePerpExchange.js` to activate the exchange
 - [ ] setBotAddress on KashYieldBtc (if needed)
 - [ ] Bot `.env`: PRODUCT=btc, KASH_YIELD_ADDRESS, AAVE_USDC_ADDRESS
 - [ ] Frontend env and addresses updated

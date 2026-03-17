@@ -51,13 +51,21 @@ async function main() {
   console.log("✅ KashTokenEth:", kashTokenEthAddress);
 
   // ============================================
-  // 2. Optional: set Hyperliquid adapter
+  // 2. Optional: register HyperliquidAdapter + propose activation
   // ============================================
+  // HYPERLIQUID_ADDRESS must be the deployed HyperliquidAdapter address — not MockHL directly.
+  // Deploy the adapter first: npx hardhat run scripts/deploy-hyperliquid-adapter.js
   const hyperliquidAddress = process.env.HYPERLIQUID_ADDRESS || "";
   if (hyperliquidAddress && hre.ethers.isAddress(hyperliquidAddress)) {
-    const tx = await kashYieldEth.setHyperliquid(hyperliquidAddress);
-    await tx.wait();
-    console.log("✅ Hyperliquid address set:", hyperliquidAddress);
+    const tx1 = await kashYieldEth.setHyperliquid(hyperliquidAddress);
+    await tx1.wait();
+    console.log("✅ HyperliquidAdapter registered:", hyperliquidAddress);
+
+    const tx2 = await kashYieldEth.proposeActivePerpExchange("HL");
+    await tx2.wait();
+    const readyAt = await kashYieldEth.exchangeSwitchReadyAt();
+    console.log("✅ Exchange switch proposed. Timelock expires:", new Date(Number(readyAt) * 1000).toISOString());
+    console.log("   Run scripts/confirmActivePerpExchange.js after 48 hours to activate.");
   } else if (hyperliquidAddress) {
     console.warn("⚠️  HYPERLIQUID_ADDRESS env set but invalid; skipping.");
   }
