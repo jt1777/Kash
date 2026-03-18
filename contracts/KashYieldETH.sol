@@ -101,7 +101,7 @@ contract KashYieldETH is ReentrancyGuard {
     address public botAddress;
 
     address public constant ETH_ADDRESS = address(0);
-    address public wethAddress = 0x89c8C8AD33c4a9539361a2Cf1A908C4300F258D9;
+    address public wethAddress; // set via setWethAddress() — must be a WETH9-compatible contract with deposit()/withdraw()
     address public usdcAddress;
     address public ethOracle = 0x1AdF01abD96C11AEE2f20a41a03fAD11b3D8d2b4;
     uint8   public ethDecimals = 18;
@@ -110,12 +110,13 @@ contract KashYieldETH is ReentrancyGuard {
     mapping(string => address) public perpExchanges;
     string public activePerpExchange;
 
-    // Adapter registration timelock: proposed adapters wait 48 hours before they can be confirmed.
+    // Adapter registration timelock: proposed adapters wait before they can be confirmed.
     // The very first adapter bypasses the timelock so the protocol can be used immediately on deploy.
+    // Set to 0 for testnet/development; 48 hours recommended for mainnet.
     bool    private anyAdapterConfirmed;
     mapping(string => address) private pendingAdapters;
     mapping(string => uint256) public  adapterReadyAt;
-    uint256 public constant EXCHANGE_SWITCH_DELAY = 48 hours;
+    uint256 public exchangeSwitchDelay = 48 hours;
 
     // ── Spot DEX ─────────────────────────────────────────────────────────
     address public spotDexAddress;
@@ -257,7 +258,7 @@ contract KashYieldETH is ReentrancyGuard {
             return;
         }
         pendingAdapters[name] = adapter;
-        adapterReadyAt[name]  = block.timestamp + EXCHANGE_SWITCH_DELAY;
+        adapterReadyAt[name]  = block.timestamp + exchangeSwitchDelay;
         emit AdapterProposed(name, adapter, adapterReadyAt[name]);
     }
 
@@ -279,6 +280,8 @@ contract KashYieldETH is ReentrancyGuard {
     }
 
     function setSpotDex(address _spotDex) external onlyOwner { spotDexAddress = _spotDex; }
+    /// @notice Set adapter registration timelock. Use 0 for testnet, 48 hours for mainnet.
+    function setExchangeSwitchDelay(uint256 _seconds) external onlyOwner { exchangeSwitchDelay = _seconds; }
 
     function setMaxSwapSlippageBps(uint256 _bps) external onlyOwner {
         if (_bps > MAX_SLIPPAGE_BPS) revert SlippageTooHigh();
@@ -296,7 +299,7 @@ contract KashYieldETH is ReentrancyGuard {
             return;
         }
         pendingAdapters["HL"] = adapter;
-        adapterReadyAt["HL"]  = block.timestamp + EXCHANGE_SWITCH_DELAY;
+        adapterReadyAt["HL"]  = block.timestamp + exchangeSwitchDelay;
         emit AdapterProposed("HL", adapter, adapterReadyAt["HL"]);
     }
 

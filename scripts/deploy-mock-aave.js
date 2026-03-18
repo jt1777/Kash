@@ -9,6 +9,7 @@
 // Optional env vars for Arbitrum Sepolia (use existing tokens instead of deploying mocks):
 //   MOCK_AAVE_USDC_ADDRESS - existing USDC for borrow/repay (omit to deploy MockUSDC)
 //   MOCK_AAVE_WBTC_ADDRESS - existing wBTC for supply/withdraw (omit to deploy MockWBTC)
+//   WETH_ADDRESS           - WETH address for ETH product support (setWethAddress)
 
 const hre = require("hardhat");
 
@@ -59,11 +60,27 @@ async function main() {
   await tx.wait();
   console.log("✅ Set wBTC address on MockAaveV3");
 
-  // Fund MockAave with USDC for borrows (only if we deployed MockUSDC)
-  if (!process.env.MOCK_AAVE_USDC_ADDRESS) {
+  // Configure WETH support (required for ETH product)
+  const wethAddress = process.env.WETH_ADDRESS || process.env.MOCK_WETH_ADDRESS || "";
+  if (wethAddress) {
+    const tx2 = await mockAave.setWethAddress(wethAddress);
+    await tx2.wait();
+    console.log("✅ Set WETH address on MockAaveV3:", wethAddress);
+  } else {
+    console.log("⚠️  WETH_ADDRESS not set — skipping setWethAddress (required for ETH product)");
+  }
+
+  // Fund MockAave with USDC for borrows (always — MockUSDC mint is owner-callable)
+  const fundUsdc = process.env.FUND_MOCK_AAVE_USDC
+    ? hre.ethers.parseUnits(process.env.FUND_MOCK_AAVE_USDC, 6)
+    : hre.ethers.parseUnits("50000", 6);
+  try {
     const usdc = await hre.ethers.getContractAt("MockUSDC", usdcAddress);
-    await usdc.mint(mockAaveAddress, hre.ethers.parseUnits("50000", 6));
-    console.log("✅ Funded MockAave with 50,000 USDC");
+    await (await usdc.mint(mockAaveAddress, fundUsdc)).wait();
+    console.log(`✅ Funded MockAave with ${hre.ethers.formatUnits(fundUsdc, 6)} USDC`);
+  } catch (e) {
+    console.warn("⚠️  Could not mint USDC to MockAave (not owner, or not MockUSDC):", e.message?.split("\n")[0]);
+    console.warn("   Fund manually: usdc.mint(<MockAaveV3>, amount)");
   }
 
   // Summary

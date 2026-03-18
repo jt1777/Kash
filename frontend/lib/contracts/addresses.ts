@@ -17,7 +17,7 @@ export const CONTRACTS = {
   kashTokenBtc: addr('KASH_TOKEN_BTC', "0xd7001987E7584D840F56719C77d876A7899bE3d3"),
   mockWbtc: addr('MOCK_WBTC', "0xeC5Bd373D1808F06Ae849FE5227859a8E3D3FE12"),
   tokens: {
-    weth: "0x89c8C8AD33c4a9539361a2Cf1A908C4300F258D9" as `0x${string}`,
+    weth: "0x26006f640dF9F81c58183ac7d47Da93c23226E21" as `0x${string}`,
     wbtc: "0x4D8b720b94D341F54df948696747B05998c5FbD5" as `0x${string}`,
     usdt: "0x833EdA586220B1d0C25034E9bAb5ed4B4a5769a1" as `0x${string}`,
     usdc: "0x15BB91b9e63EA29863678B1dcBcB01dE31bD8Ab5" as `0x${string}`,

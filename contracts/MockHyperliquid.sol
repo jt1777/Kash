@@ -53,6 +53,14 @@ contract MockHyperliquid {
     }
 
     // ========================
+    // ADMIN: update token addresses without redeployment
+    // ========================
+
+    function setUsdcAddress(address _usdc) external { usdcAddress = _usdc; }
+    function setUsdtAddress(address _usdt) external { usdtAddress = _usdt; }
+    function setWbtcAddress(address _wbtc) external { wbtcAddress = _wbtc; }
+
+    // ========================
     // SPOT WALLET: DEPOSIT / WITHDRAW (USDC or USDT)
     // ========================
 

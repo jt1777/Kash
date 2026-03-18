@@ -44,7 +44,7 @@ interface IHyperliquidCore {
 contract HyperliquidAdapter is IPerpExchange {
     using SafeERC20 for IERC20;
 
-    address public immutable hyperliquidAddress;
+    address public hyperliquidAddress;
     address public immutable usdcAddress;
     /// @notice ERC-20 asset address: wBTC (8-dec) for the BTC product, or address(0) for native ETH.
     address public immutable assetAddress;
@@ -77,6 +77,12 @@ contract HyperliquidAdapter is IPerpExchange {
     }
 
     // ── Ownership (two-step) ──────────────────────────────────────────────
+
+    /// @notice Update the MockHyperliquid address without redeploying the adapter.
+    function setHyperliquidAddress(address _hyperliquidAddress) external onlyOwner {
+        require(_hyperliquidAddress != address(0), "Zero address");
+        hyperliquidAddress = _hyperliquidAddress;
+    }
 
     function transferOwnership(address newOwner) external onlyOwner {
         pendingOwner = newOwner;

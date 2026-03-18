@@ -33,6 +33,8 @@ contract MockAaveV3 {
     address public usdcAddress;
     // Address of wBTC for supply/withdraw (set via setWbtcAddress, optional)
     address public wbtcAddress;
+    // Address of WETH for supply/withdraw (set via setWethAddress, optional)
+    address public wethAddress;
     // Loan-to-Value ratio for borrowing (e.g., 50% means can borrow up to 50% of collateral value in USD)
     uint256 public constant LTV_RATIO = 75; // 75%
     // Liquidation threshold for health factor calculation
@@ -75,7 +77,15 @@ contract MockAaveV3 {
         wbtcAddress = _wbtcAddress;
     }
 
-    // Simulate supplying assets to Aave (ETH: asset = address(0), wBTC: asset = wbtcAddress)
+    // Function to set or update the WETH address (for WETH supply/withdraw — ETH product)
+    function setWethAddress(address _wethAddress) external {
+        wethAddress = _wethAddress;
+    }
+
+    // Simulate supplying assets to Aave
+    // ETH product: supply(wethAddress, amount, ...) — transfers WETH ERC-20, tracked in suppliedAmounts
+    // BTC product: supply(wbtcAddress, amount, ...) — transfers wBTC ERC-20
+    // Native ETH:  supply(address(0), amount, ...) — sends ETH via msg.value
     function supply(address asset, uint256 amount, address onBehalfOf, uint16 _referralCode) external payable {
         if (asset == address(0)) {
             require(msg.value == amount, "Incorrect ETH amount sent");
@@ -86,6 +96,18 @@ contract MockAaveV3 {
             totalSupplied += amount;
             emit SupplyOperation(onBehalfOf, asset, amount);
             emit DebugLog("ETH supplied", amount);
+        } else if (asset == wethAddress && wethAddress != address(0)) {
+            // WETH is 1:1 with ETH — track in the same suppliedAmounts mapping
+            require(msg.value == 0, "No ETH expected for WETH supply");
+            require(amount > 0, "Amount must be > 0");
+            IERC20(wethAddress).safeTransferFrom(msg.sender, address(this), amount);
+            if (suppliedAmounts[onBehalfOf] == 0) {
+                firstSupplyTimestamp[onBehalfOf] = block.timestamp;
+            }
+            suppliedAmounts[onBehalfOf] += amount;
+            totalSupplied += amount;
+            emit SupplyOperation(onBehalfOf, asset, amount);
+            emit DebugLog("WETH supplied", amount);
         } else if (asset == wbtcAddress && wbtcAddress != address(0)) {
             require(msg.value == 0, "No ETH expected for wBTC supply");
             require(amount > 0, "Amount must be > 0");
@@ -98,12 +120,9 @@ contract MockAaveV3 {
             emit SupplyOperation(onBehalfOf, asset, amount);
             emit DebugLog("WBTC supplied", amount);
         } else {
-            revert("Mock only supports ETH or wBTC supply");
+            revert("Mock only supports ETH, WETH, or wBTC supply");
         }
-        // Reference _referralCode in a no-op to silence unused parameter warning
-        if (_referralCode == 0) {
-            // No action needed, just a reference to suppress warning
-        }
+        if (_referralCode == 0) { }
     }
 
     // Simulate withdrawing assets from Aave
@@ -114,6 +133,13 @@ contract MockAaveV3 {
             totalSupplied -= amount;
             payable(to).transfer(amount);
             return amount;
+        } else if (asset == wethAddress && wethAddress != address(0)) {
+            // Return WETH ERC-20 to caller (KashYieldETH unwraps it itself)
+            require(suppliedAmounts[msg.sender] >= amount, "Insufficient WETH balance to withdraw");
+            suppliedAmounts[msg.sender] -= amount;
+            totalSupplied -= amount;
+            IERC20(wethAddress).safeTransfer(to, amount);
+            return amount;
         } else if (asset == wbtcAddress && wbtcAddress != address(0)) {
             require(suppliedWbtcAmounts[msg.sender] >= amount, "Insufficient wBTC balance to withdraw");
             suppliedWbtcAmounts[msg.sender] -= amount;
@@ -121,7 +147,7 @@ contract MockAaveV3 {
             IERC20(wbtcAddress).safeTransfer(to, amount);
             return amount;
         } else {
-            revert("Mock only supports ETH or wBTC withdraw");
+            revert("Mock only supports ETH, WETH, or wBTC withdraw");
         }
     }
 
@@ -168,9 +194,10 @@ contract MockAaveV3 {
         return amount;
     }
 
-    // Get the aToken balance for a user (ETH or wBTC, returns supplied amount + accrued yield)
+    // Get the aToken balance for a user (ETH/WETH or wBTC, returns supplied amount + accrued yield)
     function getATokenBalance(address asset, address user) external view returns (uint256) {
-        if (asset == address(0)) {
+        if (asset == address(0) || (asset == wethAddress && wethAddress != address(0))) {
+            // ETH (address(0)) and WETH are both tracked in suppliedAmounts
             uint256 originalAmount = suppliedAmounts[user];
             if (originalAmount == 0 || firstSupplyTimestamp[user] == 0) {
                 return originalAmount;
@@ -189,7 +216,7 @@ contract MockAaveV3 {
             uint256 yieldEarned = (originalAmount * DAILY_YIELD_RATE_WBTC * daysElapsed) / (10 ** WBTC_DECIMALS);
             return originalAmount + yieldEarned;
         } else {
-            revert("Mock only supports ETH or wBTC aToken balance");
+            revert("Mock only supports ETH, WETH, or wBTC aToken balance");
         }
     }
 

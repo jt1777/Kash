@@ -833,7 +833,12 @@ export class BatchProcessor {
         if (wbtcAddr) return await aavePool.getATokenBalance(wbtcAddr, addr);
       }
       const wethAddr = await this.kashYield.wethAddress?.().catch(() => null);
-      if (wethAddr) return await aavePool.getATokenBalance(wethAddr, addr);
+      if (wethAddr) {
+        // Try WETH address first (works with updated MockAaveV3).
+        // Fall back to address(0) for older MockAaveV3 that only accepts address(0) for the ETH/WETH bucket.
+        const bal = await aavePool.getATokenBalance(wethAddr, addr).catch(() => null);
+        if (bal !== null) return bal;
+      }
       return await aavePool.getATokenBalance(ethers.ZeroAddress, addr);
     } catch {
       return 0n;

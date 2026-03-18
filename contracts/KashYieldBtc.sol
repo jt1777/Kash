@@ -110,7 +110,7 @@ contract KashYieldBtc is ReentrancyGuard {
     bool    private anyAdapterConfirmed;
     mapping(string => address) private pendingAdapters;
     mapping(string => uint256) public  adapterReadyAt;
-    uint256 public constant EXCHANGE_SWITCH_DELAY = 48 hours;
+    uint256 public exchangeSwitchDelay = 48 hours;
 
     // ── Spot DEX (Uniswap V3 adapter for asset ↔ USDC) ───────────────────
     address public spotDexAddress;
@@ -257,7 +257,7 @@ contract KashYieldBtc is ReentrancyGuard {
             return;
         }
         pendingAdapters[name] = adapter;
-        adapterReadyAt[name]  = block.timestamp + EXCHANGE_SWITCH_DELAY;
+        adapterReadyAt[name]  = block.timestamp + exchangeSwitchDelay;
         emit AdapterProposed(name, adapter, adapterReadyAt[name]);
     }
 
@@ -282,6 +282,8 @@ contract KashYieldBtc is ReentrancyGuard {
     function setSpotDex(address _spotDex) external onlyOwner {
         spotDexAddress = _spotDex;
     }
+    /// @notice Set adapter registration timelock. Use 0 for testnet, 48 hours for mainnet.
+    function setExchangeSwitchDelay(uint256 _seconds) external onlyOwner { exchangeSwitchDelay = _seconds; }
 
     function setMaxSwapSlippageBps(uint256 _bps) external onlyOwner {
         if (_bps > MAX_SLIPPAGE_BPS) revert SlippageTooHigh();
@@ -299,7 +301,7 @@ contract KashYieldBtc is ReentrancyGuard {
             return;
         }
         pendingAdapters["HL"] = adapter;
-        adapterReadyAt["HL"]  = block.timestamp + EXCHANGE_SWITCH_DELAY;
+        adapterReadyAt["HL"]  = block.timestamp + exchangeSwitchDelay;
         emit AdapterProposed("HL", adapter, adapterReadyAt["HL"]);
     }
 
