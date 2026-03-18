@@ -10,8 +10,8 @@ function addr(envKey: string, fallback?: string): `0x${string}` {
 
 export const CONTRACTS = {
   // ETH product
-  kashYieldEth: addr('KASH_YIELD_ETH_ADDRESS', "0xf78854a9B5D28DdB1B35a60553e22481fE87d759"),
-  kashTokenEth: addr('KASH_TOKEN_ETH', "0x0d590B388C3e01201852d623A5d7692ada376160"),
+  kashYieldEth: addr('KASH_YIELD_ETH_ADDRESS', "0x8da4FC6A0EAEC834c88f1543Aeb91e25aFDE4BDF"),
+  kashTokenEth: addr('KASH_TOKEN_ETH', "0xaFDA1Ef6e89b7BB4FBa8e0C89B5Bc84cc290AABf"),
   // BTC product (KashYieldBtc + MockAave) — update these or set env when you redeploy
   kashYieldBtc: addr('KASH_YIELD_BTC_ADDRESS', "0x307f81b91D0396f54a30499b8C75e019C66abA47"),
   kashTokenBtc: addr('KASH_TOKEN_BTC', "0xd7001987E7584D840F56719C77d876A7899bE3d3"),

@@ -83,14 +83,16 @@ async function main() {
   console.log("  USDC:              ", usdcAddress);
   console.log("  Asset:             ", isEth ? "native ETH" : assetAddress);
   console.log("====================================");
+  const envVarName = isEth ? "HL_ADAPTER_ADDRESS_ETH" : "HL_ADAPTER_ADDRESS_BTC";
+  const kashYieldEnvVar = isEth ? "KASH_YIELD_ADDRESS" : "KASH_YIELD_BTC_ADDRESS";
   console.log("\nNext steps:");
   console.log("  1. Add to .env:");
-  console.log(`       HL_ADAPTER_ADDRESS=${adapterAddress}`);
-  console.log("  2. Register + propose activation on KashYield:");
-  console.log("       HYPERLIQUID_ADDRESS=$HL_ADAPTER_ADDRESS npx hardhat run scripts/setHyperliquid.js --network", network);
-  console.log("  3. After 48 hours, confirm the active exchange:");
-  console.log("       npx hardhat run scripts/confirmActivePerpExchange.js --network", network);
-  console.log("\n  (For Hardhat local/testnet testing, fast-forward time first — see DEPLOYMENT.md)\n");
+  console.log(`       ${envVarName}=${adapterAddress}`);
+  console.log("  2. Register the adapter on KashYield (first-time: immediate; subsequent: starts 48h timelock):");
+  console.log(`       ${kashYieldEnvVar}=<contract> HYPERLIQUID_ADDRESS=${adapterAddress} npx hardhat run scripts/setHyperliquid.js --network ${network}`);
+  console.log("  3. Activate HL as the live exchange (always immediate):");
+  console.log(`       ${kashYieldEnvVar}=<contract> EXCHANGE_NAME=HL npx hardhat run scripts/setActivePerpExchange.js --network ${network}`);
+  console.log("  (For 2nd+ adapter registrations, run confirmPerpExchange.js after 48h before step 3)\n");
 
   // Save to deployments/
   const deploymentsDir = path.join(__dirname, "..", "deployments");

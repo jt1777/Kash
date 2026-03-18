@@ -23,6 +23,13 @@ ARBISCAN_API_KEY=your_arbiscan_api_key
 
 # Gas Reporter (optional)
 REPORT_GAS=false
+
+# Mock / existing contract addresses (testnet — reuse across deployments)
+HYPERLIQUID_ADDRESS=<deployed MockHyperliquid>
+AAVE_POOL_ADDRESS=<deployed MockAaveV3>
+USDC_ADDRESS=<deployed MockUSDC>           # REQUIRED for ETH product — no built-in default
+WBTC_ADDRESS=<deployed MockWBTC>           # Required for BTC product
+BTC_ORACLE_ADDRESS=<deployed MockChainlinkPriceFeed>
 ```
 
 ## Get Testnet Funds
@@ -73,10 +80,23 @@ Save the **MockHyperliquid** address. (Use the same USDC/USDT/wBTC addresses as 
 ### 3. Deploy KashYieldETH
 
 ```bash
+# .env (required if using mock contracts):
+#   AAVE_POOL_ADDRESS=<MockAaveV3>       — overrides the built-in real Aave pool address
+#   USDC_ADDRESS=<MockUSDC>              — sets USDC (defaults to 0x0 if omitted — will fail)
+#   WETH_ADDRESS=<MockWETH>              — optional override for the built-in WETH address
+#
+# Optional one-step adapter registration (deploy adapter in step 4 first, then set this):
+#   HL_ADAPTER_ADDRESS_ETH=<HyperliquidAdapter>  — auto-registers and uses first-time bypass
+#                                                   (skip step 5 registration if set here)
+# If not set, the contract uses its hardcoded real Arbitrum Sepolia Aave/WETH addresses.
 npx hardhat run scripts/deploy-arbitrum-sepolia.js --network arbitrumSepolia
 ```
 
 Save the printed **KashYieldETH** and **KashTokenEth** addresses. (KashTokenEth is created in the constructor.)
+
+> **Important:** `USDC_ADDRESS` has no built-in default — it must be set or the contract's `usdcAddress` will be `0x0` and all USDC transfers will revert.
+>
+> **Tip:** Deploy the HyperliquidAdapter (step 4) **before** running this script so you can set `HL_ADAPTER_ADDRESS_ETH` and register the adapter in a single deploy. If you deploy KashYieldETH first and then register the adapter separately (step 5), it still works — just make sure `HYPERLIQUID_ADDRESS` is **not** set in `.env` at deploy time, or it will consume the first-time bypass with the wrong address (MockHL).
 
 ### 4. Deploy HyperliquidAdapter (ETH)
 
@@ -87,7 +107,7 @@ The main `KashYieldETH` contract never talks to MockHyperliquid directly — it 
 npx hardhat run scripts/deploy-hyperliquid-adapter.js --network arbitrumSepolia
 ```
 
-Save the printed **HyperliquidAdapter** address.
+Save the printed **HyperliquidAdapter** address (add `HL_ADAPTER_ADDRESS_ETH=...` to `.env`).
 
 ### 5. Configure KashYieldETH
 
@@ -95,9 +115,11 @@ Save the printed **HyperliquidAdapter** address.
 
 Because this is the first adapter ever registered on this contract, the registration is **immediate** — no 48-hour wait.
 
+> **Skip step 1** if you already set `HL_ADAPTER_ADDRESS_ETH` during the step 3 deploy — the adapter was auto-registered then. Go straight to step 2.
+
 ```bash
-# Step 1: Register the adapter (immediate on first use)
-# .env: KASH_YIELD_ADDRESS=<KashYieldETH from step 3>, HYPERLIQUID_ADDRESS=<HyperliquidAdapter from step 4>
+# Step 1: Register the adapter (immediate on first use — skip if done during step 3 deploy)
+KASH_YIELD_ADDRESS=<KashYieldETH from step 3> HL_ADAPTER_ADDRESS_ETH=<HyperliquidAdapter from step 4> \
 npx hardhat run scripts/setHyperliquid.js --network arbitrumSepolia
 
 # Step 2: Activate HL as the live exchange (always immediate)
@@ -164,7 +186,7 @@ npx hardhat verify --network arbitrumSepolia <KASH_TOKEN_ETH_ADDRESS>
 npx hardhat verify --network arbitrumSepolia <MOCK_HYPER_ADDRESS> <USDC_ADDRESS> <USDT_ADDRESS> <WBTC_ADDRESS>
 
 # Verify HyperliquidAdapter (constructor args: hlAddress, usdcAddress, assetAddress, isEthAsset)
-npx hardhat verify --network arbitrumSepolia <HL_ADAPTER_ADDRESS> <HYPERLIQUID_ADDRESS> <USDC_ADDRESS> "0x0000000000000000000000000000000000000000" true
+npx hardhat verify --network arbitrumSepolia <HL_ADAPTER_ADDRESS_ETH> <HYPERLIQUID_ADDRESS> <USDC_ADDRESS> "0x0000000000000000000000000000000000000000" true
 ```
 
 ### 6. Update frontend
@@ -182,11 +204,6 @@ In **`bot/.env`** set:
 - `KASH_TOKEN_ADDRESS` = KashTokenEth address (if the bot uses it)
 
 No bot code changes: it already handles the flow (spot buy/sell, ETH vs BTC by asset). When you add KashYieldBTC later, run `processBatch()` on both contracts and handle each contract’s events.
-
-### 8. Frontend – BTC minting
-
-- **Mint:** Only ETH and wETH are offered; wBTC is disabled with “wBTC (KASH_BTC) coming soon.”
-- **Redeem:** Users can redeem KASH_ETH for ETH, wETH, or wBTC (unchanged).
 
 ---
 
@@ -245,7 +262,7 @@ Save the **MockHyperliquid** address to root and bot `.env` files.
 npx hardhat run scripts/deploy-hyperliquid-adapter.js --network arbitrumSepolia
 ```
 
-Save the printed **HyperliquidAdapter** address (add `HL_ADAPTER_ADDRESS=...` to `.env`).
+Save the printed **HyperliquidAdapter** address (add `HL_ADAPTER_ADDRESS_BTC=...` to `.env`).
 
 ### 6. Configure KashYieldBtc
 
@@ -255,8 +272,7 @@ Because this is the first adapter ever registered on this contract, the registra
 
 ```bash
 # Step 1: Register the adapter (immediate on first use)
-export KASH_YIELD_BTC_ADDRESS=<KashYieldBtc from step 3>
-export HYPERLIQUID_ADDRESS=<HyperliquidAdapter from step 5>
+KASH_YIELD_BTC_ADDRESS=<KashYieldBtc from step 3> HL_ADAPTER_ADDRESS_BTC=<HyperliquidAdapter from step 5> \
 npx hardhat run scripts/setHyperliquid.js --network arbitrumSepolia
 
 # Step 2: Activate HL as the live exchange (always immediate)
@@ -323,7 +339,7 @@ Ensure **`frontend/lib/contracts/addresses.ts`** (or equivalent) uses these for 
 npx hardhat verify --network arbitrumSepolia <KASH_YIELD_BTC_ADDRESS> <BOT_ADDRESS>
 
 # HyperliquidAdapter (constructor: hlAddress, usdcAddress, assetAddress, isEthAsset)
-npx hardhat verify --network arbitrumSepolia <HL_ADAPTER_ADDRESS> <HYPERLIQUID_ADDRESS> <USDC_ADDRESS> <WBTC_ADDRESS> false
+npx hardhat verify --network arbitrumSepolia <HL_ADAPTER_ADDRESS_BTC> <HYPERLIQUID_ADDRESS> <USDC_ADDRESS> <WBTC_ADDRESS> false
 ```
 
 ### Summary checklist
@@ -362,6 +378,91 @@ Use the ETH section to deploy and configure the ETH product; use the BTC section
 - [ ] Monitor time windows (user window vs processing window)
 - [ ] Test batch processing after 24 hours
 - [ ] Frontend and bot `.env` / addresses updated as above
+
+---
+
+## Post-deployment configuration
+
+Run these steps after all contracts are deployed and before starting the bot.
+
+### 1. Set cycle duration
+
+Controls how long each mint/redeem batch cycle lasts. Use a short duration for testing, full day for production.
+
+```bash
+# ETH product only (1 hour for testing)
+CYCLE_SECONDS=3600 PRODUCT=eth KASH_YIELD_ADDRESS=<KashYieldETH> \
+npx hardhat run scripts/setCycleDuration.js --network arbitrumSepolia
+
+# BTC product only
+CYCLE_SECONDS=3600 PRODUCT=btc KASH_YIELD_BTC_ADDRESS=<KashYieldBtc> \
+npx hardhat run scripts/setCycleDuration.js --network arbitrumSepolia
+
+# Both products at once (requires both addresses in .env)
+CYCLE_SECONDS=3600 \
+npx hardhat run scripts/setCycleDuration.js --network arbitrumSepolia
+```
+
+Common values: `3600` = 1 hour (testing), `86400` = 1 day (production).
+
+### 2. Set initial BTC and/or ETH prices
+
+Run from the `bot/` folder. A single command updates all mock contracts at once:
+- MockChainlinkPriceFeed (oracle)
+- MockAaveV3 (collateral/borrow valuation)
+- MockHyperliquid (perp P&L)
+- MockSpotDex swap rates (if `MOCK_SPOT_DEX_ADDRESS` is set)
+
+```bash
+cd bot
+
+# BTC only
+BTC_PRICE_USD=45000 npm run set:asset-price
+
+# ETH only
+ETH_PRICE_USD=3000 npm run set:asset-price
+
+# Both at once (recommended — keeps all mocks in sync)
+BTC_PRICE_USD=45000 ETH_PRICE_USD=3000 npm run set:asset-price
+
+# Both + MockSpotDex rates in one shot
+BTC_PRICE_USD=45000 ETH_PRICE_USD=3000 MOCK_SPOT_DEX_ADDRESS=<MockSpotDex> npm run set:asset-price
+```
+
+Required in `bot/.env`:
+```env
+PRIVATE_KEY=...
+AAVE_POOL_ADDRESS=<MockAaveV3>
+HYPERLIQUID_ADDRESS=<MockHyperliquid>
+WBTC_ADDRESS=<MockWBTC>           # needed for BTC spot rates
+USDC_ADDRESS=<MockUSDC>           # needed for spot rates
+BTC_ORACLE_ADDRESS=<MockChainlink BTC feed>   # optional — falls back to config default
+ETH_ORACLE_ADDRESS=<MockChainlink ETH feed>   # optional — falls back to config default
+MOCK_SPOT_DEX_ADDRESS=<MockSpotDex>           # optional — omit to skip spot rate update
+```
+
+> **Run this every time you change prices during testing.** All four mock contracts must stay in sync — if they diverge, the bot's batch calculations will produce inconsistent results.
+
+### 3. (Alternative) Sync MockSpotDex rates only
+
+If you only need to resync MockSpotDex without touching the oracle/Aave/HL:
+
+```bash
+BTC_PRICE=45000 ETH_PRICE=3000 \
+MOCK_SPOT_DEX_ADDRESS=<MockSpotDex> \
+WBTC_ADDRESS=<MockWBTC> \
+USDC_ADDRESS=<MockUSDC> \
+npx hardhat run scripts/update-mock-spot-dex-price.js --network arbitrumSepolia
+```
+
+### 5. Verify configuration
+
+```bash
+KASH_YIELD_ADDRESS=<KashYieldETH> \
+npx hardhat run scripts/check-contract-config.js --network arbitrumSepolia
+```
+
+---
 
 ## Useful commands
 

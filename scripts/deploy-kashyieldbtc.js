@@ -79,6 +79,12 @@ async function main() {
   await kashYieldBtc.setUsdcAddress(usdcAddress);
   console.log("✅ Configured KashYieldBtc (wbtc, aave, oracle, usdc)");
 
+  const spotDexAddress = process.env.MOCK_SPOT_DEX_ADDRESS || process.env.SPOT_DEX_ADDRESS || "";
+  if (spotDexAddress && hre.ethers.isAddress(spotDexAddress)) {
+    await kashYieldBtc.setSpotDex(spotDexAddress);
+    console.log("✅ setSpotDex →", spotDexAddress);
+  }
+
   console.log("\n====================================");
   console.log("📋 KASHYIELDBTC (existing wBTC/Aave/USDC/oracle)");
   console.log("====================================");

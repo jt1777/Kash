@@ -1,17 +1,17 @@
 // scripts/update-mock-spot-dex-price.js
 // Updates swap rates on a deployed MockSpotDex to match a new asset price.
+// Also supports funding with ETH and registering on KashYield contracts.
 // Run this every time you change the BTC/ETH price on MockChainlinkPriceFeed,
 // so that MockSpotDex swap outputs stay in sync with the oracle.
 //
-// Usage (BTC product):
-//   BTC_PRICE=40000 MOCK_SPOT_DEX_ADDRESS=0x... WBTC_ADDRESS=0x... USDC_ADDRESS=0x... \
+// Usage (update rates only):
+//   BTC_PRICE=40000 ETH_PRICE=2500 MOCK_SPOT_DEX_ADDRESS=0x... WBTC_ADDRESS=0x... USDC_ADDRESS=0x... \
 //   npx hardhat run scripts/update-mock-spot-dex-price.js --network arbitrumSepolia
 //
-// Usage (ETH product):
-//   ETH_PRICE=2500 MOCK_SPOT_DEX_ADDRESS=0x... USDC_ADDRESS=0x... \
-//   npx hardhat run scripts/update-mock-spot-dex-price.js --network arbitrumSepolia
-//
-// Set both BTC_PRICE and ETH_PRICE to update both in one call.
+// Optional extras (can combine with rate updates or use standalone):
+//   FUND_ETH=0.05              — send ETH to the MockSpotDex for ETH→USDC swaps
+//   KASH_YIELD_ADDRESS=0x...   — call setSpotDex on KashYieldETH
+//   KASH_YIELD_BTC_ADDRESS=0x... — call setSpotDex on KashYieldBtc
 
 require("dotenv").config();
 const hre = require("hardhat");
@@ -32,8 +32,12 @@ async function main() {
   if (!usdcAddr || !hre.ethers.isAddress(usdcAddr)) {
     throw new Error("Set USDC_ADDRESS (or MOCK_USDC_ADDRESS) in env");
   }
-  if (!btcPrice && !ethPrice) {
-    throw new Error("Set BTC_PRICE and/or ETH_PRICE in env");
+  const fundEth          = process.env.FUND_ETH || "0";
+  const kashYieldEthAddr = process.env.KASH_YIELD_ADDRESS;
+  const kashYieldBtcAddr = process.env.KASH_YIELD_BTC_ADDRESS;
+
+  if (!btcPrice && !ethPrice && fundEth === "0" && !kashYieldEthAddr && !kashYieldBtcAddr) {
+    throw new Error("Set at least one of: BTC_PRICE, ETH_PRICE, FUND_ETH, KASH_YIELD_ADDRESS, KASH_YIELD_BTC_ADDRESS");
   }
 
   console.log("Network:", network);
@@ -61,7 +65,36 @@ async function main() {
     console.log(`   USDC → ETH:  rate = 1e30 / ${ethPrice}`);
   }
 
-  console.log("\nDone. MockSpotDex rates are now in sync with the oracle.");
+  if (fundEth !== "0") {
+    const ethWei = hre.ethers.parseEther(fundEth);
+    const tx = await mock.fundEth({ value: ethWei });
+    await tx.wait();
+    console.log(`✅ Funded with ${fundEth} ETH`);
+  }
+
+  if (kashYieldEthAddr && hre.ethers.isAddress(kashYieldEthAddr)) {
+    try {
+      const kashYieldEth = await hre.ethers.getContractAt("KashYieldETH", kashYieldEthAddr);
+      const tx = await kashYieldEth.setSpotDex(mockAddr);
+      await tx.wait();
+      console.log("✅ setSpotDex on KashYieldETH:", kashYieldEthAddr);
+    } catch (e) {
+      console.warn("⚠️  setSpotDex on KashYieldETH failed (skipping):", e.message?.split("\n")[0]);
+    }
+  }
+
+  if (kashYieldBtcAddr && hre.ethers.isAddress(kashYieldBtcAddr)) {
+    try {
+      const kashYieldBtc = await hre.ethers.getContractAt("KashYieldBtc", kashYieldBtcAddr);
+      const tx = await kashYieldBtc.setSpotDex(mockAddr);
+      await tx.wait();
+      console.log("✅ setSpotDex on KashYieldBtc:", kashYieldBtcAddr);
+    } catch (e) {
+      console.warn("⚠️  setSpotDex on KashYieldBtc failed (skipping):", e.message?.split("\n")[0]);
+    }
+  }
+
+  console.log("\nDone.");
 }
 
 main()

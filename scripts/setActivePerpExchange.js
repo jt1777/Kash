@@ -27,9 +27,16 @@ async function main() {
     throw new Error('Set EXCHANGE_NAME in env (e.g. EXCHANGE_NAME=HL). Must match the key used when registering the adapter.');
   }
 
+  const productEnv = (process.env.PRODUCT || "").toLowerCase();
   const kashYieldBtcAddress = process.env.KASH_YIELD_BTC_ADDRESS;
-  const isBtc = kashYieldBtcAddress && hre.ethers.isAddress(kashYieldBtcAddress);
-  const kashYieldAddress = isBtc ? kashYieldBtcAddress : process.env.KASH_YIELD_ADDRESS;
+  const kashYieldEthAddress = process.env.KASH_YIELD_ADDRESS;
+  const isBtc =
+    productEnv === "btc" ||
+    (productEnv !== "eth" &&
+      kashYieldBtcAddress &&
+      hre.ethers.isAddress(kashYieldBtcAddress) &&
+      !kashYieldEthAddress);
+  const kashYieldAddress = isBtc ? kashYieldBtcAddress : kashYieldEthAddress;
   const contractName = isBtc ? "KashYieldBtc" : "KashYieldETH";
 
   if (!kashYieldAddress || !hre.ethers.isAddress(kashYieldAddress)) {

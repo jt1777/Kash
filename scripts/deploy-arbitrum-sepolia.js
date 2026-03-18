@@ -40,6 +40,13 @@ async function main() {
   // 1. Deploy KashYieldETH (constructor: botAddress)
   // ============================================
   const botAddress = process.env.BOT_ADDRESS || deployer.address;
+
+  // Optional overrides — provide these in .env when testing with mock contracts.
+  // If not set, the contract keeps its hardcoded built-in addresses (real Aave V3 / real USDC).
+  const aavePoolOverride = process.env.AAVE_POOL_ADDRESS || process.env.MOCK_AAVE_ADDRESS || "";
+  const usdcOverride     = process.env.USDC_ADDRESS      || process.env.MOCK_USDC_ADDRESS  || "";
+  const wethOverride     = process.env.WETH_ADDRESS      || process.env.MOCK_WETH_ADDRESS   || "";
+
   console.log("Deploying KashYieldETH (botAddress:", botAddress, ")...");
   const KashYieldETH = await hre.ethers.getContractFactory("KashYieldETH");
   const kashYieldEth = await KashYieldETH.deploy(botAddress);
@@ -50,12 +57,27 @@ async function main() {
   console.log("✅ KashYieldETH:", kashYieldEthAddress);
   console.log("✅ KashTokenEth:", kashTokenEthAddress);
 
+  // Apply address overrides if provided
+  if (aavePoolOverride && hre.ethers.isAddress(aavePoolOverride)) {
+    await (await kashYieldEth.setAavePool(aavePoolOverride)).wait();
+    console.log("✅ setAavePool →", aavePoolOverride);
+  }
+  if (usdcOverride && hre.ethers.isAddress(usdcOverride)) {
+    await (await kashYieldEth.setUsdcAddress(usdcOverride)).wait();
+    console.log("✅ setUsdcAddress →", usdcOverride);
+  }
+  if (wethOverride && hre.ethers.isAddress(wethOverride)) {
+    await (await kashYieldEth.setWethAddress(wethOverride)).wait();
+    console.log("✅ setWethAddress →", wethOverride);
+  }
+
   // ============================================
-  // 2. Optional: propose HyperliquidAdapter registration (step 1 of 3)
+  // 2. Optional: register HyperliquidAdapter (first-time bypass — immediate, no timelock)
   // ============================================
-  // HYPERLIQUID_ADDRESS must be the deployed HyperliquidAdapter address — not MockHL directly.
+  // Set HL_ADAPTER_ADDRESS_ETH to the deployed HyperliquidAdapter address to auto-register here.
+  // Do NOT use HYPERLIQUID_ADDRESS here — that points to MockHL, not the adapter.
   // Deploy the adapter first: npx hardhat run scripts/deploy-hyperliquid-adapter.js
-  const hyperliquidAddress = process.env.HYPERLIQUID_ADDRESS || "";
+  const hyperliquidAddress = process.env.HL_ADAPTER_ADDRESS_ETH || "";
   if (hyperliquidAddress && hre.ethers.isAddress(hyperliquidAddress)) {
     const tx = await kashYieldEth.setHyperliquid(hyperliquidAddress);
     await tx.wait();
@@ -92,11 +114,15 @@ async function main() {
   console.log("====================================");
   console.log("  KashYieldETH:", kashYieldEthAddress);
   console.log("  KashTokenEth:", kashTokenEthAddress);
-  console.log("  Aave pool (built-in):", await kashYieldEth.aavePoolAddress());
-  console.log("  Initial NAV:", hre.ethers.formatEther(await kashYieldEth.currentNAV()), "USD");
-  console.log("  Fee (bps):", await kashYieldEth.feeBps());
-  console.log("  Paused:", await kashYieldEth.paused());
+  console.log("  Aave pool:   ", await kashYieldEth.aavePoolAddress());
+  console.log("  USDC:        ", await kashYieldEth.usdcAddress());
+  console.log("  Initial NAV: ", hre.ethers.formatEther(await kashYieldEth.currentNAV()), "USD");
+  console.log("  Fee (bps):   ", await kashYieldEth.feeBps());
+  console.log("  Paused:      ", await kashYieldEth.paused());
   console.log("====================================\n");
+  console.log("Add to .env, frontend/.env.local, and bot/.env:");
+  console.log(`  KASH_YIELD_ADDRESS=${kashYieldEthAddress}`);
+  console.log(`  KASH_TOKEN_ADDRESS=${kashTokenEthAddress}`);
 
   // ============================================
   // 5. Save deployment info
