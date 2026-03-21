@@ -49,7 +49,7 @@ A capital-efficient yield strategy protocol. Users deposit ETH or wBTC and recei
 
 1. **Processing window** (last 10 minutes of each cycle by default): Call `processBatch()` (or use Chainlink Automation).
 2. **Between Phase 1 and Phase 2**: Run Aave/exchange ops, then `updateNAV(newNAV)`, then `markBatchOpsDone()`.
-3. **After batch**: React to `ProtocolInteraction("NET_MINT_ETH_DEPLOY", ...)` / `("NET_REDEEM", ...)` to deploy/withdraw capital. See [docs/OFFCHAIN_BOT_SPEC.md](docs/OFFCHAIN_BOT_SPEC.md) and [bot/CHECKLIST.md](bot/CHECKLIST.md).
+3. **After batch**: React to `ProtocolInteraction("NET_MINT_ETH_DEPLOY", ...)` / `("NET_REDEEM", ...)` to deploy/withdraw capital. See [docs/OFFCHAIN_BOT_SPEC.md](docs/OFFCHAIN_BOT_SPEC.md) and [bot/README.md](bot/README.md).
 
 ## 🕐 Batch Cycle and Time Windows
 
@@ -262,7 +262,7 @@ npx hardhat run scripts/deploy-kashyieldbtc.js --network arbitrumSepolia
 - **Contracts**: `KashYieldETH`, `KashYieldBtc`, and their KASH tokens are deployed. Addresses are in `frontend/lib/contracts/addresses.ts`; update after each deploy (see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)).
 - **Exchange adapters**: Deploy `HyperliquidAdapter` and register it via `setHyperliquid.js` (immediate on first deploy), then activate with `setActivePerpExchange.js`. Adding GMX or Aster later requires the 48h timelock flow. Adapter contracts are available but require mainnet addresses for production.
 - **Spot DEX (testnet)**: Deploy `MockSpotDex` via `deploy-mock-spot-dex.js`, fund it with USDC and wBTC/ETH, and register it on the contract via `setSpotDex(address)`. Update its rates whenever the oracle price changes using `update-mock-spot-dex-price.js`. For mainnet, deploy `UniswapV3Adapter` instead.
-- **Bot**: Runs the 5-step batch flow (`phase1` → `ops` → `nav` → `mark-done` → `phase2`). See [bot/README.md](bot/README.md) and [bot/CHECKLIST.md](bot/CHECKLIST.md).
+- **Bot**: Runs the 5-step batch flow (`phase1` → `ops` → `nav` → `mark-done` → `phase2`). See [bot/README.md](bot/README.md).
 
 ## 🌐 Frontend
 

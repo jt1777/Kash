@@ -36,7 +36,7 @@ async function main() {
 
   const hlAddress   = process.env.MOCK_HL_ADDRESS || process.env.HYPERLIQUID_MOCK_ADDRESS || process.env.HYPERLIQUID_ADDRESS;
   const usdcAddress = process.env.USDC_ADDRESS   || process.env.MOCK_USDC_ADDRESS;
-  const wbtcAddress = process.env.WBTC_ADDRESS   || process.env.MOCK_WBTC;
+  const wbtcAddress = process.env.WBTC_ADDRESS   || process.env.MOCK_WBTC_ADDRESS || process.env.MOCK_WBTC;
   const isEth       = (process.env.IS_ETH_ASSET || "").toLowerCase() === "true";
   const label       = process.env.HL_ADAPTER_LABEL || (isEth ? "ETH" : "BTC");
 

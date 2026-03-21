@@ -1,14 +1,14 @@
 // scripts/check-contract-config.js
 // Reads KashYieldETH's hyperliquidAddress and aavePoolAddress and verifies they match expected.
 // Usage: npx hardhat run scripts/check-contract-config.js --network arbitrumSepolia
-// Requires KASH_YIELD_ADDRESS in .env (or pass as env).
+// Requires KASH_YIELD_ETH_ADDRESS in .env (or pass as env).
 
 const hre = require("hardhat");
 const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 
 const KASH_YIELD_ADDRESS =
-  process.env.KASH_YIELD_ADDRESS || "0xf78854a9B5D28DdB1B35a60553e22481fE87d759";
+  process.env.KASH_YIELD_ETH_ADDRESS || process.env.KASH_YIELD_ADDRESS || "0xf78854a9B5D28DdB1B35a60553e22481fE87d759";
 
 // Expected Arbitrum Sepolia addresses (from contract / docs)
 const EXPECTED_AAVE_POOL = "0xBfC91D59fdAA134A4ED45f7B584cAf96D7792Eff";

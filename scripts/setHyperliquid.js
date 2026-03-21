@@ -21,10 +21,10 @@ const hre = require("hardhat");
 
 async function main() {
   // Explicit PRODUCT=eth|btc overrides auto-detection.
-  // Auto-detection: BTC only if KASH_YIELD_BTC_ADDRESS is set AND KASH_YIELD_ADDRESS is not.
+  // Auto-detection: BTC only if KASH_YIELD_BTC_ADDRESS is set AND KASH_YIELD_ETH_ADDRESS is not.
   const productEnv = (process.env.PRODUCT || "").toLowerCase();
   const kashYieldBtcAddress = process.env.KASH_YIELD_BTC_ADDRESS;
-  const kashYieldEthAddress = process.env.KASH_YIELD_ADDRESS;
+  const kashYieldEthAddress = process.env.KASH_YIELD_ETH_ADDRESS || process.env.KASH_YIELD_ADDRESS;
   const isBtc =
     productEnv === "btc" ||
     (productEnv !== "eth" &&
@@ -53,7 +53,7 @@ async function main() {
 
   if (!kashYieldAddress || !hre.ethers.isAddress(kashYieldAddress)) {
     throw new Error(
-      `Set ${isBtc ? "KASH_YIELD_BTC_ADDRESS" : "KASH_YIELD_ADDRESS"} in .env.\n` +
+      `Set ${isBtc ? "KASH_YIELD_BTC_ADDRESS" : "KASH_YIELD_ETH_ADDRESS"} in .env.\n` +
       `Current value: "${kashYieldAddress}"`
     );
   }
@@ -79,7 +79,7 @@ async function main() {
   // Detect which path was taken: immediate (first-time) or timelocked (subsequent)
   const readyAt = await kashYield.adapterReadyAt("HL");
   const registeredAddr = await kashYield.perpExchanges("HL");
-  const contractVar = isBtc ? `KASH_YIELD_BTC_ADDRESS=${kashYieldAddress}` : `KASH_YIELD_ADDRESS=${kashYieldAddress}`;
+  const contractVar = isBtc ? `KASH_YIELD_BTC_ADDRESS=${kashYieldAddress}` : `KASH_YIELD_ETH_ADDRESS=${kashYieldAddress}`;
 
   if (registeredAddr !== hre.ethers.ZeroAddress && BigInt(readyAt.toString()) === 0n) {
     // First-time bypass: adapter is already live

@@ -2,14 +2,14 @@
  * Deploy MockWETH - WETH9-compatible contract for testnet
  *
  * Optional env vars:
- *   KASH_YIELD_ADDRESS      - KashYieldETH address → calls setWethAddress
+ *   KASH_YIELD_ETH_ADDRESS  - KashYieldETH address → calls setWethAddress
  *   AAVE_POOL_ADDRESS       - MockAaveV3 address   → calls setWethAddress
  *
  * Usage:
  *   npx hardhat run scripts/deploy-mock-weth.js --network arbitrumSepolia
  *
  *   # With auto-configuration:
- *   KASH_YIELD_ADDRESS=0x... AAVE_POOL_ADDRESS=0x... \
+ *   KASH_YIELD_ETH_ADDRESS=0x... AAVE_POOL_ADDRESS=0x... \
  *   npx hardhat run scripts/deploy-mock-weth.js --network arbitrumSepolia
  */
 
@@ -31,7 +31,7 @@ async function main() {
   console.log("✅ MockWETH deployed:", mockWethAddress);
 
   // --- Optional: update KashYieldETH ---
-  const kashYieldAddress = process.env.KASH_YIELD_ADDRESS || "";
+  const kashYieldAddress = process.env.KASH_YIELD_ETH_ADDRESS || process.env.KASH_YIELD_ADDRESS || "";
   if (kashYieldAddress) {
     console.log("\n2. Calling setWethAddress on KashYieldETH...");
     const kashYieldAbi = ["function setWethAddress(address _weth) external"];
@@ -63,12 +63,12 @@ async function main() {
   console.log("   (update both root .env and bot/.env)");
   if (!kashYieldAddress) {
     console.log("\n2. Update KashYieldETH:");
-    console.log(`   KASH_YIELD_ADDRESS=<your-kashyieldeth> \\\n   WETH_ADDRESS=${mockWethAddress} \\\n   npx hardhat run scripts/deploy-mock-weth.js --network arbitrumSepolia`);
+    console.log(`   KASH_YIELD_ETH_ADDRESS=<your-kashyieldeth> \\\n   WETH_ADDRESS=${mockWethAddress} \\\n   npx hardhat run scripts/deploy-mock-weth.js --network arbitrumSepolia`);
     console.log("   (or call setWethAddress manually via setWethAddress.js)");
   }
   if (!aavePoolAddress) {
     console.log("\n3. Update MockAaveV3:");
-    console.log(`   KASH_YIELD_ADDRESS=<your-kashyieldeth> AAVE_POOL_ADDRESS=<your-mock-aave> \\\n   WETH_ADDRESS=${mockWethAddress} \\\n   npx hardhat run scripts/deploy-mock-weth.js --network arbitrumSepolia`);
+    console.log(`   KASH_YIELD_ETH_ADDRESS=<your-kashyieldeth> AAVE_POOL_ADDRESS=<your-mock-aave> \\\n   WETH_ADDRESS=${mockWethAddress} \\\n   npx hardhat run scripts/deploy-mock-weth.js --network arbitrumSepolia`);
     console.log("   (or call setWethAddress manually on MockAaveV3)");
   }
   console.log("\n4. Re-run npm run set:asset-price to sync MockSpotDex if needed.");

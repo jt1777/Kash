@@ -116,26 +116,18 @@ contract HyperliquidAdapter is IPerpExchange {
     // ── Spot trading ──────────────────────────────────────────────────────
 
     /// @inheritdoc IPerpExchange
-    /// @dev For spot buy (USDC → asset): pulls USDC from caller and approves HL.
-    ///      For wBTC spot sell: MockHL uses its internal btcBalance[adapter] — no ERC-20 pull.
-    ///      For ETH spot sell: native ETH forwarded via msg.value.
+    /// @dev For spot buy (USDC → asset): uses USDC already deposited via depositCollateral.
+    ///      On real Hyperliquid all spot trades are off-chain API calls — assets (USDC,
+    ///      wBTC, ETH) already live inside HL's account system from prior deposit calls.
+    ///      MockHL mirrors this: spotBalances (USDC), btcBalance, and ethBalance are
+    ///      debited internally; no ERC-20 pull or native ETH forwarding is required.
     function tradeSpot(
         address tokenIn,
         address tokenOut,
         uint256 amountIn
     ) external payable override returns (uint256 amountOut) {
-        if (tokenIn == usdcAddress) {
-            // Spot buy: USDC → asset. Pull USDC from caller and forward.
-            IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
-            IERC20(tokenIn).forceApprove(hyperliquidAddress, amountIn);
-            amountOut = IHyperliquidCore(hyperliquidAddress).tradeSpot(tokenIn, tokenOut, amountIn);
-        } else if (tokenIn == address(0)) {
-            // ETH spot sell: forward native ETH.
-            amountOut = IHyperliquidCore(hyperliquidAddress).tradeSpot{value: msg.value}(tokenIn, tokenOut, amountIn);
-        } else {
-            // wBTC spot sell: MockHL debits btcBalance[adapter] internally — no ERC-20 needed.
-            amountOut = IHyperliquidCore(hyperliquidAddress).tradeSpot(tokenIn, tokenOut, amountIn);
-        }
+        // All asset types are already in the HL account — call without forwarding value.
+        amountOut = IHyperliquidCore(hyperliquidAddress).tradeSpot(tokenIn, tokenOut, amountIn);
         emit AdapterCall("tradeSpot", amountIn);
     }
 

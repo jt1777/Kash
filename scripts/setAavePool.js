@@ -8,7 +8,7 @@ const hre = require("hardhat");
 
 async function main() {
   const KASH_YIELD_ADDRESS =
-    process.env.KASH_YIELD_ADDRESS || "0x4C3910E93aB0c5983c6DEE003749485E525E5Db7";
+    process.env.KASH_YIELD_ETH_ADDRESS || process.env.KASH_YIELD_ADDRESS || "0x4C3910E93aB0c5983c6DEE003749485E525E5Db7";
   const newAavePool =
     process.env.AAVE_POOL_ADDRESS || "0xBfC91D59fdAA134A4ED45f7B584cAf96D7792Eff";
 

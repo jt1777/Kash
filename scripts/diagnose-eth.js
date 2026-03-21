@@ -1,13 +1,13 @@
 /**
  * Diagnose KashYieldETH state: shows all key addresses and Aave balances.
  * Usage:
- *   KASH_YIELD_ADDRESS=0x... npx hardhat run scripts/diagnose-eth.js --network arbitrumSepolia
+ *   KASH_YIELD_ETH_ADDRESS=0x... npx hardhat run scripts/diagnose-eth.js --network arbitrumSepolia
  */
 const hre = require("hardhat");
 
 async function main() {
   const provider = hre.ethers.provider;
-  const kashYieldAddress = process.env.KASH_YIELD_ADDRESS || "0x8da4FC6A0EAEC834c88f1543Aeb91e25aFDE4BDF";
+  const kashYieldAddress = process.env.KASH_YIELD_ETH_ADDRESS || process.env.KASH_YIELD_ADDRESS || "0x8da4FC6A0EAEC834c88f1543Aeb91e25aFDE4BDF";
 
   const abi = [
     "function aavePoolAddress() view returns (address)",

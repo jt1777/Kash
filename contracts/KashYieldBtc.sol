@@ -160,10 +160,13 @@ contract KashYieldBtc is ReentrancyGuard {
     mapping(address => uint256) public totalDepositedBtcByUser;
     mapping(address => uint256) public totalRedeemedBtcByUser;
 
-    uint256 public constant USER_WINDOW_END        = 24 * 3600;
-    uint256 public constant PROCESSING_WINDOW_START = 0;
-    uint256 public constant PROCESSING_WINDOW_END   = 24 * 3600;
-    uint256 public cycleDurationSeconds = 86400;
+    // Time-window boundaries (seconds into the cycle).
+    // Default: users can request mints/redeems for the first 23h 50m of each cycle,
+    // then a 10-minute processing window closes user submissions so the bot can settle.
+    // Set userWindowEnd = cycleDurationSeconds and processingWindowStart = 0 to disable windowing.
+    uint256 public userWindowEnd         = 23 * 3600 + 50 * 60; // 85800 s = 23 h 50 m
+    uint256 public processingWindowStart = 23 * 3600 + 50 * 60; // 85800 s = 23 h 50 m
+    uint256 public cycleDurationSeconds  = 86400;
 
     // ── Modifiers ─────────────────────────────────────────────────────────
     modifier onlyOwner() {
@@ -171,12 +174,12 @@ contract KashYieldBtc is ReentrancyGuard {
         _;
     }
     modifier onlyUserWindow() {
-        if (block.timestamp % cycleDurationSeconds >= USER_WINDOW_END) revert UserWindowClosed();
+        if (block.timestamp % cycleDurationSeconds >= userWindowEnd) revert UserWindowClosed();
         _;
     }
     modifier onlyProcessingWindow() {
         uint256 t = block.timestamp % cycleDurationSeconds;
-        if (t < PROCESSING_WINDOW_START || t >= PROCESSING_WINDOW_END) revert NotInProcessingWindow();
+        if (t < processingWindowStart || t >= cycleDurationSeconds) revert NotInProcessingWindow();
         _;
     }
     modifier whenNotPaused() {
@@ -218,6 +221,18 @@ contract KashYieldBtc is ReentrancyGuard {
     function setCycleDurationSeconds(uint256 _seconds) external onlyOwner {
         if (_seconds < 60) revert MinCycleDuration();
         cycleDurationSeconds = _seconds;
+    }
+    /// @notice Set when user submissions close within a cycle.
+    ///         Use cycleDurationSeconds to disable (keeps window open the entire cycle).
+    function setUserWindowEnd(uint256 _seconds) external onlyOwner {
+        require(_seconds <= cycleDurationSeconds, "userWindowEnd > cycleDurationSeconds");
+        userWindowEnd = _seconds;
+    }
+    /// @notice Set when the bot's processing window opens within a cycle.
+    ///         Use 0 to disable (bot can always process). Must equal userWindowEnd in production.
+    function setProcessingWindowStart(uint256 _seconds) external onlyOwner {
+        require(_seconds <= cycleDurationSeconds, "processingWindowStart > cycleDurationSeconds");
+        processingWindowStart = _seconds;
     }
     function setKeeperRegistry(address _keeperRegistry) external onlyOwner {
         keeperRegistry = _keeperRegistry;
@@ -372,7 +387,7 @@ contract KashYieldBtc is ReentrancyGuard {
     function checkUpkeep(bytes calldata) external view returns (bool upkeepNeeded, bytes memory performData) {
         uint256 batchCycle = block.timestamp / cycleDurationSeconds;
         uint256 t = block.timestamp % cycleDurationSeconds;
-        upkeepNeeded = (t >= PROCESSING_WINDOW_START && t < PROCESSING_WINDOW_END) && !batchProcessed[batchCycle];
+        upkeepNeeded = (t >= processingWindowStart && t < cycleDurationSeconds) && !batchProcessed[batchCycle];
         performData = "";
     }
 
@@ -676,12 +691,12 @@ contract KashYieldBtc is ReentrancyGuard {
     function getNAV() external view returns (uint256) { return currentNAV; }
 
     function isUserWindow() public view returns (bool) {
-        return block.timestamp % cycleDurationSeconds < USER_WINDOW_END;
+        return block.timestamp % cycleDurationSeconds < userWindowEnd;
     }
 
     function isProcessingWindow() public view returns (bool) {
         uint256 t = block.timestamp % cycleDurationSeconds;
-        return t >= PROCESSING_WINDOW_START && t < PROCESSING_WINDOW_END;
+        return t >= processingWindowStart && t < cycleDurationSeconds;
     }
 
     function getPendingMintRequest(address user, uint256 batchCycle) external view returns (MintRequest memory) {

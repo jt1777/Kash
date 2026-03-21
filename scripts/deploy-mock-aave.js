@@ -7,9 +7,9 @@
 //   Sepolia:  npx hardhat run scripts/deploy-mock-aave.js --network arbitrumSepolia
 //
 // Optional env vars for Arbitrum Sepolia (use existing tokens instead of deploying mocks):
-//   MOCK_AAVE_USDC_ADDRESS - existing USDC for borrow/repay (omit to deploy MockUSDC)
-//   MOCK_AAVE_WBTC_ADDRESS - existing wBTC for supply/withdraw (omit to deploy MockWBTC)
-//   WETH_ADDRESS           - WETH address for ETH product support (setWethAddress)
+//   USDC_ADDRESS or MOCK_AAVE_USDC_ADDRESS - existing USDC for borrow/repay (omit to deploy MockUSDC)
+//   WBTC_ADDRESS or MOCK_AAVE_WBTC_ADDRESS - existing wBTC for supply/withdraw (omit to deploy MockWBTC)
+//   WETH_ADDRESS or MOCK_WETH_ADDRESS      - WETH address for ETH product support (setWethAddress)
 
 const hre = require("hardhat");
 
@@ -24,9 +24,10 @@ async function main() {
 
   let usdcAddress, wbtcAddress;
 
-  // Deploy or use existing USDC
-  if (process.env.MOCK_AAVE_USDC_ADDRESS) {
-    usdcAddress = process.env.MOCK_AAVE_USDC_ADDRESS;
+  // Deploy or use existing USDC (accepts MOCK_AAVE_USDC_ADDRESS or USDC_ADDRESS)
+  const existingUsdc = process.env.MOCK_AAVE_USDC_ADDRESS || process.env.USDC_ADDRESS || "";
+  if (existingUsdc) {
+    usdcAddress = existingUsdc;
     console.log("Using existing USDC:", usdcAddress);
   } else {
     const MockUSDC = await hre.ethers.getContractFactory("MockUSDC");
@@ -36,9 +37,10 @@ async function main() {
     console.log("✅ MockUSDC deployed to:", usdcAddress);
   }
 
-  // Deploy or use existing wBTC
-  if (process.env.MOCK_AAVE_WBTC_ADDRESS) {
-    wbtcAddress = process.env.MOCK_AAVE_WBTC_ADDRESS;
+  // Deploy or use existing wBTC (accepts MOCK_AAVE_WBTC_ADDRESS or WBTC_ADDRESS)
+  const existingWbtc = process.env.MOCK_AAVE_WBTC_ADDRESS || process.env.WBTC_ADDRESS || "";
+  if (existingWbtc) {
+    wbtcAddress = existingWbtc;
     console.log("Using existing wBTC:", wbtcAddress);
   } else {
     const MockWBTC = await hre.ethers.getContractFactory("MockWBTC");

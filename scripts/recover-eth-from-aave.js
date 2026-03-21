@@ -7,7 +7,7 @@
  *   npx hardhat run scripts/recover-eth-from-aave.js --network arbitrumSepolia
  *
  * Optional:
- *   KASH_YIELD_ADDRESS   - defaults to 0x8da4FC6A0EAEC834c88f1543Aeb91e25aFDE4BDF
+ *   KASH_YIELD_ETH_ADDRESS - defaults to 0x8da4FC6A0EAEC834c88f1543Aeb91e25aFDE4BDF
  *   WITHDRAW_AMOUNT_ETH  - amount to withdraw in ETH (default: reads suppliedAmounts)
  */
 const hre = require("hardhat");
@@ -16,7 +16,7 @@ async function main() {
   const [deployer] = await hre.ethers.getSigners();
   const provider = hre.ethers.provider;
 
-  const kashYieldAddress = process.env.KASH_YIELD_ADDRESS || "0x8da4FC6A0EAEC834c88f1543Aeb91e25aFDE4BDF";
+  const kashYieldAddress = process.env.KASH_YIELD_ETH_ADDRESS || process.env.KASH_YIELD_ADDRESS || "0x8da4FC6A0EAEC834c88f1543Aeb91e25aFDE4BDF";
   const oldAaveAddress   = process.env.OLD_AAVE_ADDRESS;
   if (!oldAaveAddress) throw new Error("Set OLD_AAVE_ADDRESS to the MockAaveV3 that holds the deposit");
 

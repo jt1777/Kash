@@ -9,8 +9,8 @@
 //   npx hardhat run scripts/update-mock-spot-dex-price.js --network arbitrumSepolia
 //
 // Optional extras (can combine with rate updates or use standalone):
-//   FUND_ETH=0.05              — send ETH to the MockSpotDex for ETH→USDC swaps
-//   KASH_YIELD_ADDRESS=0x...   — call setSpotDex on KashYieldETH
+//   FUND_ETH=0.05                — send ETH to the MockSpotDex for ETH→USDC swaps
+//   KASH_YIELD_ETH_ADDRESS=0x... — call setSpotDex on KashYieldETH
 //   KASH_YIELD_BTC_ADDRESS=0x... — call setSpotDex on KashYieldBtc
 
 require("dotenv").config();
@@ -33,11 +33,11 @@ async function main() {
     throw new Error("Set USDC_ADDRESS (or MOCK_USDC_ADDRESS) in env");
   }
   const fundEth          = process.env.FUND_ETH || "0";
-  const kashYieldEthAddr = process.env.KASH_YIELD_ADDRESS;
+  const kashYieldEthAddr = process.env.KASH_YIELD_ETH_ADDRESS || process.env.KASH_YIELD_ADDRESS;
   const kashYieldBtcAddr = process.env.KASH_YIELD_BTC_ADDRESS;
 
   if (!btcPrice && !ethPrice && fundEth === "0" && !kashYieldEthAddr && !kashYieldBtcAddr) {
-    throw new Error("Set at least one of: BTC_PRICE, ETH_PRICE, FUND_ETH, KASH_YIELD_ADDRESS, KASH_YIELD_BTC_ADDRESS");
+    throw new Error("Set at least one of: BTC_PRICE, ETH_PRICE, FUND_ETH, KASH_YIELD_ETH_ADDRESS, KASH_YIELD_BTC_ADDRESS");
   }
 
   console.log("Network:", network);

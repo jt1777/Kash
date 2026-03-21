@@ -91,8 +91,10 @@ See `.env.example` for all required variables. Key ones:
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `PRIVATE_KEY` | Bot wallet private key (must be contract owner) | `0x...` |
-| `KASH_YIELD_ADDRESS` | Deployed KashYield contract | `0x...` |
-| `KASH_TOKEN_ADDRESS` | Deployed KashToken contract | `0x...` |
+| `KASH_YIELD_ETH_ADDRESS` | KashYieldETH contract (ETH product) | `0x...` |
+| `KASH_TOKEN_ETH` | KashTokenEth contract (ETH product) | `0x...` |
+| `KASH_YIELD_BTC_ADDRESS` | KashYieldBtc contract (BTC product) | `0x...` |
+| `KASH_TOKEN_BTC` | KashTokenBtc contract (BTC product) | `0x...` |
 | `AAVE_POOL_ADDRESS` | Aave V3 Pool on Arbitrum Sepolia | `0xBfC91D59fdAA134A4ED45f7B584cAf96D7792Eff` |
 | `RPC_URL` | Arbitrum Sepolia RPC endpoint | `https://sepolia-rollup.arbitrum.io/rpc` |
 
@@ -155,10 +157,10 @@ View protocol state at a glance (asset in contract, Aave, Hyperliquid):
 
 ```bash
 # ETH product
-PRODUCT=eth KASH_YIELD_ADDRESS=0x... npm run owner:status
+PRODUCT=eth KASH_YIELD_ETH_ADDRESS=0x... npm run owner:status
 
 # BTC product (with MockAave)
-PRODUCT=btc KASH_YIELD_ADDRESS=0x... AAVE_POOL_ADDRESS=0x... npm run owner:status
+PRODUCT=btc KASH_YIELD_BTC_ADDRESS=0x... AAVE_POOL_ADDRESS=0x... npm run owner:status
 ```
 
 Shows:
@@ -168,8 +170,9 @@ Shows:
 
 ## Troubleshooting
 
-### "Invalid KASH_YIELD_ADDRESS"
-- Verify the contract is deployed at the address in `.env`
+### "Invalid KASH_YIELD_ADDRESS" / empty kashYieldAddress
+- Verify `KASH_YIELD_ETH_ADDRESS` or `KASH_YIELD_BTC_ADDRESS` (per product) is set in `.env`
+- Verify the contract is deployed at that address
 - Check you're on the correct network (Arbitrum Sepolia = chain ID 421614)
 
 ### "Hyperliquid address not set" / no active exchange
@@ -258,6 +261,23 @@ Phase 1 NET_MINT and NET_REDEEM are split into **Hyperliquid** steps (deposit/wi
   - NET_REDEEM: repay USDC to Aave, withdraw wBTC/ETH from Aave.
 
 Order for a full run: for NET_MINT run Aave first then HL; for NET_REDEEM run HL first then Aave. If one step fails, fix state and re-run that step (or the other) without re-running the whole batch.
+
+## Known limitations / Work in progress
+
+These items are stubs or partially implemented — tracked here after the development checklist was retired.
+
+### Daily yield tracking (`dailyYield.ts`)
+
+`getDailyYield(provider)` currently returns zeros for all three components. To complete:
+- **Aave supply interest** — read aToken balance growth or `liquidityIndex` from the Aave reserve data.
+- **Aave borrow cost** — read variable debt growth or `variableBorrowIndex`.
+- **Hyperliquid funding** — pull from HL API or on-chain events.
+
+Once implemented, call `updateNAV(newNAV)` using `computeNAVFromPortfolioAndYield(portfolioValueUSD, netYield, totalKashSupply)` before `markBatchOpsDone()` so redeems reflect the correct yield-adjusted NAV.
+
+### USD → token conversion in Aave calls
+
+Aave deposit/withdraw/borrow/repay functions in `batchProcessor.ts` expect **token amounts** (e.g. WETH in 18 decimals, wBTC in 8 decimals), but the net position computed by the bot is in **USD with 18 decimals**. The conversion is done per-call using `price = getEthPrice() / getBtcPrice()`. Verify this is consistent for all code paths, especially in `handleNetRedeem` where multiple partial withdrawals may occur.
 
 ## License
 

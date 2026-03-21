@@ -29,7 +29,7 @@ async function main() {
 
   const productEnv = (process.env.PRODUCT || "").toLowerCase();
   const kashYieldBtcAddress = process.env.KASH_YIELD_BTC_ADDRESS;
-  const kashYieldEthAddress = process.env.KASH_YIELD_ADDRESS;
+  const kashYieldEthAddress = process.env.KASH_YIELD_ETH_ADDRESS || process.env.KASH_YIELD_ADDRESS;
   const isBtc =
     productEnv === "btc" ||
     (productEnv !== "eth" &&
@@ -41,7 +41,7 @@ async function main() {
 
   if (!kashYieldAddress || !hre.ethers.isAddress(kashYieldAddress)) {
     throw new Error(
-      `Set KASH_YIELD_ADDRESS (ETH product) or KASH_YIELD_BTC_ADDRESS (BTC product) in .env.\n` +
+      `Set KASH_YIELD_ETH_ADDRESS (ETH product) or KASH_YIELD_BTC_ADDRESS (BTC product) in .env.\n` +
       `Current value: "${kashYieldAddress}"`
     );
   }

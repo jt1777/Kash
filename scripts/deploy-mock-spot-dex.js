@@ -20,7 +20,7 @@
 //   FUND_WBTC                 — wBTC to deposit into the mock (whole tokens, e.g. 10)
 //   FUND_ETH                  — ETH to deposit as native ETH (e.g. 5)
 //   KASH_YIELD_BTC_ADDRESS    — if set, calls setSpotDex on KashYieldBtc
-//   KASH_YIELD_ADDRESS        — if set, calls setSpotDex on KashYieldETH
+//   KASH_YIELD_ETH_ADDRESS    — if set, calls setSpotDex on KashYieldETH
 //
 // Usage:
 //   BTC_PRICE=45000 WBTC_ADDRESS=0x... USDC_ADDRESS=0x... FUND_USDC=500000 FUND_WBTC=10 \
@@ -84,13 +84,20 @@ async function main() {
   const fundEth  = process.env.FUND_ETH  ? process.env.FUND_ETH : "0";
 
   const USDC = await hre.ethers.getContractAt(
-    ["function approve(address,uint256) returns(bool)", "function decimals() view returns(uint8)"],
+    ["function approve(address,uint256) returns(bool)", "function balanceOf(address) view returns(uint256)", "function decimals() view returns(uint8)"],
     usdcAddress
   );
 
   if (fundUsdc > 0) {
     const usdcDecimals = await USDC.decimals();
     const usdcAmount = BigInt(Math.round(fundUsdc * 10 ** Number(usdcDecimals)));
+    const usdcBalance = await USDC.balanceOf(deployer.address);
+    if (usdcBalance < usdcAmount) {
+      throw new Error(
+        `Insufficient USDC: deployer has ${hre.ethers.formatUnits(usdcBalance, usdcDecimals)} USDC but FUND_USDC=${fundUsdc} requires ${fundUsdc} USDC. ` +
+        `Reduce FUND_USDC or mint more to ${deployer.address} (MockUSDC: usdc.mint(addr, amount))`
+      );
+    }
     const approveTx = await USDC.approve(mockSpotDexAddress, usdcAmount);
     await approveTx.wait();
     const fundTx = await mockSpotDex.fund(usdcAddress, usdcAmount);
@@ -100,11 +107,18 @@ async function main() {
 
   if (fundWbtc > 0 && wbtcAddress && hre.ethers.isAddress(wbtcAddress)) {
     const WBTC = await hre.ethers.getContractAt(
-      ["function approve(address,uint256) returns(bool)", "function decimals() view returns(uint8)"],
+      ["function approve(address,uint256) returns(bool)", "function balanceOf(address) view returns(uint256)", "function decimals() view returns(uint8)"],
       wbtcAddress
     );
     const wbtcDecimals = await WBTC.decimals();
     const wbtcAmount = BigInt(Math.round(fundWbtc * 10 ** Number(wbtcDecimals)));
+    const wbtcBalance = await WBTC.balanceOf(deployer.address);
+    if (wbtcBalance < wbtcAmount) {
+      throw new Error(
+        `Insufficient wBTC: deployer has ${hre.ethers.formatUnits(wbtcBalance, wbtcDecimals)} wBTC but FUND_WBTC=${fundWbtc} requires ${fundWbtc} wBTC. ` +
+        `Reduce FUND_WBTC or mint more (MockWBTC: wbtc.mint(addr, amount))`
+      );
+    }
     const approveTx = await WBTC.approve(mockSpotDexAddress, wbtcAmount);
     await approveTx.wait();
     const fundTx = await mockSpotDex.fund(wbtcAddress, wbtcAmount);
@@ -114,6 +128,14 @@ async function main() {
 
   if (fundEth !== "0") {
     const ethWei = hre.ethers.parseEther(fundEth);
+    const balance = await hre.ethers.provider.getBalance(deployer.address);
+    const gasBuffer = hre.ethers.parseEther("0.005"); // ~0.005 ETH for gas
+    if (balance < ethWei + gasBuffer) {
+      throw new Error(
+        `Insufficient ETH: deployer has ${hre.ethers.formatEther(balance)} ETH but FUND_ETH=${fundEth} requires ${fundEth} ETH + gas. ` +
+        `Reduce FUND_ETH (e.g. FUND_ETH=0.01) or add ETH to ${deployer.address}`
+      );
+    }
     const fundTx = await mockSpotDex.fundEth({ value: ethWei });
     await fundTx.wait();
     console.log(`✅ Funded with ${fundEth} ETH`);
@@ -121,20 +143,30 @@ async function main() {
 
   // ── Register on KashYield contracts ───────────────────────────────────
   const kashYieldBtcAddress = process.env.KASH_YIELD_BTC_ADDRESS;
-  const kashYieldEthAddress = process.env.KASH_YIELD_ADDRESS;
+  const kashYieldEthAddress = process.env.KASH_YIELD_ETH_ADDRESS || process.env.KASH_YIELD_ADDRESS;
 
   if (kashYieldBtcAddress && hre.ethers.isAddress(kashYieldBtcAddress)) {
-    const kashYieldBtc = await hre.ethers.getContractAt("KashYieldBtc", kashYieldBtcAddress);
-    const tx = await kashYieldBtc.setSpotDex(mockSpotDexAddress);
-    await tx.wait();
-    console.log("✅ setSpotDex on KashYieldBtc:", kashYieldBtcAddress);
+    try {
+      const kashYieldBtc = await hre.ethers.getContractAt("KashYieldBtc", kashYieldBtcAddress);
+      const tx = await kashYieldBtc.setSpotDex(mockSpotDexAddress);
+      await tx.wait();
+      console.log("✅ setSpotDex on KashYieldBtc:", kashYieldBtcAddress);
+    } catch (e) {
+      console.warn("⚠️  setSpotDex on KashYieldBtc failed:", e.message?.split("\n")[0]);
+      console.warn("   Run manually: KASH_YIELD_BTC_ADDRESS=" + kashYieldBtcAddress + " MOCK_SPOT_DEX_ADDRESS=" + mockSpotDexAddress + " npx hardhat run scripts/setSpotDex.js --network", network);
+    }
   }
 
   if (kashYieldEthAddress && hre.ethers.isAddress(kashYieldEthAddress)) {
-    const kashYieldEth = await hre.ethers.getContractAt("KashYieldETH", kashYieldEthAddress);
-    const tx = await kashYieldEth.setSpotDex(mockSpotDexAddress);
-    await tx.wait();
-    console.log("✅ setSpotDex on KashYieldETH:", kashYieldEthAddress);
+    try {
+      const kashYieldEth = await hre.ethers.getContractAt("KashYieldETH", kashYieldEthAddress);
+      const tx = await kashYieldEth.setSpotDex(mockSpotDexAddress);
+      await tx.wait();
+      console.log("✅ setSpotDex on KashYieldETH:", kashYieldEthAddress);
+    } catch (e) {
+      console.warn("⚠️  setSpotDex on KashYieldETH failed:", e.message?.split("\n")[0]);
+      console.warn("   Run manually: KASH_YIELD_ETH_ADDRESS=" + kashYieldEthAddress + " MOCK_SPOT_DEX_ADDRESS=" + mockSpotDexAddress + " npx hardhat run scripts/setSpotDex.js --network", network);
+    }
   }
 
   // ── Summary ───────────────────────────────────────────────────────────
@@ -152,7 +184,7 @@ async function main() {
 
   if (!kashYieldBtcAddress && !kashYieldEthAddress) {
     console.log("\nTo register on KashYield contracts, re-run with:");
-    console.log("  KASH_YIELD_BTC_ADDRESS=0x... and/or KASH_YIELD_ADDRESS=0x...");
+    console.log("  KASH_YIELD_BTC_ADDRESS=0x... and/or KASH_YIELD_ETH_ADDRESS=0x...");
     console.log("  Or call setSpotDex(address) directly on each contract.");
   }
 

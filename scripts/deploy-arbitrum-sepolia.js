@@ -121,8 +121,8 @@ async function main() {
   console.log("  Paused:      ", await kashYieldEth.paused());
   console.log("====================================\n");
   console.log("Add to .env, frontend/.env.local, and bot/.env:");
-  console.log(`  KASH_YIELD_ADDRESS=${kashYieldEthAddress}`);
-  console.log(`  KASH_TOKEN_ADDRESS=${kashTokenEthAddress}`);
+  console.log(`  KASH_YIELD_ETH_ADDRESS=${kashYieldEthAddress}`);
+  console.log(`  KASH_TOKEN_ETH=${kashTokenEthAddress}`);
 
   // ============================================
   // 5. Save deployment info

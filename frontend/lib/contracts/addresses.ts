@@ -1,5 +1,5 @@
 // Deployed contract addresses on Arbitrum Sepolia
-// Override with .env.local when you redeploy (KASH_YIELD_BTC_ADDRESS, KASH_TOKEN_BTC, MOCK_WBTC, KASH_YIELD_ETH_ADDRESS, KASH_TOKEN_ETH)
+// Override with .env.local when you redeploy. Must use NEXT_PUBLIC_ prefix for client-side exposure in Next.js.
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000' as `0x${string}`;
 
 function addr(envKey: string, fallback?: string): `0x${string}` {
@@ -9,18 +9,18 @@ function addr(envKey: string, fallback?: string): `0x${string}` {
 }
 
 export const CONTRACTS = {
-  // ETH product
-  kashYieldEth: addr('KASH_YIELD_ETH_ADDRESS', "0x8da4FC6A0EAEC834c88f1543Aeb91e25aFDE4BDF"),
-  kashTokenEth: addr('KASH_TOKEN_ETH', "0xaFDA1Ef6e89b7BB4FBa8e0C89B5Bc84cc290AABf"),
-  // BTC product (KashYieldBtc + MockAave) — update these or set env when you redeploy
-  kashYieldBtc: addr('KASH_YIELD_BTC_ADDRESS', "0x307f81b91D0396f54a30499b8C75e019C66abA47"),
-  kashTokenBtc: addr('KASH_TOKEN_BTC', "0xd7001987E7584D840F56719C77d876A7899bE3d3"),
-  mockWbtc: addr('MOCK_WBTC', "0xeC5Bd373D1808F06Ae849FE5227859a8E3D3FE12"),
+  // ETH product (NEXT_PUBLIC_* required for client-side in Next.js)
+  kashYieldEth: addr('NEXT_PUBLIC_KASH_YIELD_ETH_ADDRESS', "0xd999F9C06974755211bab867C1475C5Ccd0C2b2D"),
+  kashTokenEth: addr('NEXT_PUBLIC_KASH_TOKEN_ETH', "0x8026bDBE32B5736910d961cfd6D0da3ea0982a8E"),
+  // BTC product
+  kashYieldBtc: addr('NEXT_PUBLIC_KASH_YIELD_BTC_ADDRESS', "0x307f81b91D0396f54a30499b8C75e019C66abA47"),
+  kashTokenBtc: addr('NEXT_PUBLIC_KASH_TOKEN_BTC', "0xd7001987E7584D840F56719C77d876A7899bE3d3"),
+  mockWbtc: addr('NEXT_PUBLIC_MOCK_WBTC', "0xeC5Bd373D1808F06Ae849FE5227859a8E3D3FE12"),
   tokens: {
-    weth: "0x26006f640dF9F81c58183ac7d47Da93c23226E21" as `0x${string}`,
+    weth: "0x9b602311eba875331bA5519A9DB19Cee045F22A0" as `0x${string}`,
     wbtc: "0x4D8b720b94D341F54df948696747B05998c5FbD5" as `0x${string}`,
     usdt: "0x833EdA586220B1d0C25034E9bAb5ed4B4a5769a1" as `0x${string}`,
-    usdc: "0x15BB91b9e63EA29863678B1dcBcB01dE31bD8Ab5" as `0x${string}`,
+    usdc: "0xc1BFb02a5df26932C8ec51346f5142944a9bdD3b" as `0x${string}`,
   },
   oracles: {
     ethUsd: "0x2d3bBa5e0A9Fd8EAa45Dcf71A2389b7C12005b1f" as `0x${string}`, // Arbitrum Sepolia ETH/USD (real Chainlink)

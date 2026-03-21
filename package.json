@@ -1,5 +1,12 @@
 {
   "name": "hardhat-project",
+  "scripts": {
+    "test": "npx hardhat test test/KashYieldBtc.e2e.test.js test/KashYieldETH.e2e.test.js test/deployment.e2e.test.js test/advanced-scenarios.e2e.test.js",
+    "test:btc": "npx hardhat test test/KashYieldBtc.e2e.test.js",
+    "test:eth": "npx hardhat test test/KashYieldETH.e2e.test.js",
+    "test:deploy": "npx hardhat test test/deployment.e2e.test.js",
+    "test:advanced": "npx hardhat test test/advanced-scenarios.e2e.test.js"
+  },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^6.0.0",
     "hardhat": "^2.25.0"
