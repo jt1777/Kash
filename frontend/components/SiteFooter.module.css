@@ -1,0 +1,45 @@
+.footer {
+  border-top: 1px solid rgba(0, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.75);
+  position: relative;
+  z-index: 1;
+  text-align: center;
+}
+
+/* Use compound selectors (.footer .inner etc.) to get specificity (0,2,0)         */
+/* which beats the landing-page reset `.landing * { margin:0; padding:0 }` (0,1,0) */
+.footer .inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: clamp(40px, 6vw, 60px) 20px;
+  position: relative;
+  z-index: 1;
+  text-align: center;
+}
+
+.footer .links {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: 20px;
+}
+
+.footer .links a {
+  color: #00ffff;
+  text-decoration: none;
+  margin: 0 15px;
+  transition: all 0.3s ease;
+  text-shadow: 0 0 8px rgba(0, 255, 255, 0.3);
+}
+
+.footer .links a:hover {
+  text-decoration: none;
+  text-shadow: 0 0 12px #00ffff;
+}
+
+.footer .disclaimer {
+  margin-top: 30px;
+  font-size: 0.85rem;
+  opacity: 0.6;
+  text-align: center;
+}

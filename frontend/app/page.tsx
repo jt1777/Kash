@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { ARBITRUM_SEPOLIA_BLOCK_EXPLORER, CONTRACTS } from '@/lib/contracts/addresses';
+import { SiteFooter } from '@/components/SiteFooter';
 
 export const metadata = {
   title: 'KASH - The Yield Token for AI Agents',
@@ -49,6 +49,18 @@ export default function Home() {
           text-align: center;
           position: relative;
           z-index: 1;
+          background-color: #0A0A1E;
+          background-image:
+            linear-gradient(
+              180deg,
+              rgba(10, 10, 30, 0.45) 0%,
+              rgba(10, 10, 30, 0.5) 40%,
+              rgba(10, 10, 30, 0.55) 100%
+            ),
+            url('/AdobeStock_576595621.jpeg');
+          background-size: cover;
+          background-position: center;
+          background-repeat: no-repeat;
         }
         .landing .badge {
           display: inline-block;
@@ -70,12 +82,23 @@ export default function Home() {
           text-shadow: 0 0 20px rgba(0, 255, 255, 0.4), 0 0 40px rgba(0, 255, 255, 0.2);
           letter-spacing: -2px;
         }
+        .landing .hero h2 {
+          font-size: clamp(1.35rem, 4.2vw, 2.35rem);
+          font-weight: 600;
+          letter-spacing: -0.02em;
+          margin-bottom: 24px;
+          color: #00FFFF;
+          text-shadow: 0 0 18px rgba(0, 255, 255, 0.45), 0 0 36px rgba(0, 255, 255, 0.2);
+        }
         .landing .subtitle {
           font-size: clamp(1rem, 2.5vw, 1.3rem);
           color: rgba(255, 255, 255, 0.85);
           max-width: 600px;
+          margin-left: auto;
+          margin-right: auto;
           margin-bottom: 40px;
           line-height: 1.7;
+          text-align: center;
         }
         .landing .cta-button {
           display: inline-block;
@@ -210,23 +233,6 @@ export default function Home() {
           box-shadow: 0 0 15px rgba(0, 255, 255, 0.05);
         }
         .landing .ai-list li::before { content: '► '; color: #00FFFF; text-shadow: 0 0 8px #00FFFF; }
-        .landing footer {
-          padding: clamp(40px, 6vw, 60px) 0;
-          text-align: center;
-          border-top: 1px solid rgba(0, 255, 255, 0.15);
-          color: rgba(255, 255, 255, 0.75);
-          position: relative;
-          z-index: 1;
-        }
-        .landing .links { margin-top: 20px; }
-        .landing .links a {
-          color: #00FFFF;
-          text-decoration: none;
-          margin: 0 15px;
-          transition: all 0.3s ease;
-          text-shadow: 0 0 8px rgba(0, 255, 255, 0.3);
-        }
-        .landing .links a:hover { text-decoration: none; text-shadow: 0 0 12px #00FFFF; }
         .landing .nav {
           position: fixed;
           top: 0;
@@ -317,7 +323,8 @@ export default function Home() {
           <div className="container">
             <div className="badge">🤖 AI Agent Friendly</div>
             <h1>KASH<span className="cursor" /></h1>
-            <p className="subtitle">The first yield-bearing token designed for AI agents. Deposit ETH, earn automated yield from decentralized funding rates. No humans required.</p>
+            <h2>Enhanced Yield Protocol</h2>
+            <p className="subtitle">The first yield-bearing token designed for AI agents. Deposit ETH or wBTC to earn yield from decentralized funding rates. No humans required.</p>
             <div>
               <Link href="/app" className="cta-button">🚀 Launch App</Link>
               <a href="#integration" className="secondary-cta">Documentation</a>
@@ -433,25 +440,7 @@ if earnings > 0.01:  # Threshold trigger
           </div>
         </section>
 
-        <footer>
-          <div className="container">
-            <p>KASH Yield Token — Arbitrum</p>
-            <div className="links">
-              <a href="https://github.com/jt1777/yieldproduct" target="_blank" rel="noopener noreferrer">GitHub</a>
-              <a href="#">Documentation</a>
-              <a
-                href={`${ARBITRUM_SEPOLIA_BLOCK_EXPLORER}/address/${CONTRACTS.kashYieldEth}`}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                Contract Address
-              </a>
-            </div>
-            <p style={{ marginTop: 30, fontSize: '0.85rem', opacity: 0.6 }}>
-              Built by agents, for agents. Not financial advice. DYOR.
-            </p>
-          </div>
-        </footer>
+        <SiteFooter />
       </div>
     </>
   );

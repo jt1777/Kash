@@ -1,0 +1,81 @@
+# How Yield Works
+
+KASH earns yield through a **delta-neutral funding rate strategy**. This page explains what that means and how it benefits you.
+
+---
+
+## The strategy in plain terms
+
+When you deposit ETH into KASH:
+
+1. Your ETH is deposited into **Aave** as collateral
+2. Aave lets the protocol borrow **USDC** against that collateral
+3. The USDC is sent to **Hyperliquid**, a perpetuals exchange
+4. On Hyperliquid, the protocol opens a **short ETH position** of equivalent size
+
+The result: the protocol holds ETH (long) and simultaneously holds a short ETH position of the same size. The two positions cancel out — no directional exposure to ETH price. This is what "delta-neutral" means.
+
+**The yield comes from funding rates.** On perpetuals exchanges, traders who are long pay a fee to traders who are short (or vice versa, depending on market conditions). When longs dominate the market — which is historically common in bull markets — shorts earn a continuous funding rate income. That income accrues to the protocol and flows back to you through an increasing NAV.
+
+---
+
+## Net Asset Value (NAV)
+
+Every KASH token is priced at the current **NAV — Net Asset Value**. NAV represents the total value of everything the protocol holds, divided by the total number of KASH tokens in circulation.
+
+```
+NAV = Total Portfolio Value (USD) ÷ Total KASH Supply
+```
+
+**What's in the portfolio:**
+- ETH / wBTC held in Aave
+- USDC in the Hyperliquid trading account
+- Accrued funding fees and interest
+- Value of open perpetual positions
+
+**What's subtracted:**
+- USDC borrowed from Aave
+- Interest owed on borrowings
+- Any unrealised losses on positions
+
+NAV starts at $1.00 when the protocol launches. As yield accrues, NAV increases. When you redeem, you receive assets worth your KASH × current NAV.
+
+---
+
+## When is NAV updated?
+
+NAV is updated **once per day** during batch processing (around 23:50–23:59 UTC). The operator calculates the true portfolio value off-chain, then submits the new NAV to the contract before distributing tokens. This means the NAV you see in the app reflects the previous day's closing value.
+
+---
+
+## The daily batch cycle
+
+Every 24 hours:
+
+| Time (UTC) | What happens |
+|-----------|--------------|
+| 00:00 – 23:49 | User window: you can submit deposits and redemptions |
+| 23:50 – 23:59 | Processing window: batch runs, no new requests accepted |
+| After 23:59 | Batch complete: KASH tokens sent to depositors, assets sent to redeemers |
+
+Your deposit or redemption will be included in the batch for the day you submit it, as long as you submit before **23:50 UTC**.
+
+---
+
+## Why is the strategy "safe" for ETH holders?
+
+Because the short position offsets the ETH exposure exactly. If ETH goes up 10%, your collateral increases in value but your short position loses the same amount — and vice versa. Net result: no gain or loss from price movement. You only earn (or lose, if conditions are unfavourable) the funding rate.
+
+This also means KASH is not a leveraged ETH product. It is a yield product that uses ETH as collateral.
+
+---
+
+## What determines yield?
+
+The main driver is the **funding rate** on perpetuals markets:
+
+- In sustained bull markets, funding rates for shorts are typically positive — you earn
+- In bear markets or sideways conditions, funding rates can turn negative — you pay
+- Aave also earns interest on the ETH collateral, which adds a small base return
+
+Historical funding rates on ETH perpetuals have generally been positive over bull cycles, averaging roughly 10–20% APY for short positions. This is not guaranteed for future periods.

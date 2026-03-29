@@ -10,7 +10,8 @@ import { RecentActivity } from '@/components/RecentActivity';
 import { StatsCard } from '@/components/StatsCard';
 import { StatusIndicator } from '@/components/StatusIndicator';
 import { ClientOnly } from '@/components/ClientOnly';
-import { ARBITRUM_SEPOLIA_BLOCK_EXPLORER, CONTRACTS } from '@/lib/contracts/addresses';
+import { SiteFooter } from '@/components/SiteFooter';
+import { CONTRACTS } from '@/lib/contracts/addresses';
 import { useState } from 'react';
 import { useAccount } from 'wagmi';
 import Link from 'next/link';
@@ -140,8 +141,6 @@ function AppContent() {
   const { isConnected } = useAccount();
   const [product, setProduct] = useState<'eth' | 'btc'>('eth');
   const showBtcTab = !!CONTRACTS.kashYieldBtc;
-  const footerYieldAddress =
-    product === 'btc' && showBtcTab ? CONTRACTS.kashYieldBtc : CONTRACTS.kashYieldEth;
 
   return (
     <>
@@ -230,8 +229,6 @@ function AppContent() {
         .app-page .shadow-md { box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4), 0 0 20px rgba(0, 255, 255, 0.08); }
         .app-page .shadow-xl { box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4), 0 0 25px rgba(0, 255, 255, 0.1); }
         .app-page .bg-white:hover { box-shadow: 0 0 20px rgba(0, 255, 255, 0.15), 0 0 40px rgba(0, 255, 255, 0.05) !important; }
-        .app-page footer { border-top: 1px solid rgba(0, 255, 255, 0.2); background: #0A0A1E !important; position: relative; z-index: 1; }
-        .app-page footer a:hover { color: #00FFFF !important; text-shadow: 0 0 8px rgba(0, 255, 255, 0.5); }
         @media (max-width: 768px) {
           .app-page .nav-content { justify-content: center; }
           .app-page main { padding-top: 10rem !important; padding-left: 16px !important; padding-right: 16px !important; }
@@ -260,7 +257,7 @@ function AppContent() {
                 <span className="font-bold text-xl app-title">K</span>
               </div>
               <div>
-                <h1 className="text-2xl font-bold app-title">Kash - Enhanced Yield Products</h1>
+                <h1 className="text-2xl font-bold app-title">Kash - Enhanced Yield Protocol</h1>
                 <p className="text-xs app-subtitle">Indicative Yields: wBTC 13%  wETH 10%</p>
               </div>
             </Link>
@@ -372,7 +369,7 @@ function AppContent() {
               </div>
               <h3 className="font-semibold text-gray-900 mb-2">Daily Batch Processing</h3>
               <p className="text-sm text-gray-600">
-                Submit requests before 23:50 UTC. Batch processes between 23:50-23:59 daily.
+                Submit requests before 23:50 UTC. Batch processes run between 23:50-23:59 daily.
               </p>
             </div>
 
@@ -390,31 +387,14 @@ function AppContent() {
           </div>
         </main>
 
-        <footer className="mt-16 border-t py-8">
-          <div className="container">
-            <div className="flex flex-col md:flex-row justify-between items-center space-y-4 md:space-y-0">
-              <div className="text-sm app-subtitle">
-                © 2026 KashYieldETH. All rights reserved.
-              </div>
-              <div className="flex space-x-6">
-                <a
-                  href={`${ARBITRUM_SEPOLIA_BLOCK_EXPLORER}/address/${footerYieldAddress}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-sm app-subtitle hover:text-[#00FFFF] transition-colors"
-                >
-                  Contract
-                </a>
-                <a href="#" className="text-sm app-subtitle hover:text-[#00FFFF] transition-colors">
-                  Docs
-                </a>
-                <a href="https://github.com/jt1777/yieldproduct" target="_blank" rel="noopener noreferrer" className="text-sm app-subtitle hover:text-[#00FFFF] transition-colors">
-                  GitHub
-                </a>
-              </div>
-            </div>
-          </div>
-        </footer>
+        <SiteFooter
+          className="mt-16"
+          contractAddress={
+            product === 'btc' && showBtcTab
+              ? CONTRACTS.kashYieldBtc
+              : CONTRACTS.kashYieldEth
+          }
+        />
       </div>
     </>
   );
