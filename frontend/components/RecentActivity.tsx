@@ -143,8 +143,14 @@ export function RecentActivity() {
           : (pendingR.result.kashAmount ?? 0n) > 0n
         : false;
       canCancelByIndex.set(i, !processed && hasRequest);
-      // Only show "Transaction cancelled" when we've successfully read pending and there is no request
-      cancelledByIndex.set(i, !processed && pendingR?.status === 'success' && !hasRequest);
+      // Only show "Transaction cancelled" when we've positively confirmed it was once pending
+      // (hash is in cancelEligibleHashes) but the request is now gone without the batch running.
+      // Without that localStorage evidence we can't distinguish a cancelled tx from a batch-cycle
+      // mismatch, so we stay silent rather than show a false "cancelled" label.
+      cancelledByIndex.set(
+        i,
+        !processed && pendingR?.status === 'success' && !hasRequest && cancelEligibleHashes.has(activities[i]?.hash ?? ''),
+      );
       processedByIndex.set(i, processed);
       hasRequestByIndex.set(i, hasRequest);
     }

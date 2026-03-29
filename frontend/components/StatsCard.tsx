@@ -1,19 +1,16 @@
 'use client';
 
-import { useReadContract, usePublicClient } from 'wagmi';
-import { useQuery } from '@tanstack/react-query';
+import { useReadContract, useAccount } from 'wagmi';
 import { CONTRACTS } from '@/lib/contracts/addresses';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 import { kashTokenABI } from '@/lib/contracts/kashTokenABI';
-import { formatEther, formatUnits } from 'viem';
-import { useAccount } from 'wagmi';
+import { formatEther } from 'viem';
 import { useMemo } from 'react';
 
 type Product = 'eth' | 'btc';
 
 export function StatsCard({ product = 'eth' }: { product?: Product }) {
   const { address, connector } = useAccount();
-  const publicClient = usePublicClient();
 
   const isBtc = product === 'btc' && CONTRACTS.kashYieldBtc && CONTRACTS.kashTokenBtc;
   const kashYield = isBtc ? CONTRACTS.kashYieldBtc! : CONTRACTS.kashYieldEth;
@@ -25,80 +22,6 @@ export function StatsCard({ product = 'eth' }: { product?: Product }) {
     functionName: 'currentNAV',
   });
 
-  // Deposits: prefer contract view (getTotalDepositedBtc/Eth, getTotalRedeemedBtc/Eth) when available; else derive from events.
-  const depositViewName = isBtc ? 'getTotalDepositedBtc' : 'getTotalDepositedEth';
-  const redeemViewName = isBtc ? 'getTotalRedeemedBtc' : 'getTotalRedeemedEth';
-  const { data: totalDepositedFromView } = useReadContract({
-    address: kashYield,
-    abi: kashYieldABI,
-    functionName: depositViewName,
-    args: address ? [address] : undefined,
-  });
-  const { data: totalRedeemedFromView } = useReadContract({
-    address: kashYield,
-    abi: kashYieldABI,
-    functionName: redeemViewName,
-    args: address ? [address] : undefined,
-  });
-
-  // Fallback: event-based totals (used when contract has no view or view fails). Block range ~6 days on Arbitrum.
-  const EVENT_BLOCK_RANGE = 500_000n;
-
-  const { data: mintEvents } = useQuery({
-    queryKey: ['userMintEvents', address, publicClient?.chain?.id, kashYield],
-    queryFn: async () => {
-      if (!publicClient || !address) return [];
-      const blockNumber = await publicClient.getBlockNumber();
-      const fromBlock = blockNumber > EVENT_BLOCK_RANGE ? blockNumber - EVENT_BLOCK_RANGE : 0n;
-      const logs = await publicClient.getContractEvents({
-        address: kashYield,
-        abi: kashYieldABI,
-        eventName: 'MintRequested',
-        args: { user: address as `0x${string}` },
-        fromBlock,
-      });
-      return logs;
-    },
-    enabled: !!publicClient && !!address,
-  });
-
-  const { data: batchProcessedEvents } = useQuery({
-    queryKey: ['batchProcessedEvents', publicClient?.chain?.id, kashYield],
-    queryFn: async () => {
-      if (!publicClient) return [];
-      const blockNumber = await publicClient.getBlockNumber();
-      const fromBlock = blockNumber > EVENT_BLOCK_RANGE ? blockNumber - EVENT_BLOCK_RANGE : 0n;
-      const logs = await publicClient.getContractEvents({
-        address: kashYield,
-        abi: kashYieldABI,
-        eventName: 'BatchProcessed',
-        fromBlock,
-      });
-      return logs;
-    },
-    enabled: !!publicClient,
-  });
-
-  // Redeemed amount (asset returned to user from Phase 2). TokensClaimed(..., isMint: false) = redeem payout.
-  const assetAddress = isBtc ? CONTRACTS.mockWbtc : ('0x0000000000000000000000000000000000000000' as `0x${string}`);
-  const { data: tokensClaimedEvents } = useQuery({
-    queryKey: ['tokensClaimedRedeem', address, publicClient?.chain?.id, kashYield],
-    queryFn: async () => {
-      if (!publicClient || !address) return [];
-      const blockNumber = await publicClient.getBlockNumber();
-      const fromBlock = blockNumber > EVENT_BLOCK_RANGE ? blockNumber - EVENT_BLOCK_RANGE : 0n;
-      const logs = await publicClient.getContractEvents({
-        address: kashYield,
-        abi: kashYieldABI,
-        eventName: 'TokensClaimed',
-        args: { user: address as `0x${string}` },
-        fromBlock,
-      });
-      return logs;
-    },
-    enabled: !!publicClient && !!address,
-  });
-
   const { data: kashBalance } = useReadContract({
     address: kashToken,
     abi: kashTokenABI,
@@ -106,48 +29,11 @@ export function StatsCard({ product = 'eth' }: { product?: Product }) {
     args: address ? [address] : undefined,
   });
 
-  const processedBatchCycles = useMemo(() => {
-    if (!batchProcessedEvents?.length) return new Set<bigint>();
-    return new Set(batchProcessedEvents.map((e) => e.args.batchCycle).filter((c): c is bigint => c !== undefined));
-  }, [batchProcessedEvents]);
-
-  const settledFromChain = useMemo(() => {
-    if (!mintEvents?.length || processedBatchCycles.size === 0) return { settledEth: 0n, settledCount: 0 };
-    let settledEth = 0n;
-    let settledCount = 0;
-    for (const log of mintEvents) {
-      const batchCycle = log.args.batchCycle;
-      const amountIn = log.args.amountIn;
-      if (batchCycle !== undefined && processedBatchCycles.has(batchCycle) && amountIn !== undefined) {
-        settledEth += amountIn;
-        settledCount += 1;
-      }
-    }
-    return { settledEth, settledCount };
-  }, [mintEvents, processedBatchCycles]);
-
-  const totalRedeemed = useMemo(() => {
-    if (!tokensClaimedEvents?.length) return 0n;
-    const assetLower = assetAddress.toLowerCase();
-    let sum = 0n;
-    for (const log of tokensClaimedEvents) {
-      const token = log.args.token;
-      const isMint = log.args.isMint;
-      const amount = log.args.amount;
-      if (token && typeof isMint === 'boolean' && !isMint && token.toLowerCase() === assetLower && amount !== undefined) {
-        sum += amount;
-      }
-    }
-    return sum;
-  }, [tokensClaimedEvents, assetAddress]);
-
-  // Use view when available (new contracts), else event-derived totals
-  const depositedTotal = totalDepositedFromView ?? settledFromChain.settledEth;
-  const redeemedTotal = totalRedeemedFromView ?? totalRedeemed;
-  const netDeposits = useMemo(() => {
-    if (redeemedTotal >= depositedTotal) return 0n;
-    return depositedTotal - redeemedTotal;
-  }, [depositedTotal, redeemedTotal]);
+  const { data: kashTotalSupply } = useReadContract({
+    address: kashToken,
+    abi: kashTokenABI,
+    functionName: 'totalSupply',
+  });
 
   const navDisplay = useMemo(() => {
     if (nav === undefined) return '1.000000';
@@ -157,6 +43,13 @@ export function StatsCard({ product = 'eth' }: { product?: Product }) {
     const frac = roundedMicro % 1_000_000n;
     return `${whole}.${frac.toString().padStart(6, '0')}`;
   }, [nav]);
+
+  const totalNavDisplay = useMemo(() => {
+    if (nav === undefined || kashTotalSupply === undefined) return '—';
+    // totalNAV (USD, 18 dec) = totalSupply (18 dec) * nav (18 dec) / 1e18
+    const totalUsd = (kashTotalSupply * nav) / 10n ** 18n;
+    return `$${Number(formatEther(totalUsd)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  }, [nav, kashTotalSupply]);
 
   return (
     <>
@@ -179,33 +72,19 @@ export function StatsCard({ product = 'eth' }: { product?: Product }) {
 
       <div className="bg-white rounded-xl shadow-md p-6 border border-gray-100">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-sm text-gray-500 font-medium">Deposits</span>
+          <span className="text-sm text-gray-500 font-medium">Total NAV</span>
           <div className="w-8 h-8 bg-green-100 rounded-lg flex items-center justify-center">
             <svg className="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
             </svg>
           </div>
         </div>
         <p className="text-3xl font-bold text-gray-900 leading-tight">
-          {address
-            ? netDeposits > 0n
-              ? isBtc
-                ? `${Number(formatUnits(netDeposits, 8)).toLocaleString(undefined, { maximumFractionDigits: 6 })} wBTC`
-                : `${Number(formatEther(netDeposits)).toLocaleString(undefined, { maximumFractionDigits: 4 })} ETH`
-              : isBtc
-                ? '0.00 wBTC'
-                : '0.00 ETH'
-            : '—'}
+          {totalNavDisplay}
         </p>
         <p className="text-xs text-gray-500 mt-1">
-          {address ? (redeemedTotal > 0n ? 'Net (deposits − redeemed)' : '') : 'Connect wallet'}
+          Total contract value (USD)
         </p>
-        {address && (mintEvents?.length ?? 0) > 0 && (
-          <p className="text-xs text-gray-500 mt-0.5">
-            {mintEvents!.length} request{mintEvents!.length !== 1 ? 's' : ''} · {settledFromChain.settledCount} settled
-            {redeemedTotal > 0n && ` · ${isBtc ? Number(formatUnits(redeemedTotal, 8)).toFixed(4) : Number(formatEther(redeemedTotal)).toFixed(4)} redeemed`}
-          </p>
-        )}
       </div>
 
       <div className="bg-white rounded-xl shadow-md p-6 border border-gray-100">

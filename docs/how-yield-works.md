@@ -82,4 +82,4 @@ The main driver is the **funding rate** on perpetuals markets:
 - In bear markets or sideways conditions, funding rates can turn negative — you pay
 - The lending protocol also earns interest on the ETH collateral, which adds a small base return
 
-Historical funding rates on ETH perpetuals have generally been positive over bull cycles, averaging roughly 10–20% APY for short positions. This is not guaranteed for future periods.
+Historical funding rates on perpetuals have generally been positive over bull cycles, averaging roughly 10–20% APY for short positions. This is not guaranteed for future periods.
