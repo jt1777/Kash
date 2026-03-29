@@ -1,8 +1,8 @@
-# Summary
+# Table of contents
 
 ## Introduction
 
-* [What is KASH?](overview.md)
+* [What is KASH?](README.md)
 
 ## Using KASH
 
