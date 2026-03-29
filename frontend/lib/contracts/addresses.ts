@@ -2,20 +2,35 @@
 // Override with .env.local when you redeploy. Must use NEXT_PUBLIC_ prefix for client-side exposure in Next.js.
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000' as `0x${string}`;
 
-function addr(envKey: string, fallback?: string): `0x${string}` {
-  const raw = typeof process !== 'undefined' ? process.env?.[envKey]?.trim?.() : undefined;
-  const value = raw && raw.startsWith('0x') ? raw : (fallback ?? ZERO_ADDRESS);
-  return value as `0x${string}`;
+function addr(envKey: string, fallback?: string, secondaryKey?: string): `0x${string}` {
+  const tryKey = (key: string): `0x${string}` | undefined => {
+    const raw = typeof process !== 'undefined' ? process.env?.[key]?.trim?.() : undefined;
+    if (raw && raw.startsWith('0x')) return raw as `0x${string}`;
+    return undefined;
+  };
+  return (
+    tryKey(envKey) ??
+    (secondaryKey ? tryKey(secondaryKey) : undefined) ??
+    (fallback ?? ZERO_ADDRESS)
+  ) as `0x${string}`;
 }
 
 export const CONTRACTS = {
-  // ETH product (NEXT_PUBLIC_* required for client-side in Next.js)
-  kashYieldEth: addr('NEXT_PUBLIC_KASH_YIELD_ETH_ADDRESS', "0xd999F9C06974755211bab867C1475C5Ccd0C2b2D"),
-  kashTokenEth: addr('NEXT_PUBLIC_KASH_TOKEN_ETH', "0x8026bDBE32B5736910d961cfd6D0da3ea0982a8E"),
+  // ETH: NEXT_PUBLIC_* for browser; KASH_* matches next.config.js `env` (single source in .env.local).
+  kashYieldEth: addr(
+    'NEXT_PUBLIC_KASH_YIELD_ETH_ADDRESS',
+    "0xd999F9C06974755211bab867C1475C5Ccd0C2b2D",
+    'KASH_YIELD_ETH_ADDRESS',
+  ),
+  kashTokenEth: addr('NEXT_PUBLIC_KASH_TOKEN_ETH', "0x8026bDBE32B5736910d961cfd6D0da3ea0982a8E", 'KASH_TOKEN_ETH'),
   // BTC product
-  kashYieldBtc: addr('NEXT_PUBLIC_KASH_YIELD_BTC_ADDRESS', "0x307f81b91D0396f54a30499b8C75e019C66abA47"),
-  kashTokenBtc: addr('NEXT_PUBLIC_KASH_TOKEN_BTC', "0xd7001987E7584D840F56719C77d876A7899bE3d3"),
-  mockWbtc: addr('NEXT_PUBLIC_MOCK_WBTC', "0xeC5Bd373D1808F06Ae849FE5227859a8E3D3FE12"),
+  kashYieldBtc: addr(
+    'NEXT_PUBLIC_KASH_YIELD_BTC_ADDRESS',
+    "0x307f81b91D0396f54a30499b8C75e019C66abA47",
+    'KASH_YIELD_BTC_ADDRESS',
+  ),
+  kashTokenBtc: addr('NEXT_PUBLIC_KASH_TOKEN_BTC', "0xd7001987E7584D840F56719C77d876A7899bE3d3", 'KASH_TOKEN_BTC'),
+  mockWbtc: addr('NEXT_PUBLIC_MOCK_WBTC', "0xeC5Bd373D1808F06Ae849FE5227859a8E3D3FE12", 'MOCK_WBTC'),
   tokens: {
     weth: "0x9b602311eba875331bA5519A9DB19Cee045F22A0" as `0x${string}`,
     wbtc: "0x4D8b720b94D341F54df948696747B05998c5FbD5" as `0x${string}`,

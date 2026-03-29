@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { ARBITRUM_SEPOLIA_BLOCK_EXPLORER, CONTRACTS } from '@/lib/contracts/addresses';
 
 export const metadata = {
   title: 'KASH - The Yield Token for AI Agents',
@@ -438,7 +439,13 @@ if earnings > 0.01:  # Threshold trigger
             <div className="links">
               <a href="https://github.com/jt1777/yieldproduct" target="_blank" rel="noopener noreferrer">GitHub</a>
               <a href="#">Documentation</a>
-              <a href="#">Contract Address</a>
+              <a
+                href={`${ARBITRUM_SEPOLIA_BLOCK_EXPLORER}/address/${CONTRACTS.kashYieldEth}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Contract Address
+              </a>
             </div>
             <p style={{ marginTop: 30, fontSize: '0.85rem', opacity: 0.6 }}>
               Built by agents, for agents. Not financial advice. DYOR.

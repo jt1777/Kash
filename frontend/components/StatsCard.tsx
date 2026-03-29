@@ -149,6 +149,15 @@ export function StatsCard({ product = 'eth' }: { product?: Product }) {
     return depositedTotal - redeemedTotal;
   }, [depositedTotal, redeemedTotal]);
 
+  const navDisplay = useMemo(() => {
+    if (nav === undefined) return '1.000000';
+    const microUnits = 10n ** 12n; // 10^(18-6): wei per 0.000001 NAV
+    const roundedMicro = (nav + microUnits / 2n) / microUnits;
+    const whole = roundedMicro / 1_000_000n;
+    const frac = roundedMicro % 1_000_000n;
+    return `${whole}.${frac.toString().padStart(6, '0')}`;
+  }, [nav]);
+
   return (
     <>
       <div className="bg-white rounded-xl shadow-md p-6 border border-gray-100">
@@ -161,7 +170,7 @@ export function StatsCard({ product = 'eth' }: { product?: Product }) {
           </div>
         </div>
         <p className="text-3xl font-bold text-gray-900">
-          ${nav ? formatEther(nav) : '1.00'}
+          ${navDisplay}
         </p>
         <p className="text-xs text-gray-500 mt-1">
           Per KASH token

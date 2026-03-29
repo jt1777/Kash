@@ -10,7 +10,7 @@ import { RecentActivity } from '@/components/RecentActivity';
 import { StatsCard } from '@/components/StatsCard';
 import { StatusIndicator } from '@/components/StatusIndicator';
 import { ClientOnly } from '@/components/ClientOnly';
-import { CONTRACTS } from '@/lib/contracts/addresses';
+import { ARBITRUM_SEPOLIA_BLOCK_EXPLORER, CONTRACTS } from '@/lib/contracts/addresses';
 import { useState } from 'react';
 import { useAccount } from 'wagmi';
 import Link from 'next/link';
@@ -140,6 +140,8 @@ function AppContent() {
   const { isConnected } = useAccount();
   const [product, setProduct] = useState<'eth' | 'btc'>('eth');
   const showBtcTab = !!CONTRACTS.kashYieldBtc;
+  const footerYieldAddress =
+    product === 'btc' && showBtcTab ? CONTRACTS.kashYieldBtc : CONTRACTS.kashYieldEth;
 
   return (
     <>
@@ -395,10 +397,12 @@ function AppContent() {
                 © 2026 KashYieldETH. All rights reserved.
               </div>
               <div className="flex space-x-6">
-                <a href="https://sepolia.arbiscan.io/address/0x4C3910E93aB0c5983c6DEE003749485E525E5Db7"
-                   target="_blank"
-                   rel="noopener noreferrer"
-                   className="text-sm app-subtitle hover:text-[#00FFFF] transition-colors">
+                <a
+                  href={`${ARBITRUM_SEPOLIA_BLOCK_EXPLORER}/address/${footerYieldAddress}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-sm app-subtitle hover:text-[#00FFFF] transition-colors"
+                >
                   Contract
                 </a>
                 <a href="#" className="text-sm app-subtitle hover:text-[#00FFFF] transition-colors">
