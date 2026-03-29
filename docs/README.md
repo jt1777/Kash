@@ -36,6 +36,14 @@ NAV is updated daily after each batch cycle.
 
 ---
 
+## KASH tokens are transferable
+
+KASH-ETH and KASH-BTC are standard **ERC-20 tokens** on Arbitrum. This means they can be freely transferred to any wallet address, just like any other token. You do not need to be the original depositor to hold or redeem KASH — whoever holds the tokens can redeem them for the underlying assets at the current NAV.
+
+This makes KASH composable: KASH tokens could be held in a multisig, sent to another wallet, or used in other DeFi protocols that accept ERC-20 tokens.
+
+---
+
 ## What KASH is not
 
 - KASH is **not** a stablecoin. KASH-ETH is priced in USD terms and tracks the NAV of the ETH vault.

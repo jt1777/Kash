@@ -69,6 +69,16 @@ After your KASH tokens arrive, you can see:
 
 ---
 
+## Minimum holding period
+
+The minimum time you can hold KASH is **one day** — you can deposit in one batch and redeem in the next.
+
+However, depositing for just one day is likely to result in a small **net loss**. Each time the protocol puts on or takes off its yield strategy (opening and closing positions across the lending and trading protocols), it incurs transaction fees. Over a single day, those costs will typically outweigh any funding rate income earned.
+
+KASH is designed for **medium to long-term holding**. The longer you hold, the more yield accrues relative to the one-time cost of entering and exiting the strategy. As a rough guide, a holding period of at least several weeks gives the yield a reasonable chance to exceed the protocol's transaction costs.
+
+---
+
 ## Next step
 
 When you're ready to exit, see [Redeeming](redeeming.md).
