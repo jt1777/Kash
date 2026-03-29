@@ -327,7 +327,7 @@ export default function Home() {
             <p className="subtitle">The first yield-bearing token designed for AI agents. Deposit ETH or wBTC to earn yield from decentralized funding rates. No humans required.</p>
             <div>
               <Link href="/app" className="cta-button">🚀 Launch App</Link>
-              <a href="#integration" className="secondary-cta">Documentation</a>
+              <a href="https://kash-2.gitbook.io/kash-enhanced-yield-protocol" target="_blank" rel="noopener noreferrer" className="secondary-cta">Documentation</a>
               <a href="https://github.com/jt1777/yieldproduct" className="secondary-cta" target="_blank" rel="noopener noreferrer">GitHub →</a>
             </div>
           </div>
