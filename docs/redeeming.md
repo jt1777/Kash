@@ -47,7 +47,7 @@ You can redeem any portion of your KASH balance. You don't have to exit your ent
 
 ## Timing
 
-Redemption requests submitted **after the batch starts** (~23:50 UTC) will be queued for the **following day's batch**. Submit your request well before 23:50 UTC to have it included in the current day's batch.
+Redemption requests submitted **after the batch starts** (~23:50 UTC) will be queued for the **following day's batch**. Submit your request before 23:50 UTC to have it included in the current day's batch.
 
 ---
 
@@ -59,4 +59,8 @@ The same **0.03% fee (3 basis points)** applies to redemptions. This is deducted
 
 ## Can I cancel a redemption request?
 
-Once submitted, a redemption request cannot be cancelled. Your KASH tokens remain locked until the batch distributes your assets back.
+Yes — you can cancel a pending redemption request as long as the batch for that day **has not yet been processed**. Your KASH tokens are returned to your wallet immediately on cancellation.
+
+To cancel, click the **Cancel Redeem Request** button in the app (visible when you have a pending request), or find the pending transaction in the Recent Activity panel and click **Cancel redeem**.
+
+Once the daily batch has run (~23:59 UTC), the request can no longer be cancelled.

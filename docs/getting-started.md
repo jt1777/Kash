@@ -44,7 +44,7 @@ Each faucet gives you a small amount of testnet ETH — enough to cover gas and 
 
 ## Step 3 — Connect your wallet to the app
 
-1. Go to [kash.finance/app](https://kash.finance/app) (or your local dev URL)
+1. On the Homepage, click "Launch App"
 2. Click **Connect Wallet** in the top-right corner
 3. Select your wallet and approve the connection
 4. Make sure your wallet is on the **Arbitrum Sepolia** network — the app will show a warning if you're on the wrong network

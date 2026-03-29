@@ -6,7 +6,7 @@ Depositing into KASH gives you KASH tokens that earn yield over time.
 
 ## Before you deposit
 
-- Your wallet is connected to the app on **Arbitrum Sepolia**
+- Ensure your wallet is connected to the app on the **Arbitrum Sepolia** network
 - You have ETH (for KASH-ETH) or wBTC (for KASH-BTC) in your wallet
 - You have a small amount of ETH for gas fees
 
@@ -31,7 +31,8 @@ This means there is a **waiting period** between when you submit your deposit an
 3. Click **Deposit ETH**
 4. Confirm the transaction in your wallet
 5. Wait for the daily batch to process (by 23:59 UTC)
-6. KASH-ETH tokens will appear in your wallet automatically
+6. Click the "Add to wallet" link in the "Your KASH Balance" box to see the KASH-ETH tokens in your wallet.
+7. You may choose to cancel the mint request at any time prior to the batch process run time and your Eth will be returned to your wallet.
 
 ---
 
@@ -42,13 +43,14 @@ This means there is a **waiting period** between when you submit your deposit an
 3. If this is your first time, you will first be asked to **Approve** the contract to spend your wBTC — confirm this transaction
 4. Click **Deposit wBTC** and confirm the deposit transaction
 5. Wait for the daily batch
-6. KASH-BTC tokens will appear in your wallet automatically
+6. Click the "Add to wallet" link in the "Your KASH Balance" box to see the KASH-BTC tokens in your wallet.
+7. You may choose to cancel the mint request at any time prior to the batch process run time and your wBTC will be returned to your wallet.
 
 ---
 
 ## What happens to my funds during the batch?
 
-Your deposited ETH or wBTC is held in the smart contract until the batch runs. After Phase 1 of the batch (valuation), the protocol deploys capital into its yield strategy. After Phase 2 (distribution), KASH tokens are minted at the current NAV and sent to your wallet.
+Your deposited ETH or wBTC is held in the smart contract until the batch runs. The protocol deploys the Eth or wBTC it has received in a yield strategy, then KASH tokens are minted at the latest NAV and sent to your wallet.
 
 ---
 

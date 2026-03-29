@@ -21,7 +21,7 @@ The protocol is governed entirely by smart contracts. If there is a bug in the c
 
 ## Funding rate risk
 
-Yield comes primarily from earning the funding rate on Hyperliquid short positions. Funding rates are not guaranteed and can go negative — meaning the protocol would **pay** funding instead of earning it. During extended bear markets or periods of low speculative activity, yield could be zero or briefly negative.
+Yield comes primarily from earning the funding rate on short positions held on the perp DEX. Funding rates are not guaranteed and can go negative — meaning the protocol would **pay** funding instead of earning it. During extended bear markets or periods of low speculative activity, yield could be zero or negative.
 
 The protocol does not promise a fixed APY. Yield is variable and reflects current market conditions.
 
@@ -29,16 +29,20 @@ The protocol does not promise a fixed APY. Yield is variable and reflects curren
 
 ## Liquidation risk
 
-The protocol borrows USDC from Aave against your deposited ETH or wBTC as collateral. If collateral value drops sharply relative to the borrowed amount, Aave could liquidate some of the collateral. The protocol manages its loan-to-value ratio conservatively (targeting around 65%), leaving a significant buffer before liquidation could occur.
+The protocol borrows USDC from a lending protocol against your deposited ETH or wBTC as collateral. In isolation, a sharp drop in collateral value could cause the lending protocol to liquidate some of that collateral. However, this is not a significant risk in practice for two reasons:
+
+1. **The positions offset each other.** The protocol holds a short ETH/BTC position on the perp DEX of equal size to the lending collateral. If the asset price falls, the lending collateral loses value — but the short position gains an equivalent amount. If the asset price rises, the short position loses value — but the collateral in the lending protocol gains. The two sides of the trade naturally hedge each other.
+
+2. **The protocol actively manages collateral.** When needed, the protocol transfers gains from the perp DEX back to the lending protocol (or vice versa) to keep the loan-to-value ratio at a safe level (targeting around 65%). This active rebalancing prevents the lending position from approaching liquidation thresholds under normal market conditions.
 
 ---
 
 ## Exchange and counterparty risk
 
-The yield strategy depends on Hyperliquid and Aave continuing to function correctly. Risks include:
+The yield strategy depends on the lending protocol and perp DEX continuing to function correctly. Risks include:
 
 - Exchange downtime or insolvency
-- Aave smart contract vulnerabilities
+- Smart contract vulnerabilities in third-party protocols
 - Regulatory actions affecting either platform
 
 ---
@@ -47,13 +51,13 @@ The yield strategy depends on Hyperliquid and Aave continuing to function correc
 
 Protocol operations — batch processing, capital deployment, and NAV updates — are currently performed by a single operator. A compromised or unavailable operator key could delay batch processing or, in a worst case, mismanage capital.
 
-**Planned improvements:** Multi-signature control and decentralised batch triggering via Chainlink Automation are on the roadmap.
+**Planned improvements:** Multi-signature control and decentralised batch triggering are on the roadmap.
 
 ---
 
 ## Oracle risk
 
-The value of your deposit at batch time is calculated using Chainlink price feeds. If a price feed provides incorrect data, you could receive fewer KASH tokens than expected when depositing, or fewer assets when redeeming. Chainlink is the industry-standard oracle provider, but no price feed is entirely risk-free.
+The value of your deposit at batch time is calculated using on-chain price feeds. If a price feed provides incorrect data, you could receive fewer KASH tokens than expected when depositing, or fewer assets when redeeming. Industry-standard oracle providers are used, but no price feed is entirely risk-free.
 
 ---
 
@@ -69,7 +73,7 @@ Funds deposited in KASH are not insured. There is no protocol-level insurance fu
 |------|----------|------------|
 | Smart contract bug | High | Audit planned; reentrancy guards; emergency pause |
 | Negative funding rates | Medium | Conservative LTV; strategy designed for bull cycles |
-| Aave liquidation | Medium | LTV capped at ~65%; daily monitoring |
+| Lending protocol liquidation | Medium | LTV capped at ~65%; positions naturally hedge; daily monitoring |
 | Exchange failure | Medium | Emergency withdrawal path exists |
 | Operator key compromise | Medium | 48h timelock on adapter changes; two-step ownership |
-| Oracle failure | Low | Chainlink with staleness checks |
+| Oracle failure | Low | Staleness checks on price feeds |

@@ -8,10 +8,10 @@ KASH earns yield through a **delta-neutral funding rate strategy**. This page ex
 
 When you deposit ETH into KASH:
 
-1. Your ETH is deposited into **Aave** as collateral
-2. Aave lets the protocol borrow **USDC** against that collateral
-3. The USDC is sent to **Hyperliquid**, a perpetuals exchange
-4. On Hyperliquid, the protocol opens a **short ETH position** of equivalent size
+1. Your ETH is deposited into a **lending protocol** as collateral
+2. The protocol borrows **USDC** against that collateral
+3. The USDC is sent to a **perpetuals exchange (perp DEX)**
+4. On the perp DEX, the protocol opens a **short ETH position** of equivalent size
 
 The result: the protocol holds ETH (long) and simultaneously holds a short ETH position of the same size. The two positions cancel out — no directional exposure to ETH price. This is what "delta-neutral" means.
 
@@ -28,13 +28,13 @@ NAV = Total Portfolio Value (USD) ÷ Total KASH Supply
 ```
 
 **What's in the portfolio:**
-- ETH / wBTC held in Aave
-- USDC in the Hyperliquid trading account
+- ETH / wBTC held in the lending protocol
+- USDC in the perp DEX trading account
 - Accrued funding fees and interest
 - Value of open perpetual positions
 
 **What's subtracted:**
-- USDC borrowed from Aave
+- USDC borrowed from the lending protocol
 - Interest owed on borrowings
 - Any unrealised losses on positions
 
@@ -76,6 +76,6 @@ The main driver is the **funding rate** on perpetuals markets:
 
 - In sustained bull markets, funding rates for shorts are typically positive — you earn
 - In bear markets or sideways conditions, funding rates can turn negative — you pay
-- Aave also earns interest on the ETH collateral, which adds a small base return
+- The lending protocol also earns interest on the ETH collateral, which adds a small base return
 
 Historical funding rates on ETH perpetuals have generally been positive over bull cycles, averaging roughly 10–20% APY for short positions. This is not guaranteed for future periods.
