@@ -105,6 +105,8 @@ export const kashYieldABI = [
   { inputs: [{ name: "amount", type: "uint256" }], name: "spotSellOnHyperliquid", outputs: [], stateMutability: "payable", type: "function" },
   { inputs: [{ name: "orderId", type: "bytes32" }], name: "cancelHyperliquidOrder", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [], name: "getHyperliquidSpotBalance", outputs: [{ name: "", type: "uint256" }], stateMutability: "view", type: "function" },
+  /** ETH or wBTC spot balance inside Hyperliquid (via IPerpExchange adapter account on the core mock). */
+  { inputs: [], name: "getExchangeAssetBalance", outputs: [{ name: "", type: "uint256" }], stateMutability: "view", type: "function" },
   {
     inputs: [{ name: "symbol", type: "string" }],
     name: "getHyperliquidPosition",

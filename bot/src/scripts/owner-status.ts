@@ -202,26 +202,27 @@ async function main() {
       const hl = new ethers.Contract(hlAddr, hlAbi, provider);
       hlSpotBalance = await hl.getSpotBalance(config.kashYieldAddress);
     }
-    // HL spot wBTC (and ETH): MockHyperliquid has btcBalance(address), ethBalance(address) in 18 decimals
+    // Asset spot (ETH/wBTC) on Hyperliquid: balances are keyed by the *adapter* on MockHyperliquid, not KashYield.
+    // KashYield.getExchangeAssetBalance() → IPerpExchange(adapter).getAssetBalance() → core.ethBalance(adapter).
     let hlSpotWbtc = 0n;
     let hlSpotEth = 0n;
     try {
-      const hlSpotAbi = [
-        { inputs: [{ name: '', type: 'address' }], name: 'btcBalance', outputs: [{ name: '', type: 'uint256' }], stateMutability: 'view', type: 'function' },
-        { inputs: [{ name: '', type: 'address' }], name: 'ethBalance', outputs: [{ name: '', type: 'uint256' }], stateMutability: 'view', type: 'function' },
-      ];
-      const hlContract = new ethers.Contract(hlAddr, hlSpotAbi, provider);
-      hlSpotWbtc = await hlContract.btcBalance(config.kashYieldAddress);
-      hlSpotEth = await hlContract.ethBalance(config.kashYieldAddress);
+      const assetBal = await kashYield.getExchangeAssetBalance();
+      if (isBtc) {
+        hlSpotWbtc = BigInt(assetBal.toString());
+      } else {
+        hlSpotEth = BigInt(assetBal.toString());
+      }
     } catch {
-      // Mock may not expose these
+      // Legacy: direct mock read (wrong user key if using adapter — prefer getExchangeAssetBalance)
     }
     console.log('🔄 Hyperliquid');
     console.log('  USDC in spot:    ', ethers.formatUnits(hlSpotBalance, 6), 'USDC');
     if (isBtc) {
-      console.log('  wBTC in spot:    ', ethers.formatEther(hlSpotWbtc), 'wBTC');
+      console.log('  wBTC in spot:    ', ethers.formatEther(hlSpotWbtc), 'wBTC (adapter HL account)');
     } else {
-      console.log('  ETH in spot:     ', ethers.formatEther(hlSpotEth), 'ETH');
+      console.log('  ETH in spot:     ', ethers.formatEther(hlSpotEth), 'ETH (adapter HL account)');
+      console.log('  Note: Often ~0 after spot buy if ETH was posted as perp collateral (MockHyperliquid).');
     }
     if (hlSpotBalance > 0n && usdcBorrowed > 0n) {
       console.log('  Run \'npm run owner:recover-hl-usdc\' to withdraw HL USDC and repay Aave.');

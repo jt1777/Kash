@@ -23,7 +23,7 @@ function isSingleStepMode(): boolean {
 /**
  * Batch Processor - Two-phase daily batch for KashYieldETH or KashYieldBtc.
  * Phase 1: performUpkeep() → indicative; handle NET_MINT/NET_REDEEM, updateNAV, markBatchOpsDone.
- * Phase 2: performUpkeep() → distribute; optionally handle NET_MINT_ETH_DEPLOY.
+ * Phase 2: performUpkeep() → distribute. NET_MINT_ETH_DEPLOY is informational only (no on-chain action).
  */
 export class BatchProcessor {
   private provider: ethers.Provider;
@@ -307,7 +307,7 @@ export class BatchProcessor {
 
   /**
    * Parse ProtocolInteraction events from transaction receipt.
-   * @param phase2Only If true (Phase 2 receipt), only handle NET_MINT_ETH_DEPLOY.
+   * @param phase2Only If true (Phase 2 receipt), log NET_MINT_ETH_DEPLOY only (no depositToAave).
    */
   private async handleEventsFromReceipt(receipt: ethers.TransactionReceipt, phase2Only?: boolean): Promise<void> {
     console.log('📡 Parsing ProtocolInteraction events from receipt...\n');
@@ -336,7 +336,7 @@ export class BatchProcessor {
 
           if (phase2Only) {
             if (action === 'NET_MINT_ETH_DEPLOY') {
-              await this.handleNetMintEthDeploy(amount);
+              this.logNetMintEthDeployIgnored(amount);
             }
             continue;
           }
@@ -360,13 +360,12 @@ export class BatchProcessor {
     }
   }
 
-  /** V2 Phase 2: Deploy excess mint ETH to Aave when contract emits NET_MINT_ETH_DEPLOY */
-  private async handleNetMintEthDeploy(amountWei: bigint): Promise<void> {
+  /** Phase 2: Contract may emit NET_MINT_ETH_DEPLOY; excess ETH is already deployed in Phase 1 ops — no action. */
+  private logNetMintEthDeployIgnored(amountWei: bigint): void {
     if (amountWei === 0n) return;
-    console.log(`💰 NET_MINT_ETH_DEPLOY: deploying ${ethers.formatEther(amountWei)} ETH to Aave...`);
-    const tx = await this.kashYield.depositToAave(amountWei);
-    await tx.wait();
-    console.log('   ✅ Excess mint ETH deployed to Aave\n');
+    console.log(
+      `📡 NET_MINT_ETH_DEPLOY: ${ethers.formatEther(amountWei)} ETH (informational only; skipping depositToAave)\n`
+    );
   }
 
   /**
@@ -408,8 +407,14 @@ export class BatchProcessor {
     console.log(`   Net amount: ${ethers.formatEther(amount)} USD${step !== 'full' ? ` [step=${step} only]` : ''}\n`);
 
     try {
-      if (step === 'full' || step === 'ops' || step === 'aave') await this.handleNetMintAave(amount);
-      if (step === 'full' || step === 'ops' || step === 'hl') await this.handleNetMintHyperliquid(amount);
+      let extendHl = step === 'hl';
+      if (step === 'full' || step === 'ops' || step === 'aave') {
+        const aaveMeta = await this.handleNetMintAave(amount);
+        extendHl = extendHl || aaveMeta.toDeposit > 0n || aaveMeta.borrowedUsdcDelta > 0n;
+      }
+      if (step === 'full' || step === 'ops' || step === 'hl') {
+        await this.handleNetMintHyperliquid(amount, extendHl);
+      }
       console.log('   ✅ NET_MINT complete!\n');
     } catch (error: any) {
       console.error('❌ Failed to handle NET_MINT:', error.message);
@@ -418,8 +423,11 @@ export class BatchProcessor {
     }
   }
 
-  /** NET_MINT Aave only: deposit to Aave, borrow USDC. */
-  private async handleNetMintAave(amount: bigint): Promise<void> {
+  /**
+   * NET_MINT Aave: deposit min(per-batch target, vault balance), then borrow up to LTV × **total** supplied collateral.
+   * Returns deltas so Hyperliquid can extend spot/short only when new collateral or new borrow landed.
+   */
+  private async handleNetMintAave(amount: bigint): Promise<{ toDeposit: bigint; borrowedUsdcDelta: bigint }> {
     const price = isBtc ? await this.kashYield.getBtcPrice() : await this.kashYield.getEthPrice();
     const pct = BigInt(config.strategy.aaveDepositPct);
     const depositAmountUSD = (amount * pct) / 100n;
@@ -427,35 +435,56 @@ export class BatchProcessor {
       ? (depositAmountUSD * (10n ** 8n)) / price
       : (depositAmountUSD * (10n ** 18n)) / price;
 
-    const aaveSupplied = await this.getAaveSuppliedAmount();
-    if (aaveSupplied >= depositAmount) {
-      console.log(`   [Aave] Stage 1: Already deposited to Aave`);
-    } else {
-      const toDeposit = depositAmount - aaveSupplied;
-      console.log(`   [Aave] Stage 1: Deposit ${config.strategy.aaveDepositPct}% to Aave`);
+    const kashAddr = await this.kashYield.getAddress();
+    const vaultAssetBal = isBtc
+      ? await new ethers.Contract(
+          await this.kashYield.wbtcAddress(),
+          ['function balanceOf(address) view returns (uint256)'],
+          this.provider
+        ).balanceOf(kashAddr)
+      : await this.provider.getBalance(kashAddr);
+    const toDeposit = depositAmount < vaultAssetBal ? depositAmount : vaultAssetBal;
+    if (toDeposit > 0n) {
+      console.log(
+        `   [Aave] Stage 1: Deposit ${config.strategy.aaveDepositPct}% to Aave (${isBtc ? ethers.formatUnits(toDeposit, 8) : ethers.formatEther(toDeposit)} ${isBtc ? 'wBTC' : 'ETH'})`
+      );
       const txDeposit = await this.kashYield.depositToAave(toDeposit);
       await txDeposit.wait();
+    } else {
+      console.log(
+        `   [Aave] Stage 1: No ${isBtc ? 'wBTC' : 'ETH'} in vault to deposit (target for this batch already moved or empty vault)`
+      );
     }
 
-    const ltv = BigInt(config.strategy.borrowLtvPct);
-    const borrowAmountUSD = (depositAmountUSD * ltv) / 100n;
-    const borrowUsdcUnits = borrowAmountUSD / (10n ** 12n);
-    console.log(`   [Aave] Stage 2: Borrow ${config.strategy.borrowLtvPct}% as USDC`);
-    const aaveDebt = await this.getAaveBorrowedAmount();
-    if (aaveDebt < borrowUsdcUnits) {
-      await this.borrowFromAave(TOKEN_ADDRESSES.AAVE_USDC, borrowUsdcUnits - aaveDebt);
+    const targetBorrowUsdc = await this.getTargetBorrowUsdcUnits(price);
+    console.log(`   [Aave] Stage 2: Borrow up to ${config.strategy.borrowLtvPct}% of total supplied collateral (target ${targetBorrowUsdc} USDC units)`);
+    const debtBefore = await this.getAaveBorrowedAmount();
+    if (debtBefore < targetBorrowUsdc) {
+      await this.borrowFromAave(TOKEN_ADDRESSES.AAVE_USDC, targetBorrowUsdc - debtBefore);
     }
+    const debtAfter = await this.getAaveBorrowedAmount();
+    return { toDeposit, borrowedUsdcDelta: debtAfter - debtBefore };
   }
 
-  /** NET_MINT Hyperliquid only: deposit USDC to HL, spot buy, open short. Expects USDC in contract (e.g. after Aave borrow). */
-  private async handleNetMintHyperliquid(amount: bigint): Promise<void> {
-    const price = isBtc ? await this.kashYield.getBtcPrice() : await this.kashYield.getEthPrice();
-    const pct = BigInt(config.strategy.aaveDepositPct);
-    const depositAmountUSD = (amount * pct) / 100n;
+  /** Max USDC debt (6-dec units) = LTV × USD value of total Aave-supplied collateral. */
+  private async getTargetBorrowUsdcUnits(price: bigint): Promise<bigint> {
+    const supplied = await this.getAaveSuppliedAmount();
+    if (supplied === 0n) return 0n;
     const ltv = BigInt(config.strategy.borrowLtvPct);
-    const borrowAmountUSD = (depositAmountUSD * ltv) / 100n;
-    const borrowUsdcUnits = borrowAmountUSD / (10n ** 12n);
+    const suppliedUSD18 = isBtc
+      ? (supplied * price) / (10n ** 8n)
+      : (supplied * price) / (10n ** 18n);
+    const borrowUSD18 = (suppliedUSD18 * ltv) / 100n;
+    return borrowUSD18 / (10n ** 12n);
+  }
 
+  /**
+   * NET_MINT Hyperliquid: move **this run's** USDC to HL, spot-buy asset, open or **add to** short
+   * (MockHyperliquid aggregates `openPerpPosition`). Skips short extension when `extendShort` is false
+   * and a short already exists (idempotent re-run); always opens if no short (recovery).
+   */
+  private async handleNetMintHyperliquid(amount: bigint, extendShort: boolean): Promise<void> {
+    const price = isBtc ? await this.kashYield.getBtcPrice() : await this.kashYield.getEthPrice();
     const contractUsdc = await this.getContractUsdcBalance();
     if (contractUsdc > 0n) {
       console.log(`   [HL] Stage 1: Deposit ${ethers.formatUnits(contractUsdc, 6)} USDC to Hyperliquid`);
@@ -463,19 +492,23 @@ export class BatchProcessor {
     }
 
     console.log(`   [HL] Stage 2: Spot buy ${isBtc ? 'wBTC' : 'ETH'} on Hyperliquid`);
-    const hlSpot = await this.getHyperliquidSpotBalance();
-    if (hlSpot >= borrowUsdcUnits) {
-      const txSpot = await this.kashYield.spotBuyOnHyperliquid(borrowUsdcUnits);
+    if (contractUsdc > 0n) {
+      const txSpot = await this.kashYield.spotBuyOnHyperliquid(contractUsdc);
       await txSpot.wait();
     }
 
     const shortSymbol = isBtc ? 'BTC' : 'ETH';
     const hasShort = await this.hasHyperliquidShort(shortSymbol);
-    if (!hasShort) {
+    const shouldAddOrOpen = extendShort || !hasShort;
+    if (shouldAddOrOpen) {
       const leverageScaled = BigInt(Math.round(config.strategy.shortLeverage * 100));
       const shortSizeUSD = (amount * leverageScaled) / 100n;
-      console.log(`   [HL] Stage 3: Open ${config.strategy.shortLeverage}x ${shortSymbol} short`);
+      console.log(
+        `   [HL] Stage 3: ${hasShort ? 'Add to' : 'Open'} ${config.strategy.shortLeverage}x ${shortSymbol} short (incremental notional)`
+      );
       await this.openShortOnHyperliquid(shortSizeUSD, price, shortSymbol);
+    } else {
+      console.log(`   [HL] Stage 3: Skip short (position already open, no new collateral or borrow this run)`);
     }
   }
 
@@ -834,8 +867,6 @@ export class BatchProcessor {
       }
       const wethAddr = await this.kashYield.wethAddress?.().catch(() => null);
       if (wethAddr) {
-        // Try WETH address first (works with updated MockAaveV3).
-        // Fall back to address(0) for older MockAaveV3 that only accepts address(0) for the ETH/WETH bucket.
         const bal = await aavePool.getATokenBalance(wethAddr, addr).catch(() => null);
         if (bal !== null) return bal;
       }
