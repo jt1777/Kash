@@ -62,6 +62,7 @@ export const kashYieldABI = [
   { inputs: [{ name: "batchCycle", type: "uint256" }], name: "batchMintUsers", outputs: [{ name: "", type: "address[]" }], stateMutability: "view", type: "function" },
   { inputs: [{ name: "batchCycle", type: "uint256" }], name: "batchRedeemUsers", outputs: [{ name: "", type: "address[]" }], stateMutability: "view", type: "function" },
   { inputs: [{ name: "batchCycle", type: "uint256" }], name: "batchPhase", outputs: [{ name: "", type: "uint8" }], stateMutability: "view", type: "function" },
+  { inputs: [{ name: "batchCycle", type: "uint256" }], name: "batchTotalRedeemKash", outputs: [{ name: "", type: "uint256" }], stateMutability: "view", type: "function" },
   { inputs: [], name: "isProcessingWindow", outputs: [{ name: "", type: "bool" }], stateMutability: "view", type: "function" },
   { inputs: [], name: "isUserWindow", outputs: [{ name: "", type: "bool" }], stateMutability: "view", type: "function" },
   { inputs: [], name: "paused", outputs: [{ name: "", type: "bool" }], stateMutability: "view", type: "function" },
@@ -93,6 +94,9 @@ export const kashYieldABI = [
   { inputs: [{ name: "asset", type: "address" }, { name: "amount", type: "uint256" }], name: "borrowFromAave", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "asset", type: "address" }, { name: "amount", type: "uint256" }], name: "repayToAave", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "amount", type: "uint256" }], name: "addCollateralToAave", outputs: [], stateMutability: "nonpayable", type: "function" },
+  { inputs: [], name: "spotDexAddress", outputs: [{ name: "", type: "address" }], stateMutability: "view", type: "function" },
+  { inputs: [{ name: "amount", type: "uint256" }], name: "swapForUsdc", outputs: [], stateMutability: "nonpayable", type: "function" },
+  { inputs: [{ name: "usdcAmount", type: "uint256" }], name: "swapFromUsdc", outputs: [], stateMutability: "nonpayable", type: "function" },
   // Hyperliquid
   { inputs: [{ name: "_hyperliquidAddress", type: "address" }], name: "setHyperliquid", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "amount", type: "uint256" }], name: "depositToHyperliquid", outputs: [], stateMutability: "nonpayable", type: "function" },
@@ -102,7 +106,9 @@ export const kashYieldABI = [
   { inputs: [{ name: "symbol", type: "string" }], name: "closeShort", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "symbol", type: "string" }, { name: "closeSize", type: "uint256" }], name: "closeShort", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "usdcAmount", type: "uint256" }], name: "spotBuyOnHyperliquid", outputs: [], stateMutability: "nonpayable", type: "function" },
-  { inputs: [{ name: "amount", type: "uint256" }], name: "spotSellOnHyperliquid", outputs: [], stateMutability: "payable", type: "function" },
+  { inputs: [{ name: "amount", type: "uint256" }], name: "spotSellOnHyperliquid", outputs: [], stateMutability: "nonpayable", type: "function" },
+  { inputs: [{ name: "amount", type: "uint256" }], name: "withdrawBtcFromHyperliquid", outputs: [], stateMutability: "nonpayable", type: "function" },
+  { inputs: [{ name: "amount", type: "uint256" }], name: "withdrawEthFromHyperliquid", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "orderId", type: "bytes32" }], name: "cancelHyperliquidOrder", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [], name: "getHyperliquidSpotBalance", outputs: [{ name: "", type: "uint256" }], stateMutability: "view", type: "function" },
   /** ETH or wBTC spot balance inside Hyperliquid (via IPerpExchange adapter account on the core mock). */

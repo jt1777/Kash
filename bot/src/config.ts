@@ -127,6 +127,20 @@ export const config = {
   })(),
   /** When true, allow running steps on an already-processed batch (e.g. --step=ops to fix HL/Aave state). Use --allow-processed or ALLOW_PROCESSED_BATCH=true. Only ops (and hl/aave) are allowed on processed batches. */
   allowProcessedBatch: process.argv.includes('--allow-processed') || process.env.ALLOW_PROCESSED_BATCH === 'true',
+  /**
+   * Pre-computed NAV to use when running individual steps (--step=ops or --step=nav).
+   * Normally the full batch run computes this before ops and threads it through automatically.
+   * When stepping through manually, pass the value logged as "NAV locked for this batch" so
+   * the withdrawal sizing and updateNAV call use the pre-ops snapshot rather than a
+   * post-ops recalculation.  Use --locked-nav=<18-decimal bigint> or LOCKED_NAV=<value>.
+   * Example: --locked-nav=1050000000000000000  (= $1.05 per KASH, 18 decimals)
+   */
+  lockedNav: (() => {
+    const arg = process.argv.find((a) => a.startsWith('--locked-nav='));
+    const raw = arg ? arg.split('=')[1] : process.env.LOCKED_NAV;
+    if (!raw || raw === '') return null;
+    try { return BigInt(raw); } catch { return null; }
+  })(),
 
   // Strategy allocation (NET_MINT / NET_REDEEM)
   // Override via .env: AAVE_DEPOSIT_PCT=100, BORROW_LTV_PCT=70, SHORT_LEVERAGE=1.7

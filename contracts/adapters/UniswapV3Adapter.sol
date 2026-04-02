@@ -30,15 +30,20 @@ interface IWETH9 is IERC20 {
  * @title UniswapV3Adapter
  * @notice ISpotDex adapter for Uniswap V3. Supports wBTC ↔ USDC and ETH ↔ USDC swaps.
  *
- * Used by KashYieldBtc/ETH to cover residual Aave debt when the perp position's
- * P&L doesn't fully repay the USDC borrow (typically in rising-price scenarios).
+ * Used by KashYieldBtc/ETH to:
+ *   - Swap ETH/wBTC → USDC when perp P&L doesn't fully cover the Aave debt (rising price)
+ *   - Swap USDC → ETH/wBTC when short profits exceed Aave debt and extra collateral is needed (falling price)
  *
- * The fee tier for each pool is configurable per token-pair (default 0.3% = 3000).
+ * The fee tier per pool is configurable (default 0.05% = 500), which matches the main
+ * WETH/USDC and wBTC/USDC pools on Arbitrum. Override per pair if needed.
  *
- * TESTNET / MAINNET: Uniswap V3 is deployed on Arbitrum with the same ISwapRouter
- * interface. Only pool fee tiers and token addresses differ between networks.
- * Arbitrum Mainnet SwapRouter: 0xE592427A0AEce92De3Edee1F18E0157C05861564
- * Arbitrum Sepolia SwapRouter: 0x101F443B4d1b059569D643917553c771E1b9663E
+ * Deployment addresses (SwapRouter02 — recommended, backward-compatible with ISwapRouter):
+ *   Arbitrum One (mainnet): 0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45
+ *   Arbitrum Sepolia:       0x101F443B4d1b059569D643917553c771E1b9663E
+ *
+ * WETH addresses:
+ *   Arbitrum One:    0x82aF49447D8a07e3bd95BD0d56f35241523fBab1
+ *   Arbitrum Sepolia: 0x980B62Da83eFf3D4576C647993b0c1D7faf17c73
  */
 contract UniswapV3Adapter is ISpotDex {
     using SafeERC20 for IERC20;
@@ -49,8 +54,9 @@ contract UniswapV3Adapter is ISpotDex {
     address public owner;
     address public pendingOwner;
 
-    /// @notice Default fee tier (basis points * 100). 3000 = 0.3%, 500 = 0.05%, 10000 = 1%.
-    uint24 public defaultFeeTier = 3000;
+    /// @notice Default fee tier (basis points * 100). 500 = 0.05%, 3000 = 0.3%, 10000 = 1%.
+    /// 0.05% is the primary fee tier for WETH/USDC and wBTC/USDC on Arbitrum mainnet.
+    uint24 public defaultFeeTier = 500;
     /// @notice Override fee tier per tokenIn+tokenOut pair (0 = use defaultFeeTier).
     mapping(address => mapping(address => uint24)) public feeTierOverride;
 

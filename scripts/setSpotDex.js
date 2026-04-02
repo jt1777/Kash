@@ -1,12 +1,17 @@
 /**
  * Call setSpotDex on KashYieldETH or KashYieldBtc. Owner only.
  *
- * Usage:
- *   KASH_YIELD_ETH_ADDRESS=0x... MOCK_SPOT_DEX_ADDRESS=0x... \
+ * Usage (mainnet — UniswapV3Adapter):
+ *   KASH_YIELD_ETH_ADDRESS=0x... SPOT_DEX_ADDRESS=0x... \
+ *   npx hardhat run scripts/setSpotDex.js --network arbitrumOne
+ *
+ * Usage (testnet — MockSpotDex):
+ *   KASH_YIELD_ETH_ADDRESS=0x... SPOT_DEX_ADDRESS=0x... \
  *   npx hardhat run scripts/setSpotDex.js --network arbitrumSepolia
  *
- *   BTC: KASH_YIELD_BTC_ADDRESS=0x... MOCK_SPOT_DEX_ADDRESS=0x... PRODUCT=btc \
- *   npx hardhat run scripts/setSpotDex.js --network arbitrumSepolia
+ * BTC product: add PRODUCT=btc and use KASH_YIELD_BTC_ADDRESS instead.
+ *
+ * Env var aliases accepted: SPOT_DEX_ADDRESS, UNISWAP_ADAPTER_ADDRESS, MOCK_SPOT_DEX_ADDRESS
  */
 require("dotenv").config();
 const hre = require("hardhat");
@@ -15,7 +20,10 @@ async function main() {
   const productEnv = (process.env.PRODUCT || "").toLowerCase();
   const kashYieldBtcAddress = process.env.KASH_YIELD_BTC_ADDRESS;
   const kashYieldEthAddress = process.env.KASH_YIELD_ETH_ADDRESS || process.env.KASH_YIELD_ADDRESS;
-  const spotDexAddress = process.env.MOCK_SPOT_DEX_ADDRESS;
+  const spotDexAddress =
+    process.env.SPOT_DEX_ADDRESS ||
+    process.env.UNISWAP_ADAPTER_ADDRESS ||
+    process.env.MOCK_SPOT_DEX_ADDRESS;
 
   const isBtc =
     productEnv === "btc" ||
@@ -23,7 +31,7 @@ async function main() {
   const kashYieldAddress = isBtc ? kashYieldBtcAddress : kashYieldEthAddress;
 
   if (!spotDexAddress || !hre.ethers.isAddress(spotDexAddress)) {
-    throw new Error("Set MOCK_SPOT_DEX_ADDRESS in .env");
+    throw new Error("Set SPOT_DEX_ADDRESS (or UNISWAP_ADAPTER_ADDRESS / MOCK_SPOT_DEX_ADDRESS) in .env");
   }
   if (!kashYieldAddress || !hre.ethers.isAddress(kashYieldAddress)) {
     throw new Error("Set KASH_YIELD_ETH_ADDRESS (ETH) or KASH_YIELD_BTC_ADDRESS (BTC) in .env");

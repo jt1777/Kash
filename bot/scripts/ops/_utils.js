@@ -1,0 +1,251 @@
+/**
+ * Shared utilities for KashYield ops scripts.
+ *
+ * Reads product config from bot/.env (or env vars already set).
+ * Run scripts from the repo root:
+ *   PRODUCT=eth npx hardhat run bot/scripts/ops/01-deposit-to-aave.js --network arbitrumSepolia
+ */
+require("dotenv").config({ path: "./bot/.env" });
+const { ethers } = require("hardhat");
+
+// ── Product config ────────────────────────────────────────────────────────────
+const PRODUCT  = (process.env.PRODUCT || "eth").toLowerCase();
+const IS_BTC   = PRODUCT === "btc";
+const DECIMALS = IS_BTC ? 8 : 18;
+const ASSET_SYMBOL = IS_BTC ? "wBTC" : "ETH";
+const USDC_DECIMALS = 6;
+
+// ── ABI ───────────────────────────────────────────────────────────────────────
+const KASH_ABI = [
+  // Views
+  "function owner() view returns (address)",
+  "function wethAddress() view returns (address)",
+  "function wbtcAddress() view returns (address)",
+  "function usdcAddress() view returns (address)",
+  "function aavePoolAddress() view returns (address)",
+  "function hyperliquidAddress() view returns (address)",
+  "function spotDexAddress() view returns (address)",
+  "function activePerpExchange() view returns (string)",
+  "function getCurrentBatchCycle() view returns (uint256)",
+  "function batchPhase(uint256) view returns (uint8)",
+  "function batchTotalRedeemKash(uint256) view returns (uint256)",
+  "function kashTokenEth() view returns (address)",
+  "function kashTokenBtc() view returns (address)",
+  "function currentNAV() view returns (uint256)",
+  "function feeBps() view returns (uint256)",
+  "function getEthPrice() view returns (uint256)",
+  "function getBtcPrice() view returns (uint256)",
+  "function getHyperliquidSpotBalance() view returns (uint256)",
+  "function getExchangeAssetBalance() view returns (uint256)",
+  "function getHyperliquidPosition(string) view returns (uint256 size, uint256 collateral, uint256 entryPrice, bool isLong, bool isActive)",
+  // Aave
+  "function depositToAave(uint256 amount) nonpayable",
+  "function withdrawFromAave(uint256 amount) nonpayable",
+  "function borrowFromAave(address asset, uint256 amount) nonpayable",
+  "function repayToAave(address asset, uint256 amount) nonpayable",
+  // Perp DEX (USDC-collateral path — HL)
+  "function depositToHyperliquid(uint256 amount) nonpayable",
+  "function withdrawFromHyperliquid(uint256 amount) nonpayable",
+  "function addCollateralToHyperliquid(uint256 amount) nonpayable",
+  "function spotBuyOnHyperliquid(uint256 usdcAmount) nonpayable",
+  "function spotSellOnHyperliquid(uint256 amount) nonpayable",
+  "function openShort(string symbol, uint256 size) nonpayable",
+  "function closeShort(string symbol) nonpayable",
+  "function closeShort(string symbol, uint256 closeSize) nonpayable",
+  // Perp DEX (asset-collateral path — Aster or other)
+  "function withdrawEthFromHyperliquid(uint256 amount) nonpayable",
+  "function withdrawBtcFromHyperliquid(uint256 amount) nonpayable",
+  // Spot DEX (Uniswap / MockSpotDex)
+  "function swapForUsdc(uint256 amount) nonpayable",     // ETH/wBTC → USDC
+  "function swapFromUsdc(uint256 usdcAmount) nonpayable", // USDC → ETH/wBTC
+];
+
+// Minimal Aave pool ABI (covers both MockAaveV3 and real Aave V3)
+const AAVE_ABI = [
+  "function suppliedAmounts(address user) view returns (uint256)",
+  "function borrowedAmounts(address user) view returns (uint256)",
+  // Real Aave V3 fallback
+  "function getUserAccountData(address user) view returns (uint256 totalCollateralBase, uint256 totalDebtBase, uint256 availableBorrowsBase, uint256 currentLiquidationThreshold, uint256 ltv, uint256 healthFactor)",
+];
+
+const ERC20_ABI = [
+  "function balanceOf(address) view returns (uint256)",
+  "function decimals() view returns (uint8)",
+];
+
+// ── Contract helpers ──────────────────────────────────────────────────────────
+
+async function getContract() {
+  const address = IS_BTC
+    ? (process.env.KASH_YIELD_BTC_ADDRESS || process.env.KASH_YIELD_ADDRESS)
+    : (process.env.KASH_YIELD_ETH_ADDRESS || process.env.KASH_YIELD_ADDRESS);
+  if (!address || !ethers.isAddress(address)) {
+    throw new Error(
+      `Set KASH_YIELD_${IS_BTC ? "BTC" : "ETH"}_ADDRESS in bot/.env (PRODUCT=${PRODUCT})`
+    );
+  }
+  const [signer] = await ethers.getSigners();
+  return new ethers.Contract(address, KASH_ABI, signer);
+}
+
+async function getSigner() {
+  const [signer] = await ethers.getSigners();
+  return signer;
+}
+
+// ── State snapshot ────────────────────────────────────────────────────────────
+
+async function getState(contract) {
+  const provider = ethers.provider;
+  const addr     = await contract.getAddress();
+
+  const usdcAddr = await contract.usdcAddress();
+  const aaveAddr = await contract.aavePoolAddress();
+  const price    = IS_BTC
+    ? BigInt((await contract.getBtcPrice()).toString())
+    : BigInt((await contract.getEthPrice()).toString());
+
+  // Contract asset balance
+  let contractAsset = 0n;
+  if (IS_BTC) {
+    const wbtcAddr = await contract.wbtcAddress();
+    const wbtc = new ethers.Contract(wbtcAddr, ERC20_ABI, provider);
+    contractAsset = BigInt((await wbtc.balanceOf(addr)).toString());
+  } else {
+    contractAsset = BigInt((await provider.getBalance(addr)).toString());
+  }
+
+  // Contract USDC balance
+  const usdc = new ethers.Contract(usdcAddr, ERC20_ABI, provider);
+  const contractUsdc = BigInt((await usdc.balanceOf(addr)).toString());
+
+  // Aave state
+  let aaveSupplied = 0n, aaveDebt = 0n;
+  if (aaveAddr && aaveAddr !== ethers.ZeroAddress) {
+    try {
+      const aave = new ethers.Contract(aaveAddr, AAVE_ABI, provider);
+      aaveSupplied = BigInt((await aave.suppliedAmounts(addr)).toString());
+      aaveDebt     = BigInt((await aave.borrowedAmounts(addr)).toString());
+    } catch {
+      // Real Aave V3 — not needed for testnet scripts
+    }
+  }
+
+  // Perp DEX state
+  const perpUsdc  = BigInt((await contract.getHyperliquidSpotBalance()).toString());
+  const perpAsset = BigInt((await contract.getExchangeAssetBalance()).toString());
+  const [posSize, , posEntry, , posActive] = await contract.getHyperliquidPosition(
+    IS_BTC ? "BTC" : "ETH"
+  );
+  const shortSize  = BigInt(posSize.toString());
+  const entryPrice = BigInt(posEntry.toString());
+
+  // Unrealized P&L (short position: profit when price falls)
+  let perpPnlUsdc = 0n;
+  if (posActive && shortSize > 0n && entryPrice > 0n) {
+    const priceDiff18 = entryPrice > price ? entryPrice - price : 0n;
+    perpPnlUsdc = (shortSize * priceDiff18) / BigInt(1e18) / BigInt(1e12);
+  }
+
+  // Batch info
+  const batchCycle = BigInt((await contract.getCurrentBatchCycle()).toString());
+  const batchPhase = Number(await contract.batchPhase(batchCycle));
+
+  return {
+    addr, price, contractAsset, contractUsdc,
+    aaveSupplied, aaveDebt,
+    perpUsdc, perpAsset,
+    shortSize, entryPrice, posActive,
+    perpPnlUsdc, batchCycle, batchPhase,
+  };
+}
+
+function displayState(s, label = "State") {
+  const fmt  = (v) => ethers.formatUnits(v, DECIMALS);
+  const fmtU = (v) => ethers.formatUnits(v, USDC_DECIMALS);
+  const fmtP = (v) => ethers.formatUnits(v, 18);
+  const line = "─".repeat(56);
+
+  console.log(`\n${label}`);
+  console.log(line);
+  console.log(`  Contract ${ASSET_SYMBOL} balance : ${fmt(s.contractAsset)} ${ASSET_SYMBOL}`);
+  console.log(`  Contract USDC balance : ${fmtU(s.contractUsdc)} USDC`);
+  console.log(`  ${IS_BTC ? "BTC" : "ETH"} price           : $${fmtP(s.price)}`);
+  console.log(`  Aave supplied        : ${fmt(s.aaveSupplied)} ${ASSET_SYMBOL}`);
+  console.log(`  Aave borrowed        : ${fmtU(s.aaveDebt)} USDC`);
+  console.log(`  Perp USDC balance    : ${fmtU(s.perpUsdc)} USDC`);
+  console.log(`  Perp ${ASSET_SYMBOL} balance  : ${fmt(s.perpAsset)} ${ASSET_SYMBOL}`);
+  if (s.posActive) {
+    console.log(`  Short size           : ${fmtP(s.shortSize)} ${IS_BTC ? "BTC" : "ETH"}`);
+    console.log(`  Short entry price    : $${fmtP(s.entryPrice)}`);
+    console.log(`  Short est. P&L       : +${fmtU(s.perpPnlUsdc)} USDC (if ETH fell)`);
+  } else {
+    console.log(`  Short                : no active position`);
+  }
+  console.log(`  Batch cycle / phase  : ${s.batchCycle} / ${s.batchPhase}`);
+  console.log(line);
+}
+
+// ── Redeem fraction ───────────────────────────────────────────────────────────
+
+/**
+ * Compute the fraction of the total KASH supply being redeemed in the given batch cycle.
+ * Returns a value between 0 and 1e18 (1e18 = 100%).
+ * Also returns the human-readable percentage string for logging.
+ */
+async function getRedeemFraction(contract, batchCycle) {
+  const provider = ethers.provider;
+  const kashAddrFn = IS_BTC ? contract.kashTokenBtc : contract.kashTokenEth;
+  const kashAddr   = await kashAddrFn.call(contract).catch(() => null);
+  if (!kashAddr || kashAddr === ethers.ZeroAddress) {
+    throw new Error("KASH token address not set on contract.");
+  }
+  const kashToken    = new ethers.Contract(kashAddr, ["function totalSupply() view returns (uint256)"], provider);
+  const totalSupply  = BigInt((await kashToken.totalSupply()).toString());
+  const redeemKash   = BigInt((await contract.batchTotalRedeemKash(batchCycle)).toString());
+
+  if (totalSupply === 0n) return { fraction18: BigInt(1e18), pct: "100.00" };
+  if (redeemKash  === 0n) return { fraction18: 0n, pct: "0.00" };
+
+  const fraction18 = redeemKash * BigInt(1e18) / totalSupply;
+  const capped     = fraction18 > BigInt(1e18) ? BigInt(1e18) : fraction18;
+  const pct        = (Number(capped) / 1e16).toFixed(2);
+  return { fraction18: capped, pct, redeemKash, totalSupply };
+}
+
+// ── Amount helpers ────────────────────────────────────────────────────────────
+
+function parseAsset(str) {
+  return ethers.parseUnits(str, DECIMALS);
+}
+function parseUsdc(str) {
+  return ethers.parseUnits(str, USDC_DECIMALS);
+}
+function fmtAsset(v) {
+  return `${ethers.formatUnits(v, DECIMALS)} ${ASSET_SYMBOL}`;
+}
+function fmtUsdc(v) {
+  return `${ethers.formatUnits(v, USDC_DECIMALS)} USDC`;
+}
+function fmtUsd18(v) {
+  return `$${ethers.formatEther(v)}`;
+}
+
+// ── Transaction helper ────────────────────────────────────────────────────────
+
+async function exec(label, txPromise) {
+  console.log(`\n▶  ${label}`);
+  const tx = await txPromise;
+  process.stdout.write("   Waiting for confirmation...");
+  const receipt = await tx.wait();
+  console.log(` ✅  (block ${receipt.blockNumber}, gas ${receipt.gasUsed})`);
+  return receipt;
+}
+
+module.exports = {
+  PRODUCT, IS_BTC, DECIMALS, ASSET_SYMBOL, USDC_DECIMALS,
+  KASH_ABI, AAVE_ABI, ERC20_ABI,
+  getContract, getSigner, getState, displayState,
+  getRedeemFraction,
+  parseAsset, parseUsdc, fmtAsset, fmtUsdc, fmtUsd18, exec,
+};

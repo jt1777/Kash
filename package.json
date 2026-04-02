@@ -8,12 +8,12 @@
     "test:advanced": "npx hardhat test test/advanced-scenarios.e2e.test.js"
   },
   "devDependencies": {
-    "@nomicfoundation/hardhat-toolbox": "^6.0.0",
-    "hardhat": "^2.25.0"
+    "@nomicfoundation/hardhat-toolbox": "6.0.0",
+    "hardhat": "2.25.0"
   },
   "dependencies": {
-    "@chainlink/contracts": "^1.5.0",
-    "@openzeppelin/contracts": "^5.3.0",
-    "dotenv": "^16.3.1"
+    "@chainlink/contracts": "1.5.0",
+    "@openzeppelin/contracts": "5.3.0",
+    "dotenv": "16.6.1"
   }
 }

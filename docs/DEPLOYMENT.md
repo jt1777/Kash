@@ -607,3 +607,361 @@ npx hardhat run scripts/getNAV.js --network arbitrumSepolia
 - Audit contracts before mainnet.
 - Test on testnet for at least one week.
 - Consider a professional security audit before mainnet.
+
+---
+
+# Mainnet Deployment (Arbitrum One)
+
+## ⚠️ Pre-launch requirements
+
+**Two adapter contracts must be built before mainnet deployment:**
+
+1. **`UniswapV3Adapter`** — wraps Uniswap V3 `SwapRouter02` to implement `ISpotDex`. Replaces `MockSpotDex`. See [Architecture note: Uniswap adapter](#architecture-note-uniswap-v3-adapter) below.
+
+2. **`RealHyperliquidAdapter`** — handles the real HL bridge for deposits/withdrawals and records trading state for the contract. See [Architecture note: Hyperliquid on mainnet](#architecture-note-hyperliquid-on-mainnet) below.
+
+**Pre-launch checklist:**
+- [ ] Smart contract security audit completed
+- [ ] `UniswapV3Adapter` built and tested
+- [ ] `RealHyperliquidAdapter` built and tested
+- [ ] Bot operated for ≥ 1 week on Arbitrum Sepolia without errors
+- [ ] `exchangeSwitchDelay` set to `172800` (48 hours) — never `0` on mainnet
+- [ ] Deployer wallet is a hardware wallet or multisig, not a hot wallet
+- [ ] Bot wallet is separate from the deployer/owner wallet
+- [ ] All contracts verified on Arbiscan
+
+---
+
+## Protocol contract addresses (Arbitrum One)
+
+No mock contracts. All addresses below are the canonical, live protocol contracts.
+
+### Tokens
+
+| Token | Address |
+|-------|---------|
+| WETH | `0x82aF49447D8a07e3bd95BD0d56f35241523fBab1` |
+| USDC (native) | `0xaf88d065e77c8cC2239327C5EDb3A432268e5831` |
+| wBTC | `0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f` |
+
+> Use **native USDC** (`0xaf88...`), not bridged USDC.e (`0xff970a...`). Aave and Hyperliquid both use native USDC on Arbitrum.
+
+### Aave V3
+
+| Contract | Address |
+|----------|---------|
+| Pool | `0x794a61358D6845594F94dc1DB02A252b5b4814aD` |
+| WrappedTokenGatewayV3 | `0x5283BEcEd7ADF6D003225C13896E536f2D4264FF` |
+
+### Chainlink price feeds
+
+| Feed | Address |
+|------|---------|
+| ETH / USD | `0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612` |
+| BTC / USD | `0x6ce185860a4963106506C203335A2910413708e9` |
+
+### Uniswap V3
+
+| Contract | Address |
+|----------|---------|
+| SwapRouter02 | `0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45` |
+| UniswapV3Factory | `0x1F98431c8aD98523631AE4a59f267346ea31F984` |
+| QuoterV2 | `0x61fFE014bA17989E743c5F6cB21bF9697530B21e` |
+
+Key pools (0.05% fee tier):
+- WETH/USDC: look up via `factory.getPool(WETH, USDC, 500)`
+- wBTC/USDC: look up via `factory.getPool(wBTC, USDC, 500)`
+
+### Hyperliquid
+
+| Contract | Address |
+|----------|---------|
+| Bridge 2 (Arbitrum → HL) | `0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7` |
+
+USDC is the only token the bridge accepts. Minimum deposit: 5 USDC.
+
+---
+
+## Architecture note: Hyperliquid on mainnet
+
+This is the most important difference from the testnet setup.
+
+**On testnet**, `MockHyperliquid` is a smart contract on Arbitrum. Every action — deposit, spot buy, open short, close short, spot sell, withdraw — is an Arbitrum transaction that settles synchronously.
+
+**On mainnet**, real Hyperliquid is its own L1 chain. The flow is:
+
+| Action | How it works |
+|--------|-------------|
+| Deposit USDC | On-chain: send USDC to bridge `0x2Df1c51E...` on Arbitrum |
+| Spot buy ETH | **Off-chain**: call HL API (not an Arbitrum tx) |
+| Open/close short | **Off-chain**: call HL API (not an Arbitrum tx) |
+| Sell spot ETH → USDC | **Off-chain**: call HL API (not an Arbitrum tx) |
+| Withdraw USDC | Off-chain: sign withdrawal on HL, validators settle back to Arbitrum (~3–4 min) |
+
+The `RealHyperliquidAdapter` contract therefore only handles deposits (bridge call) and withdrawal receipts. The trading operations (steps 04–07 in the ops scripts) become **pure bot API calls** that do not involve the KashYield contract at all.
+
+This means the ops scripts for HL trading on mainnet will not call `contract.spotBuyOnHyperliquid()` etc. — they will call the HL REST API directly and update local state tracking.
+
+**USDC collateral is confirmed.** HL only accepts USDC — no ETH or wBTC can be deposited as collateral. This is already reflected in the ops scripts:
+- Script `03` deposits USDC to HL ✅
+- Script `04` buys spot ETH/wBTC using USDC on HL ✅
+- Script `07` sells spot ETH/wBTC back to USDC on HL ✅
+- Script `08` withdraws USDC from HL (never ETH/wBTC) ✅
+- Scripts `03b` and `12` are exclusively for asset-collateral DEXs (Aster), not HL ✅
+
+---
+
+## Architecture note: Uniswap V3 adapter
+
+The `UniswapV3Adapter` must implement `ISpotDex` and wrap Uniswap V3's `SwapRouter02`:
+
+```solidity
+interface ISpotDex {
+    function swapExactIn(address tokenIn, address tokenOut, uint256 amountIn, uint256 minAmountOut)
+        external returns (uint256 amountOut);
+}
+```
+
+Key implementation points:
+- Use `SwapRouter02.exactInputSingle(...)` with `fee = 500` (0.05%) for WETH/USDC and wBTC/USDC
+- Set reasonable `amountOutMinimum` (e.g. 0.5% slippage) — never pass `0` on mainnet
+- The `KashYieldETH` contract calls `swapForUsdc(ethAmount)` → adapter receives WETH, swaps to USDC
+- The `KashYieldETH` contract calls `swapFromUsdc(usdcAmount)` → adapter receives USDC, swaps to WETH
+- WETH approval must be handled: call `WETH.approve(uniswapRouter, amount)` before each swap (or use `permit2`)
+
+---
+
+## Mainnet environment setup
+
+### Root `.env` (mainnet)
+
+```env
+PRIVATE_KEY=your_hardware_wallet_deployer_key
+
+ARBITRUM_MAINNET_RPC_URL=https://arb1.g.alchemy.com/v2/YOUR_API_KEY
+ARBISCAN_API_KEY=your_arbiscan_api_key
+
+# No mock contracts — use real addresses
+WETH_ADDRESS=0x82aF49447D8a07e3bd95BD0d56f35241523fBab1
+USDC_ADDRESS=0xaf88d065e77c8cC2239327C5EDb3A432268e5831
+WBTC_ADDRESS=0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f
+AAVE_POOL_ADDRESS=0x794a61358D6845594F94dc1DB02A252b5b4814aD
+UNISWAP_ROUTER_ADDRESS=0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45
+ETH_ORACLE_ADDRESS=0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612
+BTC_ORACLE_ADDRESS=0x6ce185860a4963106506C203335A2910413708e9
+HL_BRIDGE_ADDRESS=0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7
+
+# Filled in as you deploy:
+UNISWAP_ADAPTER_ADDRESS=<UniswapV3Adapter>
+HL_ADAPTER_ADDRESS_ETH=<RealHyperliquidAdapter ETH>
+HL_ADAPTER_ADDRESS_BTC=<RealHyperliquidAdapter BTC>
+KASH_YIELD_ETH_ADDRESS=<KashYieldETH>
+KASH_TOKEN_ETH=<KashTokenEth>
+```
+
+### `bot/.env` (mainnet)
+
+```env
+PRIVATE_KEY=your_bot_operator_key   # separate key from deployer
+
+ARBITRUM_MAINNET_RPC_URL=https://arb1.g.alchemy.com/v2/YOUR_API_KEY
+
+PRODUCT=eth
+KASH_YIELD_ETH_ADDRESS=<KashYieldETH>
+KASH_TOKEN_ETH=<KashTokenEth>
+
+AAVE_POOL_ADDRESS=0x794a61358D6845594F94dc1DB02A252b5b4814aD
+AAVE_USDC_ADDRESS=0xaf88d065e77c8cC2239327C5EDb3A432268e5831  # same as USDC on mainnet
+USDC_ADDRESS=0xaf88d065e77c8cC2239327C5EDb3A432268e5831
+WETH_ADDRESS=0x82aF49447D8a07e3bd95BD0d56f35241523fBab1
+WBTC_ADDRESS=0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f
+ETH_ORACLE_ADDRESS=0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612
+BTC_ORACLE_ADDRESS=0x6ce185860a4963106506C203335A2910413708e9
+
+# No set:asset-price command on mainnet — prices come from Chainlink
+```
+
+> **Note:** On mainnet, `AAVE_USDC_ADDRESS` and `USDC_ADDRESS` are the same address. The distinction only exists on testnet where Aave uses a custom mock USDC.
+
+---
+
+## Mainnet deployment steps (ETH product)
+
+### Step 1 — Compile
+
+```bash
+npx hardhat compile
+```
+
+### Step 2 — Deploy UniswapV3Adapter
+
+```bash
+WETH_ADDRESS=0x82aF49447D8a07e3bd95BD0d56f35241523fBab1 \
+USDC_ADDRESS=0xaf88d065e77c8cC2239327C5EDb3A432268e5831 \
+UNISWAP_ROUTER_ADDRESS=0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45 \
+npx hardhat run scripts/deploy-uniswap-adapter.js --network arbitrumOne
+```
+
+Save to root `.env`:
+```env
+UNISWAP_ADAPTER_ADDRESS=<UniswapV3Adapter from output>
+```
+
+### Step 3 — Deploy RealHyperliquidAdapter (ETH)
+
+```bash
+HL_BRIDGE_ADDRESS=0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7 \
+USDC_ADDRESS=0xaf88d065e77c8cC2239327C5EDb3A432268e5831 \
+IS_ETH_ASSET=true \
+npx hardhat run scripts/deploy-real-hyperliquid-adapter.js --network arbitrumOne
+```
+
+Save to root `.env`:
+```env
+HL_ADAPTER_ADDRESS_ETH=<RealHyperliquidAdapter from output>
+```
+
+### Step 4 — Deploy KashYieldETH
+
+```bash
+AAVE_POOL_ADDRESS=0x794a61358D6845594F94dc1DB02A252b5b4814aD \
+USDC_ADDRESS=0xaf88d065e77c8cC2239327C5EDb3A432268e5831 \
+WETH_ADDRESS=0x82aF49447D8a07e3bd95BD0d56f35241523fBab1 \
+HL_ADAPTER_ADDRESS_ETH=<from step 3> \
+npx hardhat run scripts/deploy-arbitrum-mainnet.js --network arbitrumOne
+```
+
+Save to root `.env` and `bot/.env`:
+```env
+KASH_YIELD_ETH_ADDRESS=<KashYieldETH from output>
+KASH_TOKEN_ETH=<KashTokenEth from output>
+```
+
+Save to `frontend/.env.local`:
+```env
+NEXT_PUBLIC_KASH_YIELD_ETH_ADDRESS=<KashYieldETH from output>
+NEXT_PUBLIC_KASH_TOKEN_ETH=<KashTokenEth from output>
+```
+
+### Step 5 — Set Chainlink oracle
+
+```bash
+KASH_YIELD_ETH_ADDRESS=<KashYieldETH> \
+ETH_ORACLE_ADDRESS=0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612 \
+npx hardhat run scripts/setEthOracle.js --network arbitrumOne
+```
+
+### Step 6 — Register and activate HL adapter
+
+```bash
+# Register
+KASH_YIELD_ETH_ADDRESS=<KashYieldETH> \
+HL_ADAPTER_ADDRESS_ETH=<from step 3> \
+npx hardhat run scripts/setHyperliquid.js --network arbitrumOne
+
+# ⚠️ Wait 48 hours (exchangeSwitchDelay = 172800 on mainnet)
+
+# Confirm
+KASH_YIELD_ETH_ADDRESS=<KashYieldETH> EXCHANGE_NAME=HL \
+npx hardhat run scripts/confirmPerpExchange.js --network arbitrumOne
+
+# Activate
+KASH_YIELD_ETH_ADDRESS=<KashYieldETH> EXCHANGE_NAME=HL \
+npx hardhat run scripts/setActivePerpExchange.js --network arbitrumOne
+```
+
+### Step 7 — Set Uniswap adapter as spot DEX
+
+```bash
+KASH_YIELD_ETH_ADDRESS=<KashYieldETH> \
+SPOT_DEX_ADDRESS=<UniswapV3Adapter from step 2> \
+npx hardhat run scripts/setSpotDex.js --network arbitrumOne
+```
+
+### Step 8 — Set cycle duration
+
+```bash
+# 86400 = 24 hours (daily batch cycle)
+CYCLE_SECONDS=86400 PRODUCT=eth KASH_YIELD_ETH_ADDRESS=<KashYieldETH> \
+npx hardhat run scripts/setCycleDuration.js --network arbitrumOne
+```
+
+### Step 9 — Verify on Arbiscan
+
+```bash
+# KashYieldETH (constructor arg: botAddress)
+npx hardhat verify --network arbitrumOne <KASH_YIELD_ETH_ADDRESS> <BOT_ADDRESS>
+
+# UniswapV3Adapter
+npx hardhat verify --network arbitrumOne <UNISWAP_ADAPTER_ADDRESS> \
+  0x82aF49447D8a07e3bd95BD0d56f35241523fBab1 \
+  0xaf88d065e77c8cC2239327C5EDb3A432268e5831 \
+  0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45
+
+# RealHyperliquidAdapter
+npx hardhat verify --network arbitrumOne <HL_ADAPTER_ADDRESS_ETH> \
+  0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7 \
+  0xaf88d065e77c8cC2239327C5EDb3A432268e5831 \
+  "0x0000000000000000000000000000000000000000" true
+```
+
+### Step 10 — Diagnose
+
+```bash
+KASH_YIELD_ETH_ADDRESS=<KashYieldETH> \
+npx hardhat run scripts/diagnose-eth.js --network arbitrumOne
+```
+
+Confirm: Aave pool address, WETH address, USDC address, and Chainlink price are all non-zero before running the bot.
+
+---
+
+## Mainnet deployment — Summary checklist
+
+- [ ] `UniswapV3Adapter` deployed and address saved
+- [ ] `RealHyperliquidAdapter` (ETH) deployed and address saved
+- [ ] `KashYieldETH` deployed with real Aave, WETH, USDC, HL adapter addresses
+- [ ] `setEthOracle.js` — Chainlink `0x639Fe6...` set
+- [ ] `setHyperliquid.js` — adapter registered
+- [ ] Wait 48 hours
+- [ ] `confirmPerpExchange.js` — registration confirmed
+- [ ] `setActivePerpExchange.js` — HL set as active
+- [ ] `setSpotDex.js` — UniswapV3Adapter set
+- [ ] `setCycleDuration.js` — `CYCLE_SECONDS=86400` (daily)
+- [ ] `diagnose-eth.js` — all values non-zero
+- [ ] Both contracts verified on Arbiscan
+- [ ] `bot/.env` updated with all mainnet addresses
+- [ ] `frontend/.env.local` updated
+- [ ] `exchangeSwitchDelay` confirmed at `172800` (never `0`)
+
+---
+
+## Ops scripts on mainnet
+
+The `bot/scripts/ops/` scripts work on mainnet with two important differences:
+
+### 1. Pass `--network arbitrumOne`
+
+Replace `--network arbitrumSepolia` with `--network arbitrumOne` in every command. For example:
+
+```bash
+PRODUCT=eth npx hardhat run bot/scripts/ops/00-status.js --network arbitrumOne
+```
+
+### 2. HL trading steps are API calls, not contract calls
+
+Scripts `04` (spot buy), `05` (open short), `06` (close short), and `07` (spot sell) trigger on-chain function calls on testnet because `MockHyperliquid` is an Arbitrum contract. On mainnet, those trading operations happen via the Hyperliquid API (off-chain).
+
+For mainnet operations:
+- **Steps 01–03** (Aave deposit, borrow, HL deposit): unchanged — these are on-chain Arbitrum transactions.
+- **Steps 04–07** (spot buy, open short, close short, spot sell): call the HL REST API directly using the HL SDK or manually via the HL UI. The `RealHyperliquidAdapter` records the resulting balances when polled.
+- **Steps 08–12** (USDC withdraw from HL, Aave repay, Aave withdraw, Uniswap swaps): unchanged — these are on-chain Arbitrum transactions.
+
+The HL USDC collateral model is confirmed correct for all scripts:
+| Script | HL mainnet behaviour |
+|--------|---------------------|
+| `03` — deposit USDC to HL | Sends USDC to bridge `0x2Df1c51E...` ✅ |
+| `04` — spot buy ETH/wBTC | HL API call (not on-chain) |
+| `07` — spot sell ETH/wBTC → USDC | HL API call (not on-chain) |
+| `08` — withdraw USDC from HL | Validator-settled withdrawal, USDC only ✅ |
+| `03b`, `12` — asset deposit/withdraw | Aster/asset-collateral path only, skip for HL ✅ |

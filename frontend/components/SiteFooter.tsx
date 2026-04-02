@@ -29,7 +29,7 @@ export function SiteFooter({ className, contractAddress }: SiteFooterProps) {
             </a>
           )}
         </div>
-        <p className={styles.disclaimer}>Don&apos;t Trust, Verify.</p>
+        <p className={styles.disclaimer}></p>
       </div>
     </footer>
   );

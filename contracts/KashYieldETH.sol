@@ -96,14 +96,14 @@ contract KashYieldETH is ReentrancyGuard {
     uint256 public currentNAV = 1e18;
 
     // ── Protocol addresses ────────────────────────────────────────────────
-    address public aavePoolAddress = 0xBfC91D59fdAA134A4ED45f7B584cAf96D7792Eff;
-    address public keeperRegistry  = 0x8194399B3f11fcA2E8cCEfc4c9A658c61B8Bf412;
+    address public aavePoolAddress = 0x794a61358D6845594F94dc1DB02A252b5b4814aD; // Aave V3 Pool — Arbitrum One
+    address public keeperRegistry  = address(0); // set via setKeeperRegistry() if using Chainlink Automation
     address public botAddress;
 
     address public constant ETH_ADDRESS = address(0);
     address public wethAddress; // set via setWethAddress() — must be a WETH9-compatible contract with deposit()/withdraw()
     address public usdcAddress;
-    address public ethOracle = 0x1AdF01abD96C11AEE2f20a41a03fAD11b3D8d2b4;
+    address public ethOracle = 0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612; // Chainlink ETH/USD — Arbitrum One
     uint8   public ethDecimals = 18;
 
     // ── Exchange registry ─────────────────────────────────────────────────
@@ -336,9 +336,13 @@ contract KashYieldETH is ReentrancyGuard {
             actualAmount = amount;
         }
         uint256 batchCycle = block.timestamp / cycleDurationSeconds;
-        userMintRequests[msg.sender][batchCycle] = MintRequest({
-            user: msg.sender, amountIn: actualAmount, amountInUSD: 0, batchCycle: batchCycle
-        });
+        if (batchProcessed[batchCycle]) revert AlreadyProcessed();
+        // Accumulate into the existing request so multiple deposits in the same window
+        // are treated as one combined request.
+        MintRequest storage req = userMintRequests[msg.sender][batchCycle];
+        req.user = msg.sender;
+        req.amountIn += actualAmount;
+        req.batchCycle = batchCycle;
         batchTotalMintEth[batchCycle] += actualAmount;
         if (!isInBatchMint[batchCycle][msg.sender]) {
             batchMintUsers[batchCycle].push(msg.sender);
@@ -350,11 +354,15 @@ contract KashYieldETH is ReentrancyGuard {
     function requestRedeem(uint256 kashAmount) external onlyUserWindow whenNotPaused {
         if (kashAmount == 0) revert ZeroAmount();
         if (kashTokenEth.balanceOf(msg.sender) < kashAmount) revert InsufficientKashEth();
-        kashTokenEth.transferFrom(msg.sender, address(this), kashAmount);
         uint256 batchCycle = block.timestamp / cycleDurationSeconds;
-        userRedeemRequests[msg.sender][batchCycle] = RedeemRequest({
-            user: msg.sender, kashAmount: kashAmount, batchCycle: batchCycle
-        });
+        if (batchProcessed[batchCycle]) revert AlreadyProcessed();
+        kashTokenEth.transferFrom(msg.sender, address(this), kashAmount);
+        // Accumulate into the existing request so multiple redeems in the same window
+        // are treated as one combined request.
+        RedeemRequest storage req = userRedeemRequests[msg.sender][batchCycle];
+        req.user = msg.sender;
+        req.kashAmount += kashAmount;
+        req.batchCycle = batchCycle;
         batchTotalRedeemKash[batchCycle] += kashAmount;
         if (!isInBatchRedeem[batchCycle][msg.sender]) {
             batchRedeemUsers[batchCycle].push(msg.sender);
@@ -365,6 +373,7 @@ contract KashYieldETH is ReentrancyGuard {
 
     function cancelMintRequest(uint256 batchCycle) external whenNotPaused {
         if (batchProcessed[batchCycle]) revert AlreadyProcessed();
+        if (batchPhase[batchCycle] != 0) revert WrongPhase();
         MintRequest storage req = userMintRequests[msg.sender][batchCycle];
         if (req.amountIn == 0) revert NoRequest();
         uint256 amount = req.amountIn;
@@ -376,6 +385,7 @@ contract KashYieldETH is ReentrancyGuard {
 
     function cancelRedeemRequest(uint256 batchCycle) external whenNotPaused {
         if (batchProcessed[batchCycle]) revert AlreadyProcessed();
+        if (batchPhase[batchCycle] != 0) revert WrongPhase();
         RedeemRequest storage req = userRedeemRequests[msg.sender][batchCycle];
         if (req.kashAmount == 0) revert NoRequest();
         uint256 kashAmount = req.kashAmount;
@@ -463,13 +473,15 @@ contract KashYieldETH is ReentrancyGuard {
         _processBatchPhase2(batchCycle);
     }
 
-    function _processBatchPhase2(uint256 batchCycle) internal nonReentrant {
+    function _processBatchPhase2(uint256 batchCycle) internal {
         uint256 exactNAV = currentNAV;
-        batchExactNAV[batchCycle] = exactNAV;
         uint256 ethPrice = getEthPrice();
 
+        // ── Pre-compute all payout amounts ────────────────────────────────────
+        address[] memory minters  = batchMintUsers[batchCycle];
+        address[] memory redeemers = batchRedeemUsers[batchCycle];
+
         uint256 totalMintKash = 0;
-        address[] memory minters = batchMintUsers[batchCycle];
         for (uint256 i = 0; i < minters.length; i++) {
             MintRequest memory req = userMintRequests[minters[i]][batchCycle];
             if (req.amountInUSD > 0) {
@@ -478,11 +490,32 @@ contract KashYieldETH is ReentrancyGuard {
             }
         }
 
+        uint256[] memory redeemEthAmounts = new uint256[](redeemers.length);
+        uint256 totalRedeemEthNeeded = 0;
+        for (uint256 i = 0; i < redeemers.length; i++) {
+            RedeemRequest memory req = userRedeemRequests[redeemers[i]][batchCycle];
+            if (req.kashAmount > 0) {
+                uint256 usdValue = (req.kashAmount * exactNAV) / 1e18;
+                uint256 usdAfterFee = usdValue * (10000 - feeBps) / 10000;
+                redeemEthAmounts[i] = (usdAfterFee * (10 ** ETH_DECIMALS)) / ethPrice;
+                totalRedeemEthNeeded += redeemEthAmounts[i];
+            }
+        }
+        if (address(this).balance < totalRedeemEthNeeded) revert InsufficientEthForRedeems();
+
+        // ── CEI: mark batch done BEFORE any external calls ───────────────────
+        batchExactNAV[batchCycle] = exactNAV;
+        batchProcessed[batchCycle] = true;
+        batchPhase[batchCycle] = 3;
+        emit BatchProcessed(batchCycle, batchTotalMintValueUSD[batchCycle], batchTotalRedeemValueUSD[batchCycle], exactNAV);
+
+        // ── Mint / burn net KASH ──────────────────────────────────────────────
         uint256 totalRedeemKash = batchTotalRedeemKash[batchCycle];
         int256 netKash = int256(totalMintKash) - int256(totalRedeemKash);
         if (netKash > 0) kashTokenEth.mint(address(this), uint256(netKash));
         else if (netKash < 0) kashTokenEth.burn(address(this), uint256(-netKash));
 
+        // ── Distribute KASH to minters ────────────────────────────────────────
         uint256 totalDistributableKash = totalMintKash;
         for (uint256 i = 0; i < minters.length; i++) {
             address user = minters[i];
@@ -495,38 +528,20 @@ contract KashYieldETH is ReentrancyGuard {
             }
         }
 
-        address[] memory redeemers = batchRedeemUsers[batchCycle];
-        uint256 totalRedeemEthNeeded = 0;
+        // ── Pay redeemers — use .call to avoid one bad address blocking everyone ──
         for (uint256 i = 0; i < redeemers.length; i++) {
-            RedeemRequest memory req = userRedeemRequests[redeemers[i]][batchCycle];
-            if (req.kashAmount > 0) {
-                uint256 usdValue = (req.kashAmount * exactNAV) / 1e18;
-                uint256 usdAfterFee = usdValue * (10000 - feeBps) / 10000;
-                totalRedeemEthNeeded += (usdAfterFee * (10 ** ETH_DECIMALS)) / ethPrice;
-            }
-        }
-        if (address(this).balance < totalRedeemEthNeeded) revert InsufficientEthForRedeems();
-
-        uint256 availableDepositEth = batchTotalMintEth[batchCycle];
-        uint256 excessMintEth = availableDepositEth > totalRedeemEthNeeded ? availableDepositEth - totalRedeemEthNeeded : 0;
-        if (excessMintEth > 0) emit ProtocolInteraction("NET_MINT_ETH_DEPLOY", ETH_ADDRESS, excessMintEth);
-
-        for (uint256 i = 0; i < redeemers.length; i++) {
+            if (redeemEthAmounts[i] == 0) continue;
             address user = redeemers[i];
-            RedeemRequest memory req = userRedeemRequests[user][batchCycle];
-            if (req.kashAmount > 0) {
-                uint256 usdValue    = (req.kashAmount * exactNAV) / 1e18;
-                uint256 usdAfterFee = usdValue * (10000 - feeBps) / 10000;
-                uint256 ethAmount   = (usdAfterFee * (10 ** ETH_DECIMALS)) / ethPrice;
-                payable(user).transfer(ethAmount);
+            uint256 ethAmount = redeemEthAmounts[i];
+            totalRedeemedEthByUser[user] += ethAmount;
+            (bool success, ) = payable(user).call{value: ethAmount}("");
+            if (success) {
                 emit TokensClaimed(user, ETH_ADDRESS, ethAmount, false);
-                totalRedeemedEthByUser[user] += ethAmount;
+            } else {
+                // Transfer failed — keep ETH in contract; owner can rescue via ownerManuallyProcessRedeem
+                emit ProtocolInteraction("REDEEM_TRANSFER_FAILED", user, ethAmount);
             }
         }
-
-        batchProcessed[batchCycle] = true;
-        batchPhase[batchCycle] = 3;
-        emit BatchProcessed(batchCycle, batchTotalMintValueUSD[batchCycle], batchTotalRedeemValueUSD[batchCycle], exactNAV);
     }
 
     // ── Aave (unchanged) ──────────────────────────────────────────────────
@@ -737,15 +752,18 @@ contract KashYieldETH is ReentrancyGuard {
     function getReservedEth() public view returns (uint256) {
         uint256 currentCycle = block.timestamp / cycleDurationSeconds;
         uint256 reserved = 0;
-        if (!batchProcessed[currentCycle]) {
-            reserved += batchTotalMintEth[currentCycle];
-            uint256 redeemUsdEstimate = (batchTotalRedeemKash[currentCycle] * currentNAV) / 1e18;
-            uint256 redeemEthEstimate = (redeemUsdEstimate * (10000 - feeBps) / 10000 * (10 ** ETH_DECIMALS)) / getEthPrice();
+        uint256 ethPrice = getEthPrice();
+        // Sum reservations across the current cycle and the last 10 past cycles so that
+        // ownerWithdrawEth cannot drain ETH that belongs to users in unprocessed old batches.
+        uint256 lookback = 10;
+        for (uint256 i = 0; i <= lookback; i++) {
+            if (i > currentCycle) break;
+            uint256 cycle = currentCycle - i;
+            if (batchProcessed[cycle]) continue;
+            reserved += batchTotalMintEth[cycle];
+            uint256 redeemUsdEstimate = (batchTotalRedeemKash[cycle] * currentNAV) / 1e18;
+            uint256 redeemEthEstimate = (redeemUsdEstimate * (10000 - feeBps) / 10000 * (10 ** ETH_DECIMALS)) / ethPrice;
             reserved += redeemEthEstimate;
-        } else {
-            uint256 minted = batchTotalMintEth[currentCycle];
-            uint256 deployed = batchMintEthDeployedToAave[currentCycle];
-            if (minted > deployed) reserved += (minted - deployed);
         }
         return reserved;
     }
@@ -773,6 +791,8 @@ contract KashYieldETH is ReentrancyGuard {
             uint256 usdAfterFee = (req.kashAmount * currentNAV / 1e18) * (10000 - feeBps) / 10000;
             uint256 ethAmount = (usdAfterFee * (10 ** ETH_DECIMALS)) / ethPrice;
             uint256 kashToBurn = req.kashAmount;
+            // Decrement batch total so Phase 2 cannot double-burn if it runs later
+            batchTotalRedeemKash[batchCycle] -= kashToBurn;
             delete userRedeemRequests[user][batchCycle];
             kashTokenEth.burn(address(this), kashToBurn);
             payable(user).transfer(ethAmount);

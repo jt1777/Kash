@@ -191,11 +191,25 @@ The batch is split into five steps so each can be run individually. If any step 
 
 | Step | Name        | Action |
 |------|-------------|--------|
+| —    | *(pre-step)*| Compute NAV snapshot before any ops (see below) |
 | 1    | `phase1`    | Call `performUpkeep()` (Phase 1 indicative; batch moves to phase 1) |
 | 2    | `ops`       | Handle NET_MINT/NET_REDEEM (HL + Aave) |
-| 3    | `nav`       | Compute and call `updateNAV(newNAV)` |
+| 3    | `nav`       | Call `updateNAV(lockedNAV)` using the pre-ops snapshot |
 | 4    | `mark-done` | Call `markBatchOpsDone(batchCycle)` (batch moves to phase 2) |
 | 5    | `phase2`    | Run Phase 2 distribution (mint KASH, pay redeemers) |
+
+#### Pre-ops NAV snapshot
+
+Before Phase 1 runs, the bot computes today's NAV from live Aave/Hyperliquid state and logs it:
+
+```
+📊 Computing NAV (pre-ops snapshot)...
+   NAV locked for this batch: $1.0523... per KASH
+```
+
+This value is used unchanged for `updateNAV()` in step 3 and therefore for Phase 2 settlement. It is **not** recomputed after the ops step, because the ops (Aave deposits/borrows, HL position changes) alter the live Aave yield figures and HL funding readings — recomputing after would produce a post-ops-tainted NAV that includes the cost and slippage of that day's capital deployment.
+
+**Implication for full redemptions:** when 100% of KASH is redeemed, the Aave withdrawal step drains the entire remaining position (not a calculated amount) to sweep any accrued interest and cover any HL slippage gap, ensuring Phase 2 can pay redeemers in full at the locked NAV price.
 
 **How the bot picks the target batch (no batch number needed)**  
 The bot does not detect "failure" directly; it detects **incomplete** batches from on-chain state. Each run it:
@@ -247,8 +261,28 @@ npm start -- --batch=20523 --step=aave --allow-processed
 | `--step=1` … `--step=5` | — | Numeric shorthand for steps 1–5 |
 | `--batch=N` | `BATCH_CYCLE=N` | Target a specific batch cycle number |
 | `--allow-processed` | `ALLOW_PROCESSED_BATCH=true` | Allow ops steps on an already-finalized batch |
+| `--locked-nav=<bigint>` | `LOCKED_NAV=<bigint>` | Supply the pre-ops NAV (18 decimals) when stepping through manually |
 
 If the batch is in the wrong phase for the requested step, the bot exits with a clear message (e.g. `"Batch 20524 is in phase 0; run step phase1 first"`). Fix the prerequisite step, then re-run.
+
+#### Using `--locked-nav` for manual step-through
+
+When the full batch runs automatically, the pre-ops NAV is computed and threaded through all steps internally. When stepping through manually (e.g. for recovery or debugging), pass the same value via `--locked-nav` so `--step=ops` and `--step=nav` use the correct pre-ops price:
+
+```bash
+# Run a full batch first (or use --step=nav without --locked-nav) to see the current NAV:
+#   📊 Computing NAV (pre-ops snapshot)...
+#      NAV locked for this batch: $1.0523... per KASH
+
+# Then step through manually, passing that value to ops and nav:
+npm start -- --batch=20523 --step=phase1
+npm start -- --batch=20523 --step=ops       --locked-nav=1052300000000000000
+npm start -- --batch=20523 --step=nav       --locked-nav=1052300000000000000
+npm start -- --batch=20523 --step=mark-done
+npm start -- --batch=20523 --step=phase2
+```
+
+The value is the NAV in 18-decimal fixed-point (e.g. `$1.0523` = `1052300000000000000`). If `--locked-nav` is omitted, `--step=ops` falls back to the Phase 1 indicative amounts and `--step=nav` recomputes on demand (post-ops), which is fine for testing but introduces the small yield gap described above for production partial redemptions.
 
 ### Running only Hyperliquid or only Aave steps (Phase 1)
 Phase 1 NET_MINT and NET_REDEEM are split into **Hyperliquid** steps (deposit/withdraw HL, spot buy/sell, open/close short) and **Aave** steps (deposit/withdraw, borrow/repay). You can run one set at a time for testing or recovery:
@@ -268,12 +302,13 @@ These items are stubs or partially implemented — tracked here after the develo
 
 ### Daily yield tracking (`dailyYield.ts`)
 
-`getDailyYield(provider)` currently returns zeros for all three components. To complete:
+`getDailyYield(provider)` reads three components. On **MockAave / MockHyperliquid** (testnet) all three are live via custom view functions. On **real Aave** (no mock views) each falls back to zero until the following are implemented:
+
 - **Aave supply interest** — read aToken balance growth or `liquidityIndex` from the Aave reserve data.
 - **Aave borrow cost** — read variable debt growth or `variableBorrowIndex`.
-- **Hyperliquid funding** — pull from HL API or on-chain events.
+- **Hyperliquid funding** — pull from the HL HTTP API or on-chain events.
 
-Once implemented, call `updateNAV(newNAV)` using `computeNAVFromPortfolioAndYield(portfolioValueUSD, netYield, totalKashSupply)` before `markBatchOpsDone()` so redeems reflect the correct yield-adjusted NAV.
+The NAV computation (`computeNAVFromPortfolioAndYield`) and `updateNAV()` call are fully wired in and run as a pre-ops snapshot before Phase 1 (see above). When the yield readers above are implemented, the NAV will automatically reflect them with no further plumbing required.
 
 ### USD → token conversion in Aave calls
 
