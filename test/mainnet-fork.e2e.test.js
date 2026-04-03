@@ -10,7 +10,7 @@
 //   - KashYieldETH: full redeem cycle (repay Aave, unwrap WETH, return native ETH)
 //   - KashYieldBtc: full mint cycle using real Aave V3 (wBTC collateral, USDC borrow)
 //   - KashYieldBtc: full redeem cycle (repay Aave, return wBTC)
-//   - Uniswap V3: USDC ↔ ETH swaps via real SwapRouter02
+//   - Uniswap V3: USDC ↔ ETH swaps via real SwapRouter01 (adapter interface)
 //   - HyperliquidAdapter deposit: USDC reaches real HL bridge on-chain
 //   - HyperliquidAdapter withdrawal: simulated by impersonating bridge
 //     (HL trading is off-chain via REST API — not testable on a fork)
@@ -25,6 +25,13 @@ const { expect } = require("chai");
 const { ethers }  = require("hardhat");
 const hre         = require("hardhat");
 
+// Pin to a specific Arbitrum block for reproducibility and RPC cache hits.
+// Hardhat caches all state for pinned forks in .cache/hardhat-network-fork/,
+// so the second run is near-instant.  Override with FORK_BLOCK_NUMBER= in .env.
+const FORK_BLOCK = process.env.FORK_BLOCK_NUMBER
+  ? parseInt(process.env.FORK_BLOCK_NUMBER)
+  : 440_000_000;
+
 // ── Arbitrum One mainnet addresses ────────────────────────────────────────────
 const USDC_ADDRESS   = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"; // native USDC
 const WETH_ADDRESS   = "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1";
@@ -32,7 +39,13 @@ const WBTC_ADDRESS   = "0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f";
 const USDT_ADDRESS   = "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9";
 // Aave V3 Pool on Arbitrum One is hardcoded inside the KashYield contracts —
 // no need to pass it at deploy time.
-const UNISWAP_ROUTER = "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45"; // SwapRouter02
+//
+// UniswapV3Adapter uses the SwapRouter01 interface (ExactInputSingleParams WITH
+// the `deadline` field).  SwapRouter02 (0x68b3465...) removed `deadline`, so the
+// ABI doesn't match — the call hits the wrong selector and reverts silently.
+// SwapRouter01 (0xE592427...) has the same interface as the adapter, so use that.
+const UNISWAP_ROUTER_V1 = "0xE592427A0AEce92De3Edee1F18E0157C05861564"; // SwapRouter01 — matches adapter ABI
+const UNISWAP_ROUTER_V2 = "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45"; // SwapRouter02 — used for direct test swaps only
 const HL_BRIDGE      = "0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7";
 // Chainlink oracles — already defaulted in the contracts, listed here for clarity.
 const ETH_ORACLE     = "0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612"; // ETH/USD Arbitrum One
@@ -74,10 +87,10 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
     let usdc, weth;
 
     before(async function () {
-      // ── Fork Arbitrum mainnet ────────────────────────────────────────────
+      // ── Fork Arbitrum mainnet at pinned block ────────────────────────────
       await hre.network.provider.request({
         method: "hardhat_reset",
-        params: [{ forking: { jsonRpcUrl: RPC_URL } }],
+        params: [{ forking: { jsonRpcUrl: RPC_URL, blockNumber: FORK_BLOCK } }],
       });
 
       [owner, bot, user1] = await ethers.getSigners();
@@ -87,7 +100,7 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
 
       // ── Deploy UniswapV3Adapter ──────────────────────────────────────────
       const UniswapV3Adapter = await ethers.getContractFactory("UniswapV3Adapter");
-      uniAdapter = await UniswapV3Adapter.deploy(UNISWAP_ROUTER, WETH_ADDRESS);
+      uniAdapter = await UniswapV3Adapter.deploy(UNISWAP_ROUTER_V1, WETH_ADDRESS);
       await uniAdapter.waitForDeployment();
       console.log("    ✅ UniswapV3Adapter:", await uniAdapter.getAddress());
 
@@ -165,7 +178,7 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
 
       const ethPrice = await kashYieldEth.getEthPrice();
       const ethUsdValue = MINT_ETH * ethPrice / (10n ** 18n); // 18-dec USD
-      const borrowUsdc = ethUsdValue * 70n / 100n / (10n ** 12n); // 6-dec USDC
+      const borrowUsdc = ethUsdValue * 60n / 100n / (10n ** 12n); // 6-dec USDC — 60% LTV leaves buffer for accrued interest
       console.log(`       Aave: borrowing ${ethers.formatUnits(borrowUsdc, 6)} USDC`);
 
       await kashYieldEth.connect(owner).borrowFromAave(USDC_ADDRESS, borrowUsdc);
@@ -239,28 +252,33 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
       // In fork test: impersonate the bridge to simulate the USDC arriving.
       const borrowUsdc = await usdc.balanceOf(HL_BRIDGE);
       // We only need what the adapter originally deposited.
+      // Simulate HL returning principal + 10 USDC buffer.
+      // In production any HL PnL covers the Aave interest; we model that here so
+      // repayToAave receives enough to clear the full debt (principal + accrued interest).
       const adapterDeposit = await hlAdapter.usdcBalance();
+      const hlReturnAmount = adapterDeposit + 10n * 10n ** 6n; // +10 USDC
       await hre.network.provider.send("hardhat_impersonateAccount", [HL_BRIDGE]);
       await hre.network.provider.send("hardhat_setBalance", [HL_BRIDGE, "0xDE0B6B3A7640000"]); // 1 ETH for gas
       const bridgeSigner = await ethers.getSigner(HL_BRIDGE);
-      await usdc.connect(bridgeSigner).transfer(await hlAdapter.getAddress(), adapterDeposit);
+      await usdc.connect(bridgeSigner).transfer(await hlAdapter.getAddress(), hlReturnAmount);
       await hre.network.provider.send("hardhat_stopImpersonatingAccount", [HL_BRIDGE]);
 
       // ── Withdraw USDC from adapter to KashYield ───────────────────────────
-      await kashYieldEth.connect(owner).withdrawFromHyperliquid(adapterDeposit);
+      await kashYieldEth.connect(owner).withdrawFromHyperliquid(hlReturnAmount);
       const contractUsdc = await usdc.balanceOf(await kashYieldEth.getAddress());
       expect(contractUsdc).to.be.gte(adapterDeposit);
       console.log(`       ✅ USDC withdrawn from HL: ${ethers.formatUnits(contractUsdc, 6)}`);
 
-      // ── Repay Aave USDC debt ───────────────────────────────────────────────
+      // ── Repay Aave USDC debt ─────────────────────────────────────────────────
+      // Borrowing at 60% LTV means enough collateral headroom remains after 1 hour
+      // of accrued interest, so no whale top-up is needed.
       const AAVE_POOL_ADDR = "0x794a61358D6845594F94dc1DB02A252b5b4814aD";
       const aavePool = new ethers.Contract(AAVE_POOL_ADDR, [
         "function getUserAccountData(address) view returns (uint256,uint256,uint256,uint256,uint256,uint256)"
       ], owner);
       const [, debtBase] = await aavePool.getUserAccountData(await kashYieldEth.getAddress());
-      console.log(`       Aave debt: $${(Number(debtBase) / 1e8).toFixed(2)} (base units)`);
+      console.log(`       Aave debt: $${(Number(debtBase) / 1e8).toFixed(2)}`);
 
-      // Repay what we borrowed; handle interest by minting dust USDC if needed.
       const usdcBal = await usdc.balanceOf(await kashYieldEth.getAddress());
       await kashYieldEth.connect(owner).repayToAave(USDC_ADDRESS, usdcBal);
       console.log(`       ✅ Aave USDC repaid`);
@@ -314,10 +332,10 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
     let MINT_BTC;
 
     before(async function () {
-      // Fresh fork for BTC suite.
+      // Fresh fork at the same pinned block for the BTC suite.
       await hre.network.provider.request({
         method: "hardhat_reset",
-        params: [{ forking: { jsonRpcUrl: RPC_URL } }],
+        params: [{ forking: { jsonRpcUrl: RPC_URL, blockNumber: FORK_BLOCK } }],
       });
 
       [owner, bot, user1] = await ethers.getSigners();
@@ -327,7 +345,7 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
 
       // ── Acquire wBTC via Uniswap (swap ETH → WBTC) ──────────────────────
       // Use UniswapV3 directly to get wBTC for user1.
-      const router = new ethers.Contract(UNISWAP_ROUTER, [
+      const router = new ethers.Contract(UNISWAP_ROUTER_V2, [
         "function exactInputSingle((address,address,uint24,address,uint256,uint256,uint160)) payable returns (uint256)"
       ], owner);
 
@@ -348,9 +366,9 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
       }
       console.log(`    ✅ Acquired wBTC for user1: ${Number(user1Wbtc) / 1e8} wBTC`);
 
-      // ── Deploy UniswapV3Adapter ──────────────────────────────────────────
+      // ── Deploy UniswapV3Adapter (must use SwapRouter01 — see ETH suite comment) ─
       const UniswapV3Adapter = await ethers.getContractFactory("UniswapV3Adapter");
-      uniAdapter = await UniswapV3Adapter.deploy(UNISWAP_ROUTER, WETH_ADDRESS);
+      uniAdapter = await UniswapV3Adapter.deploy(UNISWAP_ROUTER_V1, WETH_ADDRESS);
 
       // ── Deploy KashYieldBtc ──────────────────────────────────────────────
       // Same as ETH: Aave pool is hardcoded to real Arbitrum One address.
@@ -416,7 +434,7 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
 
       const btcPrice   = await kashYieldBtc.getBtcPrice();
       const btcUsdValue = MINT_BTC * btcPrice / (10n ** 8n); // 18-dec USD
-      const borrowUsdc  = btcUsdValue * 70n / 100n / (10n ** 12n); // 6-dec
+      const borrowUsdc  = btcUsdValue * 60n / 100n / (10n ** 12n); // 6-dec — 60% LTV leaves buffer for accrued interest
       console.log(`       Aave: borrowing ${ethers.formatUnits(borrowUsdc, 6)} USDC`);
 
       await kashYieldBtc.connect(owner).borrowFromAave(USDC_ADDRESS, borrowUsdc);
@@ -446,8 +464,9 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
       expect(await kashYieldBtc.batchProcessed(batchCycle)).to.be.true;
 
       const kashBalance = await kashTokenBtc.balanceOf(user1.address);
-      const expectedKash = btcPrice * 9997n / 10000n;
-      expect(kashBalance).to.be.closeTo(expectedKash, expectedKash / 20n);
+      // Expected = deposited_wbtc_satoshis * price_per_BTC / 1e8 decimals * (1 - fee)
+      const expectedKash = MINT_BTC * btcPrice / (10n ** 8n) * 9997n / 10000n;
+      expect(kashBalance).to.be.closeTo(expectedKash, expectedKash / 20n); // within 5%
       console.log(`       ✅ Kash-BTC minted: ${ethers.formatEther(kashBalance)}`);
     });
 
@@ -468,18 +487,19 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
       await kashYieldBtc.connect(owner)["closeShort(string)"]("BTC");
       await hlAdapter.syncPosition("BTC", 0n, 0n, false);
 
-      // Simulate HL withdrawal: impersonate bridge, send USDC to adapter.
+      // Simulate HL returning principal + 10 USDC (covers any Aave accrued interest).
       const adapterDeposit = await hlAdapter.usdcBalance();
+      const hlReturnAmount = adapterDeposit + 10n * 10n ** 6n; // +10 USDC
       await hre.network.provider.send("hardhat_impersonateAccount", [HL_BRIDGE]);
       await hre.network.provider.send("hardhat_setBalance", [HL_BRIDGE, "0xDE0B6B3A7640000"]);
       const bridgeSigner = await ethers.getSigner(HL_BRIDGE);
-      await usdc.connect(bridgeSigner).transfer(await hlAdapter.getAddress(), adapterDeposit);
+      await usdc.connect(bridgeSigner).transfer(await hlAdapter.getAddress(), hlReturnAmount);
       await hre.network.provider.send("hardhat_stopImpersonatingAccount", [HL_BRIDGE]);
 
-      await kashYieldBtc.connect(owner).withdrawFromHyperliquid(adapterDeposit);
+      await kashYieldBtc.connect(owner).withdrawFromHyperliquid(hlReturnAmount);
       console.log(`       ✅ USDC withdrawn from HL: ${ethers.formatUnits(await usdc.balanceOf(await kashYieldBtc.getAddress()), 6)}`);
 
-      // Repay Aave.
+      // Repay Aave — contract now has principal + 10 USDC, more than enough to clear full debt.
       const usdcBal = await usdc.balanceOf(await kashYieldBtc.getAddress());
       await kashYieldBtc.connect(owner).repayToAave(USDC_ADDRESS, usdcBal);
 

@@ -19,11 +19,19 @@ module.exports = {
   },
   networks: {
     // Local Hardhat network.
-    // mainnet-fork.e2e.test.js calls hardhat_reset at runtime to fork Arbitrum One
-    // (no static config needed here).  The env var is read by that test file.
+    // When ARBITRUM_MAINNET_RPC_URL is set, Hardhat forks Arbitrum One and caches
+    // all RPC responses for the pinned block in .cache/hardhat-network-fork/.
+    // Pin to a specific block with FORK_BLOCK_NUMBER= in .env to avoid transient
+    // -32603 errors and to make re-runs fast (cache hits).
     hardhat: {
       chainId: 31337,
       allowUnlimitedContractSize: true,
+      forking: process.env.ARBITRUM_MAINNET_RPC_URL ? {
+        url: process.env.ARBITRUM_MAINNET_RPC_URL,
+        blockNumber: process.env.FORK_BLOCK_NUMBER
+          ? parseInt(process.env.FORK_BLOCK_NUMBER)
+          : 440_000_000, // ~3 weeks before Apr 2026; well-archived, fast cache hits
+      } : undefined,
     },
     
     // Arbitrum Sepolia (Testnet)
