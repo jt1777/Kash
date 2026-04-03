@@ -227,15 +227,27 @@ export class BatchProcessor {
     else if (netPositionUSD < 0n) await this.handleNetRedeem(-netPositionUSD, ethers.ZeroAddress, batchCycle, lockedNAV);
   }
 
-  /** Step 3: Call updateNAV(newNAV). Batch must be phase 1.
+  /** Step 3: Call updateNAV(newNAV, usdcBalance, assetBalance, perpPnL). Batch must be phase 1.
    * In the full batch flow, receives the NAV that was computed before Phase 1 and ops ran,
    * so Phase 2 settles mints/redeems at the same pre-ops price used for the indicative sizing.
    * When running in single-step mode (--step=nav) no pre-computed value is available, so it
-   * falls back to computing on-demand at that point. */
+   * falls back to computing on-demand at that point.
+   * usdcBalance/assetBalance are snapshotted from on-chain adapter views for transparency.
+   * perpPnL is passed as 0 because Hyperliquid perp PnL is off-chain and not accessible here. */
   private async runStepNav(batchCycle: bigint, precomputedNAV?: bigint): Promise<void> {
     const newNAV = precomputedNAV ?? await this.computeNewNAV();
-    console.log(`📈 Step nav: Updating NAV to $${ethers.formatEther(newNAV)} per KASH...`);
-    await (await this.kashYield.updateNAV(newNAV)).wait();
+
+    let usdcBalance = 0n;
+    let assetBalance = 0n;
+    try {
+      usdcBalance = BigInt((await this.kashYield.getHyperliquidSpotBalance()).toString());
+      assetBalance = BigInt((await this.kashYield.getExchangeAssetBalance()).toString());
+    } catch {
+      // Non-critical — portfolio snapshot unavailable; NAV update still proceeds
+    }
+
+    console.log(`📈 Step nav: Updating NAV to $${ethers.formatEther(newNAV)} per KASH  (usdcBal=${ethers.formatUnits(usdcBalance, 6)}, assetBal=${ethers.formatEther(assetBalance)})...`);
+    await (await this.kashYield.updateNAV(newNAV, usdcBalance, assetBalance, 0n)).wait();
     console.log('   ✅ updateNAV done\n');
   }
 

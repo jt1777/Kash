@@ -497,14 +497,14 @@ This withdraws WETH from the old Aave, unwraps it to ETH in KashYieldETH, then r
 ## Verify contracts on Arbiscan
 
 ```bash
-# KashYieldETH (constructor arg: botAddress)
-npx hardhat verify --network arbitrumSepolia <KASH_YIELD_ETH_ADDRESS> <BOT_ADDRESS>
+# KashYieldETH (constructor args: botAddress, weth, usdc)
+npx hardhat verify --network arbitrumSepolia <KASH_YIELD_ETH_ADDRESS> <BOT_ADDRESS> <WETH_ADDRESS> <USDC_ADDRESS>
 
 # MockHyperliquid (constructor args: usdc, usdt, wbtc)
 npx hardhat verify --network arbitrumSepolia <MOCK_HL_ADDRESS> <USDC> <USDT> <WBTC>
 
-# HyperliquidAdapter ETH (constructor args: hlAddress, usdcAddress, assetAddress, isEthAsset)
-npx hardhat verify --network arbitrumSepolia <HL_ADAPTER_ADDRESS_ETH> <HL_ADDR> <USDC> "0x0000000000000000000000000000000000000000" true
+# HyperliquidAdapter ETH (constructor args: hlAddress, usdcAddress, assetAddress, isEthAsset, kashYieldAddress)
+npx hardhat verify --network arbitrumSepolia <HL_ADAPTER_ADDRESS_ETH> <HL_ADDR> <USDC> "0x0000000000000000000000000000000000000000" true <KASH_YIELD_ETH_ADDRESS>
 ```
 
 ---
@@ -614,16 +614,8 @@ npx hardhat run scripts/getNAV.js --network arbitrumSepolia
 
 ## ⚠️ Pre-launch requirements
 
-**Two adapter contracts must be built before mainnet deployment:**
-
-1. **`UniswapV3Adapter`** — wraps Uniswap V3 `SwapRouter02` to implement `ISpotDex`. Replaces `MockSpotDex`. See [Architecture note: Uniswap adapter](#architecture-note-uniswap-v3-adapter) below.
-
-2. **`RealHyperliquidAdapter`** — handles the real HL bridge for deposits/withdrawals and records trading state for the contract. See [Architecture note: Hyperliquid on mainnet](#architecture-note-hyperliquid-on-mainnet) below.
-
 **Pre-launch checklist:**
 - [ ] Smart contract security audit completed
-- [ ] `UniswapV3Adapter` built and tested
-- [ ] `RealHyperliquidAdapter` built and tested
 - [ ] Bot operated for ≥ 1 week on Arbitrum Sepolia without errors
 - [ ] `exchangeSwitchDelay` set to `172800` (48 hours) — never `0` on mainnet
 - [ ] Deployer wallet is a hardware wallet or multisig, not a hot wallet
@@ -771,8 +763,8 @@ KASH_YIELD_ETH_ADDRESS=<KashYieldETH>
 KASH_TOKEN_ETH=<KashTokenEth>
 
 AAVE_POOL_ADDRESS=0x794a61358D6845594F94dc1DB02A252b5b4814aD
-AAVE_USDC_ADDRESS=0xaf88d065e77c8cC2239327C5EDb3A432268e5831  # same as USDC on mainnet
-USDC_ADDRESS=0xaf88d065e77c8cC2239327C5EDb3A432268e5831
+AAVE_USDC_ADDRESS=0xaf88d065e77c8cC2239327C5EDb3A432268e5831   # same as USDC on mainnet
+USDC_ADDRESS=0xaf88d065e77c8cC2239327C5EDb3A432268e5831      # same address
 WETH_ADDRESS=0x82aF49447D8a07e3bd95BD0d56f35241523fBab1
 WBTC_ADDRESS=0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f
 ETH_ORACLE_ADDRESS=0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612
@@ -781,11 +773,11 @@ BTC_ORACLE_ADDRESS=0x6ce185860a4963106506C203335A2910413708e9
 # No set:asset-price command on mainnet — prices come from Chainlink
 ```
 
-> **Note:** On mainnet, `AAVE_USDC_ADDRESS` and `USDC_ADDRESS` are the same address. The distinction only exists on testnet where Aave uses a custom mock USDC.
-
 ---
 
 ## Mainnet deployment steps (ETH product)
+
+> **Deployment order matters.** `KashYieldETH` must be deployed before `HyperliquidAdapter` because the adapter constructor now requires the KashYield contract address.
 
 ### Step 1 — Compile
 
@@ -807,40 +799,42 @@ Save to root `.env`:
 UNISWAP_ADAPTER_ADDRESS=<UniswapV3Adapter from output>
 ```
 
-### Step 3 — Deploy RealHyperliquidAdapter (ETH)
+### Step 3 — Deploy KashYieldETH
 
 ```bash
-HL_BRIDGE_ADDRESS=0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7 \
-USDC_ADDRESS=0xaf88d065e77c8cC2239327C5EDb3A432268e5831 \
-IS_ETH_ASSET=true \
-npx hardhat run scripts/deploy-real-hyperliquid-adapter.js --network arbitrumOne
-```
-
-Save to root `.env`:
-```env
-HL_ADAPTER_ADDRESS_ETH=<RealHyperliquidAdapter from output>
-```
-
-### Step 4 — Deploy KashYieldETH
-
-```bash
-AAVE_POOL_ADDRESS=0x794a61358D6845594F94dc1DB02A252b5b4814aD \
-USDC_ADDRESS=0xaf88d065e77c8cC2239327C5EDb3A432268e5831 \
+BOT_ADDRESS=<your_bot_wallet> \
 WETH_ADDRESS=0x82aF49447D8a07e3bd95BD0d56f35241523fBab1 \
-HL_ADAPTER_ADDRESS_ETH=<from step 3> \
-npx hardhat run scripts/deploy-arbitrum-mainnet.js --network arbitrumOne
+USDC_ADDRESS=0xaf88d065e77c8cC2239327C5EDb3A432268e5831 \
+AAVE_POOL_ADDRESS=0x794a61358D6845594F94dc1DB02A252b5b4814aD \
+npx hardhat run scripts/deploy-arbitrum-sepolia.js --network arbitrumOne
 ```
 
-Save to root `.env` and `bot/.env`:
+Save to root `.env`, `bot/.env`, and `frontend/.env.local`:
 ```env
 KASH_YIELD_ETH_ADDRESS=<KashYieldETH from output>
 KASH_TOKEN_ETH=<KashTokenEth from output>
 ```
-
-Save to `frontend/.env.local`:
 ```env
+# frontend/.env.local
 NEXT_PUBLIC_KASH_YIELD_ETH_ADDRESS=<KashYieldETH from output>
 NEXT_PUBLIC_KASH_TOKEN_ETH=<KashTokenEth from output>
+```
+
+### Step 4 — Deploy HyperliquidAdapter (ETH)
+
+> Requires `KASH_YIELD_ETH_ADDRESS` from Step 3.
+
+```bash
+MOCK_HL_ADDRESS=0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7 \
+USDC_ADDRESS=0xaf88d065e77c8cC2239327C5EDb3A432268e5831 \
+IS_ETH_ASSET=true \
+KASH_YIELD_ADDRESS=<KASH_YIELD_ETH_ADDRESS from step 3> \
+npx hardhat run scripts/deploy-hyperliquid-adapter.js --network arbitrumOne
+```
+
+Save to root `.env`:
+```env
+HL_ADAPTER_ADDRESS_ETH=<HyperliquidAdapter from output>
 ```
 
 ### Step 5 — Set Chainlink oracle
@@ -851,34 +845,50 @@ ETH_ORACLE_ADDRESS=0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612 \
 npx hardhat run scripts/setEthOracle.js --network arbitrumOne
 ```
 
-### Step 6 — Register and activate HL adapter
+### Step 6 — Set exchange switch delay
+
+Set the 48-hour timelock before registering any adapter. This is critical on mainnet — it prevents a compromised owner from instantly swapping the live exchange.
 
 ```bash
-# Register
+# 172800 = 48 hours
+KASH_YIELD_ETH_ADDRESS=<KashYieldETH> DELAY_SECONDS=172800 \
+npx hardhat run scripts/setExchangeSwitchDelay.js --network arbitrumOne
+```
+
+### Step 7 — Register and activate HL adapter
+
+```bash
+# Register (starts the 48-hour timelock set in Step 6)
 KASH_YIELD_ETH_ADDRESS=<KashYieldETH> \
-HL_ADAPTER_ADDRESS_ETH=<from step 3> \
+HYPERLIQUID_ADDRESS=<HL_ADAPTER_ADDRESS_ETH from step 4> \
 npx hardhat run scripts/setHyperliquid.js --network arbitrumOne
 
-# ⚠️ Wait 48 hours (exchangeSwitchDelay = 172800 on mainnet)
+# ⚠️ Wait 48 hours before continuing
 
-# Confirm
+# Confirm registration
 KASH_YIELD_ETH_ADDRESS=<KashYieldETH> EXCHANGE_NAME=HL \
 npx hardhat run scripts/confirmPerpExchange.js --network arbitrumOne
 
-# Activate
+# Activate as the live exchange
 KASH_YIELD_ETH_ADDRESS=<KashYieldETH> EXCHANGE_NAME=HL \
 npx hardhat run scripts/setActivePerpExchange.js --network arbitrumOne
 ```
 
-### Step 7 — Set Uniswap adapter as spot DEX
+### Step 8 — Set Uniswap adapter as spot DEX
+
+The first-ever call to `setSpotDex` is **immediate** (no timelock). Subsequent changes require a 48-hour `spotDexTimelock` wait followed by `confirmSpotDex`. The script handles both cases automatically.
+
+UniswapV3Adapter (`0x68b3...`) is pre-whitelisted in the contract. Any other adapter address must first be added via `setAllowedSpotDexRouter`.
 
 ```bash
 KASH_YIELD_ETH_ADDRESS=<KashYieldETH> \
-SPOT_DEX_ADDRESS=<UniswapV3Adapter from step 2> \
+SPOT_DEX_ADDRESS=<UNISWAP_ADAPTER_ADDRESS from step 2> \
 npx hardhat run scripts/setSpotDex.js --network arbitrumOne
 ```
 
-### Step 8 — Set cycle duration
+The script will confirm whether the DEX was applied immediately or a timelock was started. If a timelock was started, re-run the same command after 48 hours to call `confirmSpotDex`.
+
+### Step 9 — Set cycle duration
 
 ```bash
 # 86400 = 24 hours (daily batch cycle)
@@ -886,53 +896,58 @@ CYCLE_SECONDS=86400 PRODUCT=eth KASH_YIELD_ETH_ADDRESS=<KashYieldETH> \
 npx hardhat run scripts/setCycleDuration.js --network arbitrumOne
 ```
 
-### Step 9 — Verify on Arbiscan
+### Step 10 — Verify on Arbiscan
 
 ```bash
-# KashYieldETH (constructor arg: botAddress)
-npx hardhat verify --network arbitrumOne <KASH_YIELD_ETH_ADDRESS> <BOT_ADDRESS>
+# KashYieldETH (constructor args: botAddress, weth, usdc)
+npx hardhat verify --network arbitrumOne <KASH_YIELD_ETH_ADDRESS> <BOT_ADDRESS> \
+  0x82aF49447D8a07e3bd95BD0d56f35241523fBab1 \
+  0xaf88d065e77c8cC2239327C5EDb3A432268e5831
 
-# UniswapV3Adapter
+# UniswapV3Adapter (constructor args: weth, usdc, swapRouter)
 npx hardhat verify --network arbitrumOne <UNISWAP_ADAPTER_ADDRESS> \
   0x82aF49447D8a07e3bd95BD0d56f35241523fBab1 \
   0xaf88d065e77c8cC2239327C5EDb3A432268e5831 \
   0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45
 
-# RealHyperliquidAdapter
+# HyperliquidAdapter (constructor args: hlBridge, usdc, assetAddress, isEthAsset, kashYieldAddress)
 npx hardhat verify --network arbitrumOne <HL_ADAPTER_ADDRESS_ETH> \
   0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7 \
   0xaf88d065e77c8cC2239327C5EDb3A432268e5831 \
-  "0x0000000000000000000000000000000000000000" true
+  "0x0000000000000000000000000000000000000000" true \
+  <KASH_YIELD_ETH_ADDRESS>
 ```
 
-### Step 10 — Diagnose
+### Step 11 — Post-deployment verification
+
+Run the diagnose script to confirm every address and the Chainlink price feed are wired correctly before starting the bot.
 
 ```bash
 KASH_YIELD_ETH_ADDRESS=<KashYieldETH> \
 npx hardhat run scripts/diagnose-eth.js --network arbitrumOne
 ```
 
-Confirm: Aave pool address, WETH address, USDC address, and Chainlink price are all non-zero before running the bot.
+Expected: Aave pool, WETH, USDC, oracle, spot DEX, and active perp exchange are all non-zero; Chainlink ETH price is a reasonable USD value.
 
 ---
 
 ## Mainnet deployment — Summary checklist
 
-- [ ] `UniswapV3Adapter` deployed and address saved
-- [ ] `RealHyperliquidAdapter` (ETH) deployed and address saved
-- [ ] `KashYieldETH` deployed with real Aave, WETH, USDC, HL adapter addresses
-- [ ] `setEthOracle.js` — Chainlink `0x639Fe6...` set
-- [ ] `setHyperliquid.js` — adapter registered
-- [ ] Wait 48 hours
-- [ ] `confirmPerpExchange.js` — registration confirmed
-- [ ] `setActivePerpExchange.js` — HL set as active
-- [ ] `setSpotDex.js` — UniswapV3Adapter set
-- [ ] `setCycleDuration.js` — `CYCLE_SECONDS=86400` (daily)
-- [ ] `diagnose-eth.js` — all values non-zero
-- [ ] Both contracts verified on Arbiscan
+- [ ] Step 2 — `UniswapV3Adapter` deployed and `UNISWAP_ADAPTER_ADDRESS` saved
+- [ ] Step 3 — `KashYieldETH` deployed and `KASH_YIELD_ETH_ADDRESS` saved
+- [ ] Step 4 — `HyperliquidAdapter` deployed and `HL_ADAPTER_ADDRESS_ETH` saved
+- [ ] Step 5 — `setEthOracle.js` — Chainlink `0x639Fe6...` set
+- [ ] Step 6 — `setExchangeSwitchDelay.js` — `DELAY_SECONDS=172800` (48 hours)
+- [ ] Step 7 — `setHyperliquid.js` — adapter registered
+- [ ] ⏳ Wait 48 hours
+- [ ] Step 7 — `confirmPerpExchange.js` — registration confirmed
+- [ ] Step 7 — `setActivePerpExchange.js` — HL set as active
+- [ ] Step 8 — `setSpotDex.js` — UniswapV3Adapter set (immediate on first deploy; 48h timelock on changes)
+- [ ] Step 9 — `setCycleDuration.js` — `CYCLE_SECONDS=86400` (daily)
+- [ ] Step 10 — All three contracts verified on Arbiscan
+- [ ] Step 11 — `diagnose-eth.js` — all addresses non-zero, Chainlink price non-zero
 - [ ] `bot/.env` updated with all mainnet addresses
 - [ ] `frontend/.env.local` updated
-- [ ] `exchangeSwitchDelay` confirmed at `172800` (never `0`)
 
 ---
 

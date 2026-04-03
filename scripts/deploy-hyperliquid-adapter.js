@@ -6,21 +6,22 @@
 // The main KashYield contract talks to this adapter; the adapter talks to the underlying HL.
 //
 // Usage (BTC product):
-//   MOCK_HL_ADDRESS=0x...  USDC_ADDRESS=0x...  WBTC_ADDRESS=0x...  \
+//   MOCK_HL_ADDRESS=0x...  USDC_ADDRESS=0x...  WBTC_ADDRESS=0x...  KASH_YIELD_ADDRESS=0x...  \
 //   npx hardhat run scripts/deploy-hyperliquid-adapter.js --network arbitrumSepolia
 //
 // Usage (ETH product):
-//   MOCK_HL_ADDRESS=0x...  USDC_ADDRESS=0x...  IS_ETH_ASSET=true   \
+//   MOCK_HL_ADDRESS=0x...  USDC_ADDRESS=0x...  IS_ETH_ASSET=true  KASH_YIELD_ADDRESS=0x...  \
 //   npx hardhat run scripts/deploy-hyperliquid-adapter.js --network arbitrumSepolia
 //
 // Required env vars:
-//   MOCK_HL_ADDRESS    — deployed MockHyperliquid (testnet) or real HL bridge (mainnet)
-//   USDC_ADDRESS       — USDC / MockUSDC address
-//   WBTC_ADDRESS       — wBTC / MockWBTC address (BTC product only; ignored when IS_ETH_ASSET=true)
+//   MOCK_HL_ADDRESS      — deployed MockHyperliquid (testnet) or real HL bridge (mainnet)
+//   USDC_ADDRESS         — USDC / MockUSDC address
+//   WBTC_ADDRESS         — wBTC / MockWBTC address (BTC product only; ignored when IS_ETH_ASSET=true)
+//   KASH_YIELD_ADDRESS   — KashYieldETH or KashYieldBtc address (authorised to call capital-movement functions)
 //
 // Optional:
-//   IS_ETH_ASSET=true  — set for the ETH product adapter (assetAddress = 0x0, isEthAsset = true)
-//   HL_ADAPTER_LABEL   — label printed in output (e.g. "BTC" or "ETH", default: auto-detected)
+//   IS_ETH_ASSET=true    — set for the ETH product adapter (assetAddress = 0x0, isEthAsset = true)
+//   HL_ADAPTER_LABEL     — label printed in output (e.g. "BTC" or "ETH", default: auto-detected)
 
 require("dotenv").config();
 const hre = require("hardhat");
@@ -34,11 +35,12 @@ async function main() {
   console.log("Deploying HyperliquidAdapter to", network);
   console.log("Deployer:", deployer.address);
 
-  const hlAddress   = process.env.MOCK_HL_ADDRESS || process.env.HYPERLIQUID_MOCK_ADDRESS || process.env.HYPERLIQUID_ADDRESS;
-  const usdcAddress = process.env.USDC_ADDRESS   || process.env.MOCK_USDC_ADDRESS;
-  const wbtcAddress = process.env.WBTC_ADDRESS   || process.env.MOCK_WBTC_ADDRESS || process.env.MOCK_WBTC;
-  const isEth       = (process.env.IS_ETH_ASSET || "").toLowerCase() === "true";
-  const label       = process.env.HL_ADAPTER_LABEL || (isEth ? "ETH" : "BTC");
+  const hlAddress        = process.env.MOCK_HL_ADDRESS || process.env.HYPERLIQUID_MOCK_ADDRESS || process.env.HYPERLIQUID_ADDRESS;
+  const usdcAddress      = process.env.USDC_ADDRESS   || process.env.MOCK_USDC_ADDRESS;
+  const wbtcAddress      = process.env.WBTC_ADDRESS   || process.env.MOCK_WBTC_ADDRESS || process.env.MOCK_WBTC;
+  const kashYieldAddress = process.env.KASH_YIELD_ADDRESS || process.env.KASH_YIELD_ETH_ADDRESS || process.env.KASH_YIELD_BTC_ADDRESS;
+  const isEth            = (process.env.IS_ETH_ASSET || "").toLowerCase() === "true";
+  const label            = process.env.HL_ADAPTER_LABEL || (isEth ? "ETH" : "BTC");
 
   if (!hlAddress || !hre.ethers.isAddress(hlAddress)) {
     throw new Error(
@@ -48,6 +50,12 @@ async function main() {
   }
   if (!usdcAddress || !hre.ethers.isAddress(usdcAddress)) {
     throw new Error("Set USDC_ADDRESS (or MOCK_USDC_ADDRESS) in .env.");
+  }
+  if (!kashYieldAddress || !hre.ethers.isAddress(kashYieldAddress)) {
+    throw new Error(
+      "Set KASH_YIELD_ADDRESS (or KASH_YIELD_ETH_ADDRESS / KASH_YIELD_BTC_ADDRESS) in .env — " +
+      "the KashYield contract that is authorised to call capital-movement functions on this adapter."
+    );
   }
 
   // For the ETH product the on-chain asset is native ETH, so assetAddress = 0x0.
@@ -61,15 +69,16 @@ async function main() {
   }
 
   console.log("\nParameters:");
-  console.log("  Product:      ", label);
-  console.log("  HL address:   ", hlAddress);
-  console.log("  USDC:         ", usdcAddress);
-  console.log("  Asset:        ", isEth ? "(native ETH)" : assetAddress);
-  console.log("  isEthAsset:   ", isEth);
+  console.log("  Product:       ", label);
+  console.log("  HL address:    ", hlAddress);
+  console.log("  USDC:          ", usdcAddress);
+  console.log("  Asset:         ", isEth ? "(native ETH)" : assetAddress);
+  console.log("  isEthAsset:    ", isEth);
+  console.log("  KashYield:     ", kashYieldAddress);
   console.log("");
 
   const HyperliquidAdapter = await hre.ethers.getContractFactory("HyperliquidAdapter");
-  const adapter = await HyperliquidAdapter.deploy(hlAddress, usdcAddress, assetAddress, isEth);
+  const adapter = await HyperliquidAdapter.deploy(hlAddress, usdcAddress, assetAddress, isEth, kashYieldAddress);
   await adapter.waitForDeployment();
   const adapterAddress = await adapter.getAddress();
 
@@ -108,6 +117,7 @@ async function main() {
       usdc: usdcAddress,
       asset: assetAddress,
       isEthAsset: isEth,
+      kashYield: kashYieldAddress,
     },
   };
   const filepath = path.join(deploymentsDir, `hl-adapter-${label.toLowerCase()}-${network}-${Date.now()}.json`);

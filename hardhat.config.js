@@ -18,9 +18,12 @@ module.exports = {
     }
   },
   networks: {
-    // Local Hardhat network
+    // Local Hardhat network.
+    // mainnet-fork.e2e.test.js calls hardhat_reset at runtime to fork Arbitrum One
+    // (no static config needed here).  The env var is read by that test file.
     hardhat: {
-      chainId: 31337
+      chainId: 31337,
+      allowUnlimitedContractSize: true,
     },
     
     // Arbitrum Sepolia (Testnet)

@@ -101,7 +101,7 @@ async function main() {
   console.log("Deploying KashYieldETH...");
   
   const KashYieldETH = await ethers.getContractFactory("KashYieldETH");
-  const kashYieldEth = await KashYieldETH.deploy();
+  const kashYieldEth = await KashYieldETH.deploy(deployer.address, await weth.getAddress(), await usdc.getAddress());
   await kashYieldEth.waitForDeployment();
   
   const kashYieldEthAddress = await kashYieldEth.getAddress();

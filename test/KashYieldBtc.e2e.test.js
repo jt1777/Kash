@@ -85,28 +85,33 @@ async function deployBtcFixture() {
   await mockWbtc.approve(await mockSpotDex.getAddress(), DEX_WBTC_FUND);
   await mockSpotDex.fund(await mockWbtc.getAddress(), DEX_WBTC_FUND);
 
-  // ── 6. Hyperliquid Adapter ────────────────────────────────────────────────
-  const HyperliquidAdapter = await ethers.getContractFactory("HyperliquidAdapter");
-  const hlAdapter = await HyperliquidAdapter.deploy(
-    await mockHl.getAddress(),
-    await mockUsdc.getAddress(),
+  // ── 6. KashYieldBtc ──────────────────────────────────────────────────────
+  // Deploy KashYieldBtc first so its address can be passed to the adapter.
+  const KashYieldBtc = await ethers.getContractFactory("KashYieldBtc");
+  const kashYield = await KashYieldBtc.deploy(
+    bot.address,
     await mockWbtc.getAddress(),
-    false // isEthAsset = false (BTC product)
+    await mockUsdc.getAddress(),
+    await mockAave.getAddress()
   );
 
-  // ── 7. KashYieldBtc ──────────────────────────────────────────────────────
-  const KashYieldBtc = await ethers.getContractFactory("KashYieldBtc");
-  const kashYield = await KashYieldBtc.deploy(bot.address);
-
-  await kashYield.setAavePool(await mockAave.getAddress());
-  await kashYield.setWbtcAddress(await mockWbtc.getAddress());
-  await kashYield.setUsdcAddress(await mockUsdc.getAddress());
   await kashYield.setBtcOracle(await mockFeed.getAddress());
+  await kashYield.setAllowedSpotDexRouter(await mockSpotDex.getAddress(), true);
   await kashYield.setSpotDex(await mockSpotDex.getAddress());
   await kashYield.setCycleDurationSeconds(CYCLE_SECS);
   // Disable time windows for tests: users and bot can operate at any point in the cycle.
   await kashYield.setUserWindowEnd(CYCLE_SECS);
   await kashYield.setProcessingWindowStart(0n);
+
+  // ── 7. Hyperliquid Adapter ────────────────────────────────────────────────
+  const HyperliquidAdapter = await ethers.getContractFactory("HyperliquidAdapter");
+  const hlAdapter = await HyperliquidAdapter.deploy(
+    await mockHl.getAddress(),
+    await mockUsdc.getAddress(),
+    await mockWbtc.getAddress(),
+    false,                       // isEthAsset = false (BTC product)
+    await kashYield.getAddress() // kashYieldAddress for onlyAuthorized guard
+  );
 
   // Register HL adapter: first-time bypass (no timelock).
   await kashYield.setExchangeSwitchDelay(0);
@@ -178,7 +183,7 @@ async function runFullMintCycle(ctx, batchCycle, mintBtc) {
   expect(posSize).to.equal(shortSizeAsset);
 
   // ── NAV + mark done + Phase 2 ─────────────────────────────────────────────
-  await kashYield.connect(owner).updateNAV(NAV_1);
+  await kashYield.connect(bot).updateNAV(NAV_1, 0n, 0n, 0n);
   await kashYield.connect(owner).markBatchOpsDone(batchCycle);
   expect(await kashYield.batchPhase(batchCycle)).to.equal(2);
 
@@ -238,7 +243,7 @@ async function runFullRedeemCycle(ctx, batchCycle, mintBtc, borrowUsdc) {
   expect(contractWbtc).to.be.gte(mintBtc - 1n); // may be slightly less due to interest accrual
 
   // ── NAV + mark done + Phase 2 ─────────────────────────────────────────────
-  await kashYield.connect(owner).updateNAV(NAV_1);
+  await kashYield.connect(bot).updateNAV(NAV_1, 0n, 0n, 0n);
   await kashYield.connect(owner).markBatchOpsDone(batchCycle);
   await kashYield.connect(bot).performUpkeep("0x");
   expect(await kashYield.batchProcessed(batchCycle)).to.be.true;
@@ -271,7 +276,7 @@ describe("KashYieldBtc — end-to-end", function () {
 
     it("rejects non-owner configuration changes", async function () {
       const { kashYield, user1 } = await deployBtcFixture();
-      await expect(kashYield.connect(user1).setAavePool(user1.address))
+      await expect(kashYield.connect(user1).setBtcOracle(user1.address))
         .to.be.revertedWithCustomError(kashYield, "OnlyOwner");
     });
 
@@ -306,23 +311,27 @@ describe("KashYieldBtc — end-to-end", function () {
       await mockAave2.setBtcPrice(BTC_PRICE_18);
       await rightUsdc.mint(await mockAave2.getAddress(), 100_000n * 10n ** 6n);
 
-      const hlAdapter2 = await (await ethers.getContractFactory("HyperliquidAdapter")).deploy(
-        await mockHl2.getAddress(),
-        await rightUsdc.getAddress(), // ← adapter uses rightUsdc
-        await mockWbtc.getAddress(),
-        false
-      );
-
       const KashYieldBtc = await ethers.getContractFactory("KashYieldBtc");
-      const ky2 = await KashYieldBtc.deploy(bot.address);
-      await ky2.setAavePool(await mockAave2.getAddress());
-      await ky2.setWbtcAddress(await mockWbtc.getAddress());
-      await ky2.setUsdcAddress(await rightUsdc.getAddress());
+      const ky2 = await KashYieldBtc.deploy(
+        bot.address,
+        await mockWbtc.getAddress(),
+        await rightUsdc.getAddress(),
+        await mockAave2.getAddress()
+      );
       await ky2.setBtcOracle(await mockFeed.getAddress());
       await ky2.setCycleDurationSeconds(CYCLE_SECS);
       await ky2.setUserWindowEnd(CYCLE_SECS);
       await ky2.setProcessingWindowStart(0n);
       await ky2.setExchangeSwitchDelay(0);
+
+      const hlAdapter2 = await (await ethers.getContractFactory("HyperliquidAdapter")).deploy(
+        await mockHl2.getAddress(),
+        await rightUsdc.getAddress(), // ← adapter uses rightUsdc
+        await mockWbtc.getAddress(),
+        false,
+        await ky2.getAddress()
+      );
+
       await ky2.setHyperliquid(await hlAdapter2.getAddress());
       await ky2.setActivePerpExchange("HL");
 
@@ -611,7 +620,12 @@ describe("KashYieldBtc — end-to-end", function () {
 
       // Deploy a *fresh* KashYieldBtc with a 48h delay.
       const KashYieldBtc = await ethers.getContractFactory("KashYieldBtc");
-      const ky2 = await KashYieldBtc.deploy(bot.address);
+      const ky2 = await KashYieldBtc.deploy(
+        bot.address,
+        await mockWbtc.getAddress(),
+        await mockUsdc.getAddress(),
+        await mockAave.getAddress()
+      );
       await ky2.setExchangeSwitchDelay(48 * 3600);
 
       const HyperliquidAdapter = await ethers.getContractFactory("HyperliquidAdapter");
@@ -619,7 +633,8 @@ describe("KashYieldBtc — end-to-end", function () {
         ethers.ZeroAddress, // HL address not needed for this test
         await mockUsdc.getAddress(),
         await mockWbtc.getAddress(),
-        false
+        false,
+        await ky2.getAddress()
       );
 
       // First-time registration — should be immediate (bypass).

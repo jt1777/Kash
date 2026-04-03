@@ -73,21 +73,26 @@ async function deployEthFixture() {
   await mockSpotDex.fund(await mockUsdc.getAddress(), 200_000n * 10n ** 6n);
   await mockSpotDex.fundEth({ value: ethers.parseEther("20") });
 
-  const HyperliquidAdapter = await ethers.getContractFactory("HyperliquidAdapter");
-  const hlAdapter = await HyperliquidAdapter.deploy(
-    await mockHl.getAddress(), await mockUsdc.getAddress(), ethers.ZeroAddress, true
-  );
-
   const KashYieldETH = await ethers.getContractFactory("KashYieldETH");
-  const kashYield    = await KashYieldETH.deploy(bot.address);
-  await kashYield.setAavePool(await mockAave.getAddress());
-  await kashYield.setUsdcAddress(await mockUsdc.getAddress());
-  await kashYield.setWethAddress(await mockWeth.getAddress());
+  const kashYield    = await KashYieldETH.deploy(
+    bot.address,
+    await mockWeth.getAddress(),
+    await mockUsdc.getAddress(),
+    await mockAave.getAddress()
+  );
   await kashYield.setEthOracle(await mockFeed.getAddress());
+  await kashYield.setAllowedSpotDexRouter(await mockSpotDex.getAddress(), true);
   await kashYield.setSpotDex(await mockSpotDex.getAddress());
   await kashYield.setCycleDurationSeconds(CYCLE_SECS);
   await kashYield.setUserWindowEnd(CYCLE_SECS);
   await kashYield.setProcessingWindowStart(0n);
+
+  const HyperliquidAdapter = await ethers.getContractFactory("HyperliquidAdapter");
+  const hlAdapter = await HyperliquidAdapter.deploy(
+    await mockHl.getAddress(), await mockUsdc.getAddress(), ethers.ZeroAddress, true,
+    await kashYield.getAddress()
+  );
+
   await kashYield.setExchangeSwitchDelay(0);
   await kashYield.setHyperliquid(await hlAdapter.getAddress());
   await kashYield.setActivePerpExchange("HL");
@@ -137,21 +142,26 @@ async function deployBtcFixture() {
   await mockWbtc.approve(await mockSpotDex.getAddress(), 10n * 10n ** 8n);
   await mockSpotDex.fund(await mockWbtc.getAddress(), 10n * 10n ** 8n);
 
-  const HyperliquidAdapter = await ethers.getContractFactory("HyperliquidAdapter");
-  const hlAdapter = await HyperliquidAdapter.deploy(
-    await mockHl.getAddress(), await mockUsdc.getAddress(), await mockWbtc.getAddress(), false
-  );
-
   const KashYieldBtc = await ethers.getContractFactory("KashYieldBtc");
-  const kashYield    = await KashYieldBtc.deploy(bot.address);
-  await kashYield.setAavePool(await mockAave.getAddress());
-  await kashYield.setWbtcAddress(await mockWbtc.getAddress());
-  await kashYield.setUsdcAddress(await mockUsdc.getAddress());
+  const kashYield    = await KashYieldBtc.deploy(
+    bot.address,
+    await mockWbtc.getAddress(),
+    await mockUsdc.getAddress(),
+    await mockAave.getAddress()
+  );
   await kashYield.setBtcOracle(await mockFeed.getAddress());
+  await kashYield.setAllowedSpotDexRouter(await mockSpotDex.getAddress(), true);
   await kashYield.setSpotDex(await mockSpotDex.getAddress());
   await kashYield.setCycleDurationSeconds(CYCLE_SECS);
   await kashYield.setUserWindowEnd(CYCLE_SECS);
   await kashYield.setProcessingWindowStart(0n);
+
+  const HyperliquidAdapter = await ethers.getContractFactory("HyperliquidAdapter");
+  const hlAdapter = await HyperliquidAdapter.deploy(
+    await mockHl.getAddress(), await mockUsdc.getAddress(), await mockWbtc.getAddress(), false,
+    await kashYield.getAddress()
+  );
+
   await kashYield.setExchangeSwitchDelay(0);
   await kashYield.setHyperliquid(await hlAdapter.getAddress());
   await kashYield.setActivePerpExchange("HL");
@@ -183,7 +193,7 @@ async function runEthMintCycle(ctx, batchCycle, mintEth) {
   const shortSize = ethUsd * 170n / 100n * (10n ** 18n) / ETH_PRICE_18;
   await kashYield.connect(owner).openShort("ETH", shortSize);
 
-  await kashYield.connect(owner).updateNAV(NAV_1);
+  await kashYield.connect(bot).updateNAV(NAV_1, 0n, 0n, 0n);
   await kashYield.connect(owner).markBatchOpsDone(batchCycle);
   await kashYield.connect(bot).performUpkeep("0x");
   expect(await kashYield.batchProcessed(batchCycle)).to.be.true;
@@ -209,7 +219,7 @@ async function runBtcMintCycle(ctx, batchCycle, mintBtc) {
   const shortSize = btcUsd * 170n / 100n * (10n ** 18n) / BTC_PRICE_18;
   await kashYield.connect(owner).openShort("BTC", shortSize);
 
-  await kashYield.connect(owner).updateNAV(NAV_1);
+  await kashYield.connect(bot).updateNAV(NAV_1, 0n, 0n, 0n);
   await kashYield.connect(owner).markBatchOpsDone(batchCycle);
   await kashYield.connect(bot).performUpkeep("0x");
   expect(await kashYield.batchProcessed(batchCycle)).to.be.true;
@@ -357,7 +367,7 @@ describe("Advanced scenarios — multi-user, cumulative positions, price changes
       const { owner, bot } = ctx;
       await kashYield.connect(bot).performUpkeep("0x");
       await unwindAllEthPositions(ctx, MINT1 + MINT2, ETH_PRICE_18);
-      await kashYield.connect(owner).updateNAV(NAV_1);
+      await kashYield.connect(bot).updateNAV(NAV_1, 0n, 0n, 0n);
       await kashYield.connect(owner).markBatchOpsDone(redeemCycle);
       await kashYield.connect(bot).performUpkeep("0x");
       expect(await kashYield.batchProcessed(redeemCycle)).to.be.true;
@@ -410,7 +420,7 @@ describe("Advanced scenarios — multi-user, cumulative positions, price changes
 
       await kashYield.connect(bot).performUpkeep("0x");
       await unwindAllBtcPositions(ctx, MINT1 + MINT2, BTC_PRICE_18);
-      await kashYield.connect(owner).updateNAV(NAV_1);
+      await kashYield.connect(bot).updateNAV(NAV_1, 0n, 0n, 0n);
       await kashYield.connect(owner).markBatchOpsDone(redeemCycle);
       await kashYield.connect(bot).performUpkeep("0x");
       expect(await kashYield.batchProcessed(redeemCycle)).to.be.true;
@@ -473,7 +483,7 @@ describe("Advanced scenarios — multi-user, cumulative positions, price changes
       expect(shortAfterCycle2).to.be.closeTo(shortAfterCycle1 * 2n, shortAfterCycle1 / 10n,
         "HL short should be approximately 2x after two equal mint cycles");
 
-      await kashYield.connect(owner).updateNAV(NAV_1);
+      await kashYield.connect(bot).updateNAV(NAV_1, 0n, 0n, 0n);
       await kashYield.connect(owner).markBatchOpsDone(cycle2);
       await kashYield.connect(bot).performUpkeep("0x");
 
@@ -525,7 +535,7 @@ describe("Advanced scenarios — multi-user, cumulative positions, price changes
       expect(shortAfterCycle2).to.be.closeTo(shortAfterCycle1 * 2n, shortAfterCycle1 / 10n,
         "HL short should be approximately 2x after two equal BTC mint cycles");
 
-      await kashYield.connect(owner).updateNAV(NAV_1);
+      await kashYield.connect(bot).updateNAV(NAV_1, 0n, 0n, 0n);
       await kashYield.connect(owner).markBatchOpsDone(cycle2);
       await kashYield.connect(bot).performUpkeep("0x");
 
@@ -566,7 +576,7 @@ describe("Advanced scenarios — multi-user, cumulative positions, price changes
       const short2 = ethUsd2 * 170n / 100n * (10n ** 18n) / NEW_ETH_PRICE_18;
       await kashYield.connect(owner).openShort("ETH", short2);
 
-      await kashYield.connect(owner).updateNAV(NAV_1);
+      await kashYield.connect(bot).updateNAV(NAV_1, 0n, 0n, 0n);
       await kashYield.connect(owner).markBatchOpsDone(cycle2);
       await kashYield.connect(bot).performUpkeep("0x");
 
@@ -641,7 +651,7 @@ describe("Advanced scenarios — multi-user, cumulative positions, price changes
       const halfAave = fullAave / 2n;
       await kashYield.connect(owner).withdrawFromAave(halfAave);
 
-      await kashYield.connect(owner).updateNAV(NAV_1);
+      await kashYield.connect(bot).updateNAV(NAV_1, 0n, 0n, 0n);
       await kashYield.connect(owner).markBatchOpsDone(redeemCycle);
       await kashYield.connect(bot).performUpkeep("0x");
       expect(await kashYield.batchProcessed(redeemCycle)).to.be.true;
@@ -712,7 +722,7 @@ describe("Advanced scenarios — multi-user, cumulative positions, price changes
       const halfAave = fullAave / 2n;
       await kashYield.connect(owner).withdrawFromAave(halfAave);
 
-      await kashYield.connect(owner).updateNAV(NAV_1);
+      await kashYield.connect(bot).updateNAV(NAV_1, 0n, 0n, 0n);
       await kashYield.connect(owner).markBatchOpsDone(redeemCycle);
       await kashYield.connect(bot).performUpkeep("0x");
       expect(await kashYield.batchProcessed(redeemCycle)).to.be.true;
@@ -754,7 +764,7 @@ describe("Advanced scenarios — multi-user, cumulative positions, price changes
 
       await kashYield.connect(bot).performUpkeep("0x");
       await unwindAllBtcPositions(ctx, MINT_BTC, NEW_BTC * 10n ** 18n);
-      await kashYield.connect(owner).updateNAV(NAV_1);
+      await kashYield.connect(bot).updateNAV(NAV_1, 0n, 0n, 0n);
       await kashYield.connect(owner).markBatchOpsDone(redeemCycle);
       await kashYield.connect(bot).performUpkeep("0x");
       expect(await kashYield.batchProcessed(redeemCycle)).to.be.true;
@@ -792,7 +802,7 @@ describe("Advanced scenarios — multi-user, cumulative positions, price changes
 
       await kashYield.connect(bot).performUpkeep("0x");
       await unwindAllBtcPositions(ctx, MINT_BTC, NEW_BTC * 10n ** 18n);
-      await kashYield.connect(owner).updateNAV(NAV_1);
+      await kashYield.connect(bot).updateNAV(NAV_1, 0n, 0n, 0n);
       await kashYield.connect(owner).markBatchOpsDone(redeemCycle);
       await kashYield.connect(bot).performUpkeep("0x");
       expect(await kashYield.batchProcessed(redeemCycle)).to.be.true;
@@ -828,7 +838,7 @@ describe("Advanced scenarios — multi-user, cumulative positions, price changes
       const ethBefore = await ethers.provider.getBalance(user1.address);
       await kashYield.connect(bot).performUpkeep("0x");
       await unwindAllEthPositions(ctx, MINT_ETH, NEW_ETH * 10n ** 18n);
-      await kashYield.connect(owner).updateNAV(NAV_1);
+      await kashYield.connect(bot).updateNAV(NAV_1, 0n, 0n, 0n);
       await kashYield.connect(owner).markBatchOpsDone(redeemCycle);
       await kashYield.connect(bot).performUpkeep("0x");
       expect(await kashYield.batchProcessed(redeemCycle)).to.be.true;
@@ -875,7 +885,7 @@ describe("Advanced scenarios — multi-user, cumulative positions, price changes
       await kashYield.connect(owner).spotBuyOnHyperliquid(borrow2);
       const short2 = btcUsd2 * 170n / 100n * (10n ** 18n) / NEW_BTC_PRICE_18;
       await kashYield.connect(owner).openShort("BTC", short2);
-      await kashYield.connect(owner).updateNAV(NAV_1);
+      await kashYield.connect(bot).updateNAV(NAV_1, 0n, 0n, 0n);
       await kashYield.connect(owner).markBatchOpsDone(cycle2);
       await kashYield.connect(bot).performUpkeep("0x");
 
@@ -894,7 +904,7 @@ describe("Advanced scenarios — multi-user, cumulative positions, price changes
 
       await kashYield.connect(bot).performUpkeep("0x");
       await unwindAllBtcPositions(ctx, MINT_EACH * 2n, 42_000n * 10n ** 18n);
-      await kashYield.connect(owner).updateNAV(NAV_1);
+      await kashYield.connect(bot).updateNAV(NAV_1, 0n, 0n, 0n);
       await kashYield.connect(owner).markBatchOpsDone(cycle3);
       await kashYield.connect(bot).performUpkeep("0x");
       expect(await kashYield.batchProcessed(cycle3)).to.be.true;
@@ -961,7 +971,7 @@ describe("Advanced scenarios — multi-user, cumulative positions, price changes
       const surplusUsdc = await mockUsdc.balanceOf(await kashYield.getAddress());
       if (surplusUsdc > 0n) await kashYield.connect(owner).swapFromUsdc(surplusUsdc);
 
-      await kashYield.connect(owner).updateNAV(NAV_1);
+      await kashYield.connect(bot).updateNAV(NAV_1, 0n, 0n, 0n);
       await kashYield.connect(owner).markBatchOpsDone(redeemCycle);
       await kashYield.connect(bot).performUpkeep("0x");
       expect(await kashYield.batchProcessed(redeemCycle)).to.be.true;

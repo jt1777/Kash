@@ -35,20 +35,11 @@ async function main() {
   const botAddress = process.env.BOT_ADDRESS || deployer.address;
 
   const wbtcAddress = process.env.WBTC_ADDRESS || process.env.MOCK_WBTC;
-  const aavePoolAddress =
-    process.env.AAVE_POOL_ADDRESS ||
-    process.env.AAVE_POOL ||
-    process.env.MOCK_AAVE_ADDRESS;
   const usdcAddress = process.env.USDC_ADDRESS || process.env.MOCK_USDC_ADDRESS;
   const btcOracleAddress = process.env.BTC_ORACLE_ADDRESS || process.env.BTC_ORACLE;
 
   if (!wbtcAddress || !hre.ethers.isAddress(wbtcAddress)) {
     throw new Error("Set WBTC_ADDRESS (or MOCK_WBTC) in .env to existing wBTC contract");
-  }
-  if (!aavePoolAddress || !hre.ethers.isAddress(aavePoolAddress)) {
-    throw new Error(
-      "Set AAVE_POOL_ADDRESS (or AAVE_POOL / MOCK_AAVE_ADDRESS) in .env to existing Aave pool or MockAaveV3 address"
-    );
   }
   if (!usdcAddress || !hre.ethers.isAddress(usdcAddress)) {
     throw new Error("Set USDC_ADDRESS (or MOCK_USDC_ADDRESS) in .env to existing USDC or MockUSDC");
@@ -57,27 +48,27 @@ async function main() {
     throw new Error("Set BTC_ORACLE_ADDRESS (or BTC_ORACLE) in .env to existing BTC/USD price feed");
   }
 
-  console.log("Using existing:");
-  console.log("  wBTC:      ", wbtcAddress);
-  console.log("  Aave pool: ", aavePoolAddress);
-  console.log("  USDC:      ", usdcAddress);
-  console.log("  BTC feed:  ", btcOracleAddress);
-  console.log("  Bot:       ", botAddress);
+  // NOTE: aavePoolAddress is now immutable and hardcoded to Arbitrum One mainnet (0x794a...)
+  // in the constructor. AAVE_POOL_ADDRESS env var is no longer used for deployment.
+  console.log("Deploying with:");
+  console.log("  wBTC:     ", wbtcAddress);
+  console.log("  USDC:     ", usdcAddress);
+  console.log("  BTC feed: ", btcOracleAddress);
+  console.log("  Bot:      ", botAddress);
+  console.log("  Aave:      0x794a61358D6845594F94dc1DB02A252b5b4814aD (hardcoded mainnet)");
   console.log("");
 
   const KashYieldBtc = await hre.ethers.getContractFactory("KashYieldBtc");
-  const kashYieldBtc = await KashYieldBtc.deploy(botAddress);
+  const kashYieldBtc = await KashYieldBtc.deploy(botAddress, wbtcAddress, usdcAddress);
   await kashYieldBtc.waitForDeployment();
   const kashYieldBtcAddress = await kashYieldBtc.getAddress();
   const kashTokenBtcAddress = await kashYieldBtc.kashTokenBtc();
   console.log("✅ KashYieldBtc:", kashYieldBtcAddress);
   console.log("✅ KashTokenBtc (new):", kashTokenBtcAddress);
 
-  await kashYieldBtc.setWbtcAddress(wbtcAddress);
-  await kashYieldBtc.setAavePool(aavePoolAddress);
+  // wbtcAddress, usdcAddress, aavePoolAddress all set immutably in constructor
   await kashYieldBtc.setBtcOracle(btcOracleAddress);
-  await kashYieldBtc.setUsdcAddress(usdcAddress);
-  console.log("✅ Configured KashYieldBtc (wbtc, aave, oracle, usdc)");
+  console.log("✅ Configured KashYieldBtc (btc oracle)");
 
   const spotDexAddress = process.env.MOCK_SPOT_DEX_ADDRESS || process.env.SPOT_DEX_ADDRESS || "";
   if (spotDexAddress && hre.ethers.isAddress(spotDexAddress)) {
@@ -90,10 +81,10 @@ async function main() {
   console.log("====================================");
   console.log("  KashYieldBtc:  ", kashYieldBtcAddress);
   console.log("  KashTokenBtc:  ", kashTokenBtcAddress);
-  console.log("  wBTC (existing): ", wbtcAddress);
-  console.log("  Aave (existing):  ", aavePoolAddress);
-  console.log("  USDC (existing):  ", usdcAddress);
-  console.log("  BTC feed (existing):", btcOracleAddress);
+  console.log("  wBTC:     ", wbtcAddress);
+  console.log("  Aave:      0x794a61358D6845594F94dc1DB02A252b5b4814aD (hardcoded mainnet)");
+  console.log("  USDC:     ", usdcAddress);
+  console.log("  BTC feed: ", btcOracleAddress);
   console.log("====================================\n");
 
   console.log("Add to .env, frontend/.env.local, and bot/.env:");
@@ -124,7 +115,7 @@ async function main() {
       kashYieldBtc: kashYieldBtcAddress,
       kashTokenBtc: kashTokenBtcAddress,
       wbtcUsed: wbtcAddress,
-      aavePoolUsed: aavePoolAddress,
+      aavePoolUsed: "0x794a61358D6845594F94dc1DB02A252b5b4814aD",
       usdcUsed: usdcAddress,
       btcOracleUsed: btcOracleAddress,
     },

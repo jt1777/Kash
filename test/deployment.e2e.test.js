@@ -136,63 +136,66 @@ before("Deploy full mock stack (mirrors DEPLOYMENT.md)", async function () {
   console.log("  ✅ [Step 4] MockSpotDex:", await mockSpotDex.getAddress());
 
   // ────────────────────────────────────────────────────────────────────────────
-  // STEP 5 — scripts/deploy-hyperliquid-adapter.js  IS_ETH_ASSET=true
+  // STEP 5 — scripts/deploy-arbitrum-sepolia.js
+  //   Deploys KashYieldETH(botAddress, weth, usdc, aavePool).
+  //   KashYield must be deployed before HyperliquidAdapter (adapter needs KashYield address).
+  // ────────────────────────────────────────────────────────────────────────────
+  const KashYieldETH = await ethers.getContractFactory("KashYieldETH");
+  const kashYieldEth  = await KashYieldETH.deploy(
+    bot.address,
+    await mockWeth.getAddress(),
+    await mockUsdc.getAddress(),
+    await mockAave.getAddress()
+  );
+  await kashYieldEth.setEthOracle(await ethFeed.getAddress());
+  await kashYieldEth.setAllowedSpotDexRouter(await mockSpotDex.getAddress(), true);
+  await kashYieldEth.setSpotDex(await mockSpotDex.getAddress());
+  console.log("  ✅ [Step 5] KashYieldETH:", await kashYieldEth.getAddress());
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // STEP 6 — scripts/deploy-kashyieldbtc.js
+  //   Deploys KashYieldBtc(botAddress, wbtc, usdc, aavePool).
+  // ────────────────────────────────────────────────────────────────────────────
+  const KashYieldBtc = await ethers.getContractFactory("KashYieldBtc");
+  const kashYieldBtc  = await KashYieldBtc.deploy(
+    bot.address,
+    await mockWbtc.getAddress(),
+    await mockUsdc.getAddress(),
+    await mockAave.getAddress()
+  );
+  await kashYieldBtc.setBtcOracle(await btcFeed.getAddress());
+  await kashYieldBtc.setAllowedSpotDexRouter(await mockSpotDex.getAddress(), true);
+  await kashYieldBtc.setSpotDex(await mockSpotDex.getAddress());
+  console.log("  ✅ [Step 6] KashYieldBtc:", await kashYieldBtc.getAddress());
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // STEP 7 — scripts/deploy-hyperliquid-adapter.js  IS_ETH_ASSET=true
   //   Deploys HyperliquidAdapter for the ETH product.
-  //   Constructor: (hlAddress, usdcAddress, assetAddress=0x0, isEthAsset=true)
+  //   Constructor: (hlAddress, usdcAddress, assetAddress=0x0, isEthAsset=true, kashYieldAddress)
   // ────────────────────────────────────────────────────────────────────────────
   const HyperliquidAdapter = await ethers.getContractFactory("HyperliquidAdapter");
   const hlAdapterEth = await HyperliquidAdapter.deploy(
     await mockHl.getAddress(),
     await mockUsdc.getAddress(),
-    ethers.ZeroAddress,   // assetAddress = 0x0 for native ETH
-    true                  // isEthAsset
+    ethers.ZeroAddress,          // assetAddress = 0x0 for native ETH
+    true,                        // isEthAsset
+    await kashYieldEth.getAddress()
   );
-  console.log("  ✅ [Step 5] HyperliquidAdapter (ETH):", await hlAdapterEth.getAddress());
+  console.log("  ✅ [Step 7] HyperliquidAdapter (ETH):", await hlAdapterEth.getAddress());
 
   // ────────────────────────────────────────────────────────────────────────────
-  // STEP 6 — scripts/deploy-hyperliquid-adapter.js  IS_ETH_ASSET=false
+  // STEP 8 — scripts/deploy-hyperliquid-adapter.js  IS_ETH_ASSET=false
   //   Deploys HyperliquidAdapter for the BTC product.
-  //   Constructor: (hlAddress, usdcAddress, assetAddress=wbtc, isEthAsset=false)
+  //   Constructor: (hlAddress, usdcAddress, assetAddress=wbtc, isEthAsset=false, kashYieldAddress)
   // ────────────────────────────────────────────────────────────────────────────
   const hlAdapterBtc = await HyperliquidAdapter.deploy(
     await mockHl.getAddress(),
     await mockUsdc.getAddress(),
     await mockWbtc.getAddress(), // assetAddress = wBTC
-    false                        // isEthAsset
+    false,                       // isEthAsset
+    await kashYieldBtc.getAddress()
   );
-  console.log("  ✅ [Step 6] HyperliquidAdapter (BTC):", await hlAdapterBtc.getAddress());
-
-  // ────────────────────────────────────────────────────────────────────────────
-  // STEP 7 — scripts/deploy-arbitrum-sepolia.js
-  //   Deploys KashYieldETH(botAddress), then calls:
-  //     setAavePool, setUsdcAddress, setWethAddress
-  //   Script also auto-registers HL_ADAPTER_ADDRESS_ETH if set.
-  // ────────────────────────────────────────────────────────────────────────────
-  const KashYieldETH = await ethers.getContractFactory("KashYieldETH");
-  const kashYieldEth  = await KashYieldETH.deploy(bot.address);
-
-  // Apply address overrides (mirrors the if (aavePoolOverride) ... blocks in script)
-  await kashYieldEth.setAavePool(await mockAave.getAddress());
-  await kashYieldEth.setUsdcAddress(await mockUsdc.getAddress());
-  await kashYieldEth.setWethAddress(await mockWeth.getAddress());
-  await kashYieldEth.setEthOracle(await ethFeed.getAddress());
-  await kashYieldEth.setSpotDex(await mockSpotDex.getAddress());
-  console.log("  ✅ [Step 7] KashYieldETH:", await kashYieldEth.getAddress());
-
-  // ────────────────────────────────────────────────────────────────────────────
-  // STEP 8 — scripts/deploy-kashyieldbtc.js
-  //   Deploys KashYieldBtc(botAddress), then calls:
-  //     setWbtcAddress, setAavePool, setBtcOracle, setUsdcAddress, setSpotDex
-  // ────────────────────────────────────────────────────────────────────────────
-  const KashYieldBtc = await ethers.getContractFactory("KashYieldBtc");
-  const kashYieldBtc  = await KashYieldBtc.deploy(bot.address);
-
-  await kashYieldBtc.setWbtcAddress(await mockWbtc.getAddress());
-  await kashYieldBtc.setAavePool(await mockAave.getAddress());
-  await kashYieldBtc.setBtcOracle(await btcFeed.getAddress());
-  await kashYieldBtc.setUsdcAddress(await mockUsdc.getAddress());
-  await kashYieldBtc.setSpotDex(await mockSpotDex.getAddress());
-  console.log("  ✅ [Step 8] KashYieldBtc:", await kashYieldBtc.getAddress());
+  console.log("  ✅ [Step 8] HyperliquidAdapter (BTC):", await hlAdapterBtc.getAddress());
 
   // ────────────────────────────────────────────────────────────────────────────
   // STEP 9 — scripts/setExchangeSwitchDelay.js
@@ -438,7 +441,7 @@ describe("Full Deployment Verification", function () {
       expect(posActive).to.be.true;
 
       // ── NAV + mark done + Phase 2 ──
-      await kashYieldBtc.connect(owner).updateNAV(NAV_1);
+      await kashYieldBtc.connect(bot).updateNAV(NAV_1, 0n, 0n, 0n);
       await kashYieldBtc.connect(owner).markBatchOpsDone(btcMintCycle);
       await kashYieldBtc.connect(bot).performUpkeep("0x");
       expect(await kashYieldBtc.batchProcessed(btcMintCycle)).to.be.true;
@@ -503,7 +506,7 @@ describe("Full Deployment Verification", function () {
       expect(contractWbtc).to.be.gte(MINT_BTC - 1n);
 
       // ── NAV + mark done + Phase 2 ──
-      await kashYieldBtc.connect(owner).updateNAV(NAV_1);
+      await kashYieldBtc.connect(bot).updateNAV(NAV_1, 0n, 0n, 0n);
       await kashYieldBtc.connect(owner).markBatchOpsDone(redeemCycle);
       await kashYieldBtc.connect(bot).performUpkeep("0x");
       expect(await kashYieldBtc.batchProcessed(redeemCycle)).to.be.true;
@@ -565,7 +568,7 @@ describe("Full Deployment Verification", function () {
       expect(posActive).to.be.true;
 
       // ── NAV + mark done + Phase 2 ──
-      await kashYieldEth.connect(owner).updateNAV(NAV_1);
+      await kashYieldEth.connect(bot).updateNAV(NAV_1, 0n, 0n, 0n);
       await kashYieldEth.connect(owner).markBatchOpsDone(ethMintCycle);
       await kashYieldEth.connect(bot).performUpkeep("0x");
       expect(await kashYieldEth.batchProcessed(ethMintCycle)).to.be.true;
@@ -628,7 +631,7 @@ describe("Full Deployment Verification", function () {
       expect(contractEth).to.be.gte(MINT_ETH - 1n);
 
       // ── NAV + mark done + Phase 2 ──
-      await kashYieldEth.connect(owner).updateNAV(NAV_1);
+      await kashYieldEth.connect(bot).updateNAV(NAV_1, 0n, 0n, 0n);
       await kashYieldEth.connect(owner).markBatchOpsDone(redeemCycle);
       await kashYieldEth.connect(bot).performUpkeep("0x");
       expect(await kashYieldEth.batchProcessed(redeemCycle)).to.be.true;

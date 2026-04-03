@@ -37,39 +37,39 @@ async function main() {
   }
 
   // ============================================
-  // 1. Deploy KashYieldETH (constructor: botAddress)
+  // 1. Deploy KashYieldETH (constructor: botAddress, weth, usdc)
   // ============================================
   const botAddress = process.env.BOT_ADDRESS || deployer.address;
 
-  // Optional overrides — provide these in .env when testing with mock contracts.
-  // If not set, the contract keeps its hardcoded built-in addresses (real Aave V3 / real USDC).
-  const aavePoolOverride = process.env.AAVE_POOL_ADDRESS || process.env.MOCK_AAVE_ADDRESS || "";
-  const usdcOverride     = process.env.USDC_ADDRESS      || process.env.MOCK_USDC_ADDRESS  || "";
-  const wethOverride     = process.env.WETH_ADDRESS      || process.env.MOCK_WETH_ADDRESS   || "";
+  // Network-specific token defaults (overridable via .env for mock testing)
+  const DEFAULTS = {
+    arbitrumOne: {
+      weth: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
+      usdc: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+    },
+    arbitrumSepolia: {
+      weth: "0x980B62Da83eFf3D4576C647993b0c1D7faf17c73",
+      usdc: "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d",
+    },
+  };
+  const networkDefaults = DEFAULTS[network] || DEFAULTS.arbitrumSepolia;
 
-  console.log("Deploying KashYieldETH (botAddress:", botAddress, ")...");
+  const wethAddress = process.env.WETH_ADDRESS || process.env.MOCK_WETH_ADDRESS || networkDefaults.weth;
+  const usdcAddress = process.env.USDC_ADDRESS || process.env.MOCK_USDC_ADDRESS || networkDefaults.usdc;
+
+  // NOTE: aavePoolAddress is now immutable and hardcoded to Arbitrum One mainnet (0x794a...)
+  // in the constructor. If deploying to testnet with a MockAave, the mock address will NOT
+  // be used — the contract will point to the mainnet Aave address regardless.
+  console.log(`Deploying KashYieldETH (bot: ${botAddress}, weth: ${wethAddress}, usdc: ${usdcAddress})...`);
   const KashYieldETH = await hre.ethers.getContractFactory("KashYieldETH");
-  const kashYieldEth = await KashYieldETH.deploy(botAddress);
+  const kashYieldEth = await KashYieldETH.deploy(botAddress, wethAddress, usdcAddress);
   await kashYieldEth.waitForDeployment();
 
   const kashYieldEthAddress = await kashYieldEth.getAddress();
   const kashTokenEthAddress = await kashYieldEth.kashTokenEth();
   console.log("✅ KashYieldETH:", kashYieldEthAddress);
   console.log("✅ KashTokenEth:", kashTokenEthAddress);
-
-  // Apply address overrides if provided
-  if (aavePoolOverride && hre.ethers.isAddress(aavePoolOverride)) {
-    await (await kashYieldEth.setAavePool(aavePoolOverride)).wait();
-    console.log("✅ setAavePool →", aavePoolOverride);
-  }
-  if (usdcOverride && hre.ethers.isAddress(usdcOverride)) {
-    await (await kashYieldEth.setUsdcAddress(usdcOverride)).wait();
-    console.log("✅ setUsdcAddress →", usdcOverride);
-  }
-  if (wethOverride && hre.ethers.isAddress(wethOverride)) {
-    await (await kashYieldEth.setWethAddress(wethOverride)).wait();
-    console.log("✅ setWethAddress →", wethOverride);
-  }
+  console.log("   Aave pool:  ", await kashYieldEth.aavePoolAddress(), "(hardcoded mainnet)");
 
   // ============================================
   // 2. Optional: register HyperliquidAdapter (first-time bypass — immediate, no timelock)

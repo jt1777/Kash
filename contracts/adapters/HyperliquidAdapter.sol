@@ -64,6 +64,13 @@ import "../interfaces/IPerpExchange.sol";
  *
  * directDepositMode = false: adapter address is the HL account (production ideal)
  * directDepositMode = true:  bot EOA is the HL account (simpler agent setup)
+ *
+ * ── Access control ────────────────────────────────────────────────────────────
+ * Capital-movement functions (depositCollateral, withdrawCollateral, tradeSpot,
+ * openPerpPosition, closePerpPosition, cancelOrder) are restricted to:
+ *   - kashYieldAddress (the KashYield contract that owns this adapter)
+ *   - owner (deployer / ops wallet for manual operations and scripts)
+ * State-sync functions (syncBalances, syncPosition) are owner-only.
  */
 contract HyperliquidAdapter is IPerpExchange {
     using SafeERC20 for IERC20;
@@ -76,6 +83,8 @@ contract HyperliquidAdapter is IPerpExchange {
     address public immutable assetAddress;
     /// @notice True if this adapter serves the ETH yield product.
     bool public immutable isEthAsset;
+    /// @notice The KashYield contract authorised to call capital-movement functions.
+    address public immutable kashYieldAddress;
 
     address public owner;
     address public pendingOwner;
@@ -105,6 +114,7 @@ contract HyperliquidAdapter is IPerpExchange {
     mapping(string => Position) public positions;
 
     event AdapterCall(string action, uint256 amount);
+    event DirectDepositModeUpdated(bool enabled, address hlAccount);
     event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event BalancesSynced(uint256 usdcBalance, uint256 assetBalance);
@@ -115,16 +125,28 @@ contract HyperliquidAdapter is IPerpExchange {
         _;
     }
 
+    /// @dev Allows the KashYield contract or the owner (ops scripts / manual ops).
+    modifier onlyAuthorized() {
+        require(
+            msg.sender == kashYieldAddress || msg.sender == owner,
+            "Unauthorized"
+        );
+        _;
+    }
+
     constructor(
         address _hlBridgeAddress,
         address _usdcAddress,
         address _assetAddress,
-        bool    _isEthAsset
+        bool    _isEthAsset,
+        address _kashYieldAddress
     ) {
+        require(_kashYieldAddress != address(0), "kashYieldAddress required");
         hlBridgeAddress   = _hlBridgeAddress;
         usdcAddress       = _usdcAddress;
         assetAddress      = _assetAddress;
         isEthAsset        = _isEthAsset;
+        kashYieldAddress  = _kashYieldAddress;
         owner             = msg.sender;
         directDepositMode = false;
     }
@@ -148,6 +170,7 @@ contract HyperliquidAdapter is IPerpExchange {
     function setDirectDepositMode(bool enabled, address _hlAccount) external onlyOwner {
         directDepositMode = enabled;
         hlAccount = _hlAccount;
+        emit DirectDepositModeUpdated(enabled, _hlAccount);
     }
 
     // ── Capital movement ──────────────────────────────────────────────────────
@@ -166,7 +189,7 @@ contract HyperliquidAdapter is IPerpExchange {
      *   Forwards USDC to hlAccount (bot wallet). Bot deposits to bridge from
      *   its own EOA, becoming the HL account holder without agent setup.
      */
-    function depositCollateral(address token, uint256 amount) external override {
+    function depositCollateral(address token, uint256 amount) external override onlyAuthorized {
         require(token == usdcAddress, "HL only accepts USDC");
         IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
         if (directDepositMode) {
@@ -185,16 +208,18 @@ contract HyperliquidAdapter is IPerpExchange {
      *
      * @dev The bot must first initiate the HL withdrawal via the HL REST API,
      * specifying this adapter's Arbitrum address as the destination. USDC arrives
-     * here in 3–4 minutes. Once settled, this function forwards it to the caller.
+     * here in 3–4 minutes. This function transfers however much has actually
+     * settled (capped to the real ERC-20 balance) rather than reverting if the
+     * bridged amount is slightly different from the requested amount.
      *
      * If the withdrawal was sent directly to KashYield (rather than this adapter),
      * call this function with amount = 0 to just update the tracked balance.
      */
-    function withdrawCollateral(address token, uint256 amount) external override {
+    function withdrawCollateral(address token, uint256 amount) external override onlyAuthorized {
         require(token == usdcAddress, "HL only withdraws USDC");
+        uint256 bal = IERC20(token).balanceOf(address(this));
+        if (amount > bal) amount = bal; // cap to what has actually settled
         if (amount > 0) {
-            uint256 bal = IERC20(token).balanceOf(address(this));
-            require(bal >= amount, "USDC not yet settled - HL withdrawal takes 3-4 min");
             IERC20(token).safeTransfer(msg.sender, amount);
         }
         if (usdcBalance >= amount) usdcBalance -= amount;
@@ -212,7 +237,7 @@ contract HyperliquidAdapter is IPerpExchange {
         address /*tokenIn*/,
         address /*tokenOut*/,
         uint256 amountIn
-    ) external payable override returns (uint256) {
+    ) external payable override onlyAuthorized returns (uint256) {
         emit AdapterCall("tradeSpot", amountIn);
         return 0;
     }
@@ -233,19 +258,21 @@ contract HyperliquidAdapter is IPerpExchange {
     // the bot calls syncPosition() to record the new state on-chain.
 
     /// @inheritdoc IPerpExchange
-    function openPerpPosition(string calldata /*symbol*/, uint256 size, bool /*isLong*/) external override {
+    function openPerpPosition(string calldata /*symbol*/, uint256 size, bool /*isLong*/) external override onlyAuthorized {
         emit AdapterCall("openPerpPosition", size);
     }
     /// @inheritdoc IPerpExchange
-    function closePerpPosition(string calldata /*symbol*/) external override {
+    function closePerpPosition(string calldata /*symbol*/) external override onlyAuthorized {
         emit AdapterCall("closePerpPosition", 0);
     }
     /// @inheritdoc IPerpExchange
-    function closePerpPosition(string calldata /*symbol*/, uint256 closeSize) external override {
+    function closePerpPosition(string calldata /*symbol*/, uint256 closeSize) external override onlyAuthorized {
         emit AdapterCall("closePerpPosition", closeSize);
     }
     /// @inheritdoc IPerpExchange
-    function cancelOrder(bytes32) external override {}
+    function cancelOrder(bytes32) external override onlyAuthorized {
+        emit AdapterCall("cancelOrder", 0);
+    }
 
     // ── Bot state-sync functions ──────────────────────────────────────────────
     //
@@ -311,9 +338,8 @@ contract HyperliquidAdapter is IPerpExchange {
     }
 
     /// @inheritdoc IPerpExchange
+    /// @dev HL order management is entirely off-chain; there are no on-chain order IDs.
     function getOpenOrderIds() external pure override returns (bytes32[] memory) {
         return new bytes32[](0);
     }
-
-    receive() external payable {}
 }

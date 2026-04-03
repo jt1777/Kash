@@ -76,28 +76,33 @@ async function deployEthFixture() {
   await mockSpotDex.fund(await mockUsdc.getAddress(), DEX_USDC_FUND);
   await mockSpotDex.fundEth({ value: ethers.parseEther("10") });
 
-  // ── 6. Hyperliquid Adapter (ETH product) ─────────────────────────────────
-  const HyperliquidAdapter = await ethers.getContractFactory("HyperliquidAdapter");
-  const hlAdapter = await HyperliquidAdapter.deploy(
-    await mockHl.getAddress(),
+  // ── 6. KashYieldETH ──────────────────────────────────────────────────────
+  // Deploy KashYieldETH first so its address can be passed to the adapter.
+  const KashYieldETH = await ethers.getContractFactory("KashYieldETH");
+  const kashYield = await KashYieldETH.deploy(
+    bot.address,
+    await mockWeth.getAddress(),
     await mockUsdc.getAddress(),
-    ethers.ZeroAddress, // assetAddress = 0x0 for ETH product
-    true                // isEthAsset = true
+    await mockAave.getAddress()
   );
 
-  // ── 7. KashYieldETH ──────────────────────────────────────────────────────
-  const KashYieldETH = await ethers.getContractFactory("KashYieldETH");
-  const kashYield = await KashYieldETH.deploy(bot.address);
-
-  await kashYield.setAavePool(await mockAave.getAddress());
-  await kashYield.setUsdcAddress(await mockUsdc.getAddress());
-  await kashYield.setWethAddress(await mockWeth.getAddress());
   await kashYield.setEthOracle(await mockFeed.getAddress());
+  await kashYield.setAllowedSpotDexRouter(await mockSpotDex.getAddress(), true);
   await kashYield.setSpotDex(await mockSpotDex.getAddress());
   await kashYield.setCycleDurationSeconds(CYCLE_SECS);
   // Disable time windows for tests: users and bot can operate at any point in the cycle.
   await kashYield.setUserWindowEnd(CYCLE_SECS);
   await kashYield.setProcessingWindowStart(0n);
+
+  // ── 7. Hyperliquid Adapter (ETH product) ─────────────────────────────────
+  const HyperliquidAdapter = await ethers.getContractFactory("HyperliquidAdapter");
+  const hlAdapter = await HyperliquidAdapter.deploy(
+    await mockHl.getAddress(),
+    await mockUsdc.getAddress(),
+    ethers.ZeroAddress,          // assetAddress = 0x0 for ETH product
+    true,                        // isEthAsset = true
+    await kashYield.getAddress() // kashYieldAddress for onlyAuthorized guard
+  );
 
   // Register HL adapter (first-time bypass, no delay).
   await kashYield.setExchangeSwitchDelay(0);
@@ -160,7 +165,7 @@ async function runFullEthMintCycle(ctx, batchCycle, mintEth) {
   expect(posSize).to.equal(shortSizeAsset);
 
   // ── NAV + mark done + Phase 2 ─────────────────────────────────────────────
-  await kashYield.connect(owner).updateNAV(NAV_1);
+  await kashYield.connect(bot).updateNAV(NAV_1, 0n, 0n, 0n);
   await kashYield.connect(owner).markBatchOpsDone(batchCycle);
   await kashYield.connect(bot).performUpkeep("0x");
   expect(await kashYield.batchProcessed(batchCycle)).to.be.true;
@@ -210,7 +215,7 @@ async function runFullEthRedeemCycle(ctx, batchCycle, mintEth) {
   expect(contractEth).to.be.gte(mintEth - 1n);
 
   // ── NAV + mark done + Phase 2 ─────────────────────────────────────────────
-  await kashYield.connect(owner).updateNAV(NAV_1);
+  await kashYield.connect(bot).updateNAV(NAV_1, 0n, 0n, 0n);
   await kashYield.connect(owner).markBatchOpsDone(batchCycle);
   await kashYield.connect(bot).performUpkeep("0x");
   expect(await kashYield.batchProcessed(batchCycle)).to.be.true;
@@ -242,7 +247,7 @@ describe("KashYieldETH — end-to-end", function () {
 
     it("rejects non-owner configuration calls", async function () {
       const { kashYield, user1 } = await deployEthFixture();
-      await expect(kashYield.connect(user1).setAavePool(user1.address))
+      await expect(kashYield.connect(user1).setEthOracle(user1.address))
         .to.be.revertedWithCustomError(kashYield, "OnlyOwner");
     });
 
@@ -253,13 +258,16 @@ describe("KashYieldETH — end-to-end", function () {
     });
 
     it("rejects depositToAave when wethAddress is zero", async function () {
-      const { owner, bot, mockAave, mockUsdc, mockFeed } = await deployEthFixture();
+      const { owner, bot, mockAave, mockUsdc } = await deployEthFixture();
       const KashYieldETH = await ethers.getContractFactory("KashYieldETH");
-      const kyNoWeth = await KashYieldETH.deploy(bot.address);
-      await kyNoWeth.setAavePool(await mockAave.getAddress());
-      await kyNoWeth.setUsdcAddress(await mockUsdc.getAddress());
+      // Pass ZeroAddress for weth intentionally — depositToAave should revert.
+      const kyNoWeth = await KashYieldETH.deploy(
+        bot.address,
+        ethers.ZeroAddress,
+        await mockUsdc.getAddress(),
+        await mockAave.getAddress()
+      );
       await kyNoWeth.setCycleDurationSeconds(CYCLE_SECS);
-      // wethAddress intentionally NOT set.
 
       // Fund it with ETH.
       await owner.sendTransaction({ to: await kyNoWeth.getAddress(), value: ethers.parseEther("1") });
@@ -546,7 +554,7 @@ describe("KashYieldETH — end-to-end", function () {
       // Withdraw ETH from Aave.
       await kashYield.connect(owner).withdrawFromAave(MINT_ETH);
 
-      await kashYield.connect(owner).updateNAV(NAV_1);
+      await kashYield.connect(bot).updateNAV(NAV_1, 0n, 0n, 0n);
       await kashYield.connect(owner).markBatchOpsDone(redeemCycle);
       await kashYield.connect(bot).performUpkeep("0x");
 

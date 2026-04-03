@@ -67,12 +67,15 @@ event BatchPhaseUpdated(uint256 indexed batchCycle, uint8 phase, uint256 indicat
 event BatchProcessed(uint256 indexed batchCycle, uint256 totalMintValueUSD, uint256 totalRedeemValueUSD, uint256 exactNAV);
 event TokensClaimed(address indexed user, address indexed token, uint256 amount, bool isMint);
 event NAVUpdateExecuted(uint256 newNAV, uint256 timestamp);
+    event NAVProposedAndUpdated(uint256 newNAV, uint256 usdcBalance, uint256 assetBalance, uint256 perpPnL, uint256 timestamp);
 event ProtocolInteraction(string action, address indexed asset, uint256 amount);
 event ExchangeRegistered(string indexed name, address adapter);
 event AdapterProposed(string indexed name, address adapter, uint256 readyAt);
 event ExchangeSwitchConfirmed(string indexed name, address adapter);
 event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
 event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+event FeeUpdated(uint256 newFeeBps);
+event OracleUpdated(address indexed newOracle);
 
 /**
  * @title KashYieldETH
@@ -96,13 +99,13 @@ contract KashYieldETH is ReentrancyGuard {
     uint256 public currentNAV = 1e18;
 
     // ── Protocol addresses ────────────────────────────────────────────────
-    address public aavePoolAddress = 0x794a61358D6845594F94dc1DB02A252b5b4814aD; // Aave V3 Pool — Arbitrum One
-    address public keeperRegistry  = address(0); // set via setKeeperRegistry() if using Chainlink Automation
+    address public immutable aavePoolAddress; // Aave V3 Pool — hardcoded in constructor
+    address public keeperRegistry = address(0); // set via setKeeperRegistry() if using Chainlink Automation
     address public botAddress;
 
     address public constant ETH_ADDRESS = address(0);
-    address public wethAddress; // set via setWethAddress() — must be a WETH9-compatible contract with deposit()/withdraw()
-    address public usdcAddress;
+    address public immutable wethAddress; // WETH9-compatible contract with deposit()/withdraw()
+    address public immutable usdcAddress;
     address public ethOracle = 0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612; // Chainlink ETH/USD — Arbitrum One
     uint8   public ethDecimals = 18;
 
@@ -119,7 +122,17 @@ contract KashYieldETH is ReentrancyGuard {
     uint256 public exchangeSwitchDelay = 48 hours;
 
     // ── Spot DEX ─────────────────────────────────────────────────────────
+    // Whitelisted spot DEX routers (UniswapV3 on Arbitrum mainnet)
+    address public constant UNISWAP_V3_ROUTER = 0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45;
+    // USDT on Arbitrum One (allowed as a swap path intermediate)
+    address public constant USDT_ADDRESS      = 0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9;
+
     address public spotDexAddress;
+    mapping(address => bool) public allowedSpotTokens;
+    mapping(address => bool) public allowedSpotDexRouters; // whitelist of permitted DEX adapter contracts
+
+    uint256 public spotDexTimelock = 48 hours;
+    mapping(address => uint256) public spotDexPending;
 
     uint256 public maxSwapSlippageBps     = 50;
     uint256 public constant MAX_SLIPPAGE_BPS = 500;
@@ -196,12 +209,26 @@ contract KashYieldETH is ReentrancyGuard {
         _;
     }
 
-    constructor(address _botAddress) payable {
+    constructor(address _botAddress, address _weth, address _usdc) payable {
         owner = payable(msg.sender);
         botAddress = _botAddress;
         kashTokenEth = new KashTokenEth();
         kashTokenEth.transferOwnership(address(this));
         currentBatchCycle = block.timestamp / cycleDurationSeconds;
+
+        // Hard-coded mainnet addresses
+        aavePoolAddress = 0x794a61358D6845594F94dc1DB02A252b5b4814aD;
+        wethAddress     = _weth;
+        usdcAddress     = _usdc;
+
+        // Whitelist tokens allowed in spot DEX swaps
+        allowedSpotTokens[ETH_ADDRESS] = true;
+        allowedSpotTokens[wethAddress] = true;
+        allowedSpotTokens[usdcAddress] = true;
+        allowedSpotTokens[USDT_ADDRESS] = true;
+
+        // Whitelist permitted spot DEX adapter contracts
+        allowedSpotDexRouters[UNISWAP_V3_ROUTER] = true;
     }
 
     receive() external payable {}
@@ -240,22 +267,15 @@ contract KashYieldETH is ReentrancyGuard {
         processingWindowStart = _seconds;
     }
     function setKeeperRegistry(address _keeperRegistry) external onlyOwner { keeperRegistry = _keeperRegistry; }
-    function setAavePool(address _aavePool) external onlyOwner {
-        if (_aavePool == address(0)) revert InvalidAddress();
-        aavePoolAddress = _aavePool;
-    }
-    function setWethAddress(address _weth) external onlyOwner {
-        if (_weth == address(0)) revert InvalidAddress();
-        wethAddress = _weth;
-    }
-    function setUsdcAddress(address _usdc) external onlyOwner { usdcAddress = _usdc; }
     function setEthOracle(address _oracle) external onlyOwner {
         if (_oracle == address(0)) revert InvalidAddress();
         ethOracle = _oracle;
+        emit OracleUpdated(_oracle);
     }
     function setFeeBps(uint256 newFee) external onlyOwner {
         if (newFee > MAX_FEE_BPS) revert FeeTooHigh();
         feeBps = newFee;
+        emit FeeUpdated(newFee);
     }
     function pause()   external onlyOwner { paused = true; }
     function unpause() external onlyOwner { paused = false; }
@@ -294,7 +314,37 @@ contract KashYieldETH is ReentrancyGuard {
         emit ExchangeSwitchConfirmed(name, perpExchanges[name]);
     }
 
-    function setSpotDex(address _spotDex) external onlyOwner { spotDexAddress = _spotDex; }
+    /// @notice Propose a new spot DEX adapter. First-ever call is immediate (no timelock);
+    ///         all subsequent changes require a spotDexTimelock-second wait before confirming.
+    ///         The adapter address must be on the allowedSpotDexRouters whitelist.
+    function setSpotDex(address _spotDex) external onlyOwner {
+        if (_spotDex == address(0)) revert InvalidAddress();
+        if (!allowedSpotDexRouters[_spotDex]) revert InvalidAdapter();
+        if (spotDexPending[_spotDex] != 0) revert TimelockNotExpired();
+        if (spotDexAddress == address(0)) {
+            // First-ever set: immediate, no timelock
+            spotDexAddress = _spotDex;
+            emit ExchangeSwitchConfirmed("SPOT_DEX", _spotDex);
+            return;
+        }
+        spotDexPending[_spotDex] = block.timestamp + spotDexTimelock;
+        emit AdapterProposed("SPOT_DEX", _spotDex, spotDexPending[_spotDex]);
+    }
+
+    /// @notice Confirm a previously proposed spot DEX adapter after the timelock has elapsed.
+    function confirmSpotDex(address _spotDex) external onlyOwner {
+        if (spotDexPending[_spotDex] == 0) revert NoPendingAdapter();
+        if (block.timestamp < spotDexPending[_spotDex]) revert TimelockNotExpired();
+        spotDexAddress = _spotDex;
+        delete spotDexPending[_spotDex];
+        emit ExchangeSwitchConfirmed("SPOT_DEX", _spotDex);
+    }
+
+    /// @notice Add or remove a spot DEX adapter from the whitelist.
+    function setAllowedSpotDexRouter(address router, bool allowed) external onlyOwner {
+        allowedSpotDexRouters[router] = allowed;
+    }
+
     /// @notice Set adapter registration timelock. Use 0 for testnet, 48 hours for mainnet.
     function setExchangeSwitchDelay(uint256 _seconds) external onlyOwner { exchangeSwitchDelay = _seconds; }
 
@@ -336,6 +386,7 @@ contract KashYieldETH is ReentrancyGuard {
             actualAmount = amount;
         }
         uint256 batchCycle = block.timestamp / cycleDurationSeconds;
+        if (batchPhase[batchCycle] != 0) revert WrongPhase();
         if (batchProcessed[batchCycle]) revert AlreadyProcessed();
         // Accumulate into the existing request so multiple deposits in the same window
         // are treated as one combined request.
@@ -355,6 +406,7 @@ contract KashYieldETH is ReentrancyGuard {
         if (kashAmount == 0) revert ZeroAmount();
         if (kashTokenEth.balanceOf(msg.sender) < kashAmount) revert InsufficientKashEth();
         uint256 batchCycle = block.timestamp / cycleDurationSeconds;
+        if (batchPhase[batchCycle] != 0) revert WrongPhase();
         if (batchProcessed[batchCycle]) revert AlreadyProcessed();
         kashTokenEth.transferFrom(msg.sender, address(this), kashAmount);
         // Accumulate into the existing request so multiple redeems in the same window
@@ -538,7 +590,7 @@ contract KashYieldETH is ReentrancyGuard {
             if (success) {
                 emit TokensClaimed(user, ETH_ADDRESS, ethAmount, false);
             } else {
-                // Transfer failed — keep ETH in contract; owner can rescue via ownerManuallyProcessRedeem
+                // Transfer failed — keep ETH in contract; owner can rescue via rescueERC20 or ownerWithdrawEth
                 emit ProtocolInteraction("REDEEM_TRANSFER_FAILED", user, ethAmount);
             }
         }
@@ -695,9 +747,15 @@ contract KashYieldETH is ReentrancyGuard {
         return IPerpExchange(adapter).getOpenOrderIds();
     }
 
-    function updateNAV(uint256 newNAV) external onlyOwner {
+    function updateNAV(
+        uint256 newNAV,
+        uint256 usdcBalance,
+        uint256 assetBalance,
+        uint256 perpPnL
+    ) external onlyBotOrKeeper {
         if (newNAV == 0) revert InvalidNAV();
         currentNAV = newNAV;
+        emit NAVProposedAndUpdated(newNAV, usdcBalance, assetBalance, perpPnL, block.timestamp);
         emit NAVUpdateExecuted(newNAV, block.timestamp);
     }
 
@@ -774,38 +832,18 @@ contract KashYieldETH is ReentrancyGuard {
         emit ProtocolInteraction("MINT_ETH_DEPLOYED", ETH_ADDRESS, amount);
     }
 
-    function ownerManuallyProcessRedeem(address[] calldata users, uint256 batchCycle) external onlyOwner nonReentrant {
-        if (users.length == 0) revert NoUsersProvided();
-        uint256 ethPrice = getEthPrice();
-        uint256 totalEthNeeded = 0;
-        for (uint256 i = 0; i < users.length; i++) {
-            RedeemRequest storage req = userRedeemRequests[users[i]][batchCycle];
-            if (req.kashAmount == 0) revert NoPendingRedeemRequest();
-            uint256 usdAfterFee = (req.kashAmount * currentNAV / 1e18) * (10000 - feeBps) / 10000;
-            totalEthNeeded += (usdAfterFee * (10 ** ETH_DECIMALS)) / ethPrice;
-        }
-        if (address(this).balance < totalEthNeeded) revert InsufficientEthInContract();
-        for (uint256 i = 0; i < users.length; i++) {
-            address user = users[i];
-            RedeemRequest storage req = userRedeemRequests[user][batchCycle];
-            uint256 usdAfterFee = (req.kashAmount * currentNAV / 1e18) * (10000 - feeBps) / 10000;
-            uint256 ethAmount = (usdAfterFee * (10 ** ETH_DECIMALS)) / ethPrice;
-            uint256 kashToBurn = req.kashAmount;
-            // Decrement batch total so Phase 2 cannot double-burn if it runs later
-            batchTotalRedeemKash[batchCycle] -= kashToBurn;
-            delete userRedeemRequests[user][batchCycle];
-            kashTokenEth.burn(address(this), kashToBurn);
-            payable(user).transfer(ethAmount);
-            emit TokensClaimed(user, ETH_ADDRESS, ethAmount, false);
-        }
-        emit ProtocolInteraction("OWNER_MANUAL_REDEEM", ETH_ADDRESS, totalEthNeeded);
-    }
-
     function ownerWithdrawEth(uint256 amount) external onlyOwner {
         uint256 reserved = getReservedEth();
         if (amount + reserved > address(this).balance) revert InsufficientExcessEth();
         payable(owner).transfer(amount);
         emit ProtocolInteraction("OWNER_WITHDRAW_ETH", ETH_ADDRESS, amount);
+    }
+
+    function rescueERC20(address token, uint256 amount, address recipient) external onlyOwner {
+        if (token == ETH_ADDRESS) revert InvalidAddress();
+        if (recipient == address(0)) revert InvalidAddress();
+        IERC20(token).safeTransfer(recipient, amount);
+        emit ProtocolInteraction("RESCUE_ERC20", token, amount);
     }
 
     function emergencyWithdrawMint(uint256 batchCycle) external {

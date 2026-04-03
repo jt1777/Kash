@@ -128,7 +128,7 @@ export const kashYieldABI = [
   },
   { inputs: [], name: "getHyperliquidOpenOrderIds", outputs: [{ name: "", type: "bytes32[]" }], stateMutability: "view", type: "function" },
   // Admin
-  { inputs: [{ name: "newNAV", type: "uint256" }], name: "updateNAV", outputs: [], stateMutability: "nonpayable", type: "function" },
+  { inputs: [{ name: "newNAV", type: "uint256" }, { name: "usdcBalance", type: "uint256" }, { name: "assetBalance", type: "uint256" }, { name: "perpPnL", type: "uint256" }], name: "updateNAV", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "newFee", type: "uint256" }], name: "setFeeBps", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "_aavePool", type: "address" }], name: "setAavePool", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "_weth", type: "address" }], name: "setWethAddress", outputs: [], stateMutability: "nonpayable", type: "function" },
