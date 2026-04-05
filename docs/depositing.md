@@ -6,7 +6,7 @@ Depositing into KASH gives you KASH tokens that earn yield over time.
 
 ## Before you deposit
 
-- Ensure your wallet is connected to the app on the **Arbitrum Sepolia** network
+- Ensure your wallet is connected to the app on **Arbitrum One** (chain ID 42161)
 - You have ETH (for KASH-ETH) or wBTC (for KASH-BTC) in your wallet
 - You have a small amount of ETH for gas fees
 

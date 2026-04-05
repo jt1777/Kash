@@ -2,10 +2,10 @@
 
 import { useAccount, useReadContracts, useWriteContract, useWaitForTransactionReceipt, useEstimateFeesPerGas, useReadContract } from 'wagmi';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { ARBITRUM_SEPOLIA_CHAIN_ID, ARBITRUM_SEPOLIA_BLOCK_EXPLORER, CONTRACTS } from '@/lib/contracts/addresses';
+import { ARBITRUM_ONE_CHAIN_ID, ARBITRUM_ONE_BLOCK_EXPLORER, CONTRACTS } from '@/lib/contracts/addresses';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 
-// Fallback max fee when estimate is missing (e.g. 25 gwei for Arbitrum Sepolia)
+// Fallback max fee when estimate is missing (e.g. 25 gwei on L2)
 const FALLBACK_MAX_FEE_WEI = 25n * (10n ** 9n);
 
 const ACTIVITY_LIMIT = 10;
@@ -43,7 +43,7 @@ function formatTimeAgo(ts: number): string {
 export function RecentActivity() {
   const { address, chain } = useAccount();
   const chainId = chain?.id ?? 0;
-  const isArbitrumSepolia = chainId === ARBITRUM_SEPOLIA_CHAIN_ID;
+  const isArbitrumOne = chainId === ARBITRUM_ONE_CHAIN_ID;
 
   const [activities, setActivities] = useState<ActivityItem[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -90,12 +90,12 @@ export function RecentActivity() {
   }, [address, cycleDuration]);
 
   useEffect(() => {
-    if (address && isArbitrumSepolia) load();
+    if (address && isArbitrumOne) load();
     else {
       setActivities([]);
       setLoadError(null);
     }
-  }, [address, isArbitrumSepolia, load]);
+  }, [address, isArbitrumOne, load]);
 
   // For each activity: getBatchInfo (processed?) and getPendingMintRequest/getPendingRedeemRequest (still has request?)
   const readConfigs: { address: `0x${string}`; abi: typeof kashYieldABI; functionName: 'getBatchInfo' | 'getPendingMintRequest' | 'getPendingRedeemRequest'; args: [bigint] | [string, bigint] }[] = [];
@@ -276,7 +276,7 @@ export function RecentActivity() {
     });
   };
 
-  if (!address || !isArbitrumSepolia) return null;
+  if (!address || !isArbitrumOne) return null;
 
   return (
     <div className="rounded-2xl border bg-white shadow-xl p-6 mt-8" style={{ borderColor: 'rgba(0, 255, 255, 0.2)' }}>
@@ -304,7 +304,7 @@ export function RecentActivity() {
           {cancelTxHash && (
             <span className="block mt-1">
               <a
-                href={`${ARBITRUM_SEPOLIA_BLOCK_EXPLORER}/tx/${cancelTxHash}`}
+                href={`${ARBITRUM_ONE_BLOCK_EXPLORER}/tx/${cancelTxHash}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="underline"
@@ -371,7 +371,7 @@ export function RecentActivity() {
                   {item.type === 'mint' ? 'Mint' : 'Redeem'}
                 </span>
                 <a
-                  href={`${ARBITRUM_SEPOLIA_BLOCK_EXPLORER}/tx/${item.hash}`}
+                  href={`${ARBITRUM_ONE_BLOCK_EXPLORER}/tx/${item.hash}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="font-mono text-xs text-gray-600 hover:text-indigo-600 truncate flex-1 min-w-0"

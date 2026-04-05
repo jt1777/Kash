@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadContract, useEstimateFeesPerGas } from 'wagmi';
-import { CONTRACTS, ARBITRUM_SEPOLIA_BLOCK_EXPLORER, HARDHAT_CHAIN_ID } from '@/lib/contracts/addresses';
+import { CONTRACTS, ARBITRUM_ONE_BLOCK_EXPLORER, HARDHAT_CHAIN_ID } from '@/lib/contracts/addresses';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 import { kashTokenABI } from '@/lib/contracts/kashTokenABI';
 import { parseEther, formatEther } from 'viem';
@@ -185,7 +185,7 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
   };
 
   if (isRedeemSuccess && amount && redeemHash) {
-    const txUrl = `${ARBITRUM_SEPOLIA_BLOCK_EXPLORER}/tx/${redeemHash}`;
+    const txUrl = `${ARBITRUM_ONE_BLOCK_EXPLORER}/tx/${redeemHash}`;
     return (
       <div className="text-center py-8">
         <div className="w-16 h-16 bg-purple-100 rounded-full flex items-center justify-center mx-auto mb-4">

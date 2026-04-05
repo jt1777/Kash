@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadContract, useBalance, useEstimateFeesPerGas } from 'wagmi';
-import { CONTRACTS, ARBITRUM_SEPOLIA_BLOCK_EXPLORER, HARDHAT_CHAIN_ID } from '@/lib/contracts/addresses';
+import { CONTRACTS, ARBITRUM_ONE_BLOCK_EXPLORER, HARDHAT_CHAIN_ID } from '@/lib/contracts/addresses';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 import { kashTokenABI } from '@/lib/contracts/kashTokenABI';
 import { parseEther, parseUnits, formatEther, formatUnits, zeroAddress } from 'viem';
@@ -11,8 +11,8 @@ import { useChainId } from 'wagmi';
 // Reserve this much native ETH for gas so wallet never sees "Insufficient funds" (deposit + gas > balance)
 const GAS_RESERVE_ETH = parseEther('0.0005');
 
-// Arbitrum Sepolia fallback: 1 gwei. Without explicit gas, wallet can fall back to mainnet defaults → insane "$15M" fee.
-const ARB_SEPOLIA_MAX_FEE_WEI = 10n ** 9n; // 1 gwei
+// Arbitrum One fallback when fee estimate is missing (1 gwei). Avoids wallets applying wrong-chain defaults.
+const ARB_L2_FALLBACK_MAX_FEE_WEI = 10n ** 9n;
 
 type Product = 'eth' | 'btc';
 
@@ -22,7 +22,7 @@ const MINT_TOKEN_BTC = { symbol: 'wBTC', address: CONTRACTS.mockWbtc, decimals: 
 export function MintForm({ product = 'eth' }: { product?: Product }) {
   const { address } = useAccount();
   const chainId = useChainId();
-  const blockExplorer = chainId === HARDHAT_CHAIN_ID ? 'http://localhost:8545' : ARBITRUM_SEPOLIA_BLOCK_EXPLORER;
+  const blockExplorer = chainId === HARDHAT_CHAIN_ID ? 'http://localhost:8545' : ARBITRUM_ONE_BLOCK_EXPLORER;
 
   const isBtc = product === 'btc' && CONTRACTS.kashYieldBtc && CONTRACTS.mockWbtc;
   const kashYield = isBtc ? CONTRACTS.kashYieldBtc! : CONTRACTS.kashYieldEth;
@@ -46,8 +46,8 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
       };
     }
     return {
-      maxFeePerGas: ARB_SEPOLIA_MAX_FEE_WEI,
-      maxPriorityFeePerGas: ARB_SEPOLIA_MAX_FEE_WEI,
+      maxFeePerGas: ARB_L2_FALLBACK_MAX_FEE_WEI,
+      maxPriorityFeePerGas: ARB_L2_FALLBACK_MAX_FEE_WEI,
     };
   }, [feesPerGas?.maxFeePerGas, feesPerGas?.maxPriorityFeePerGas]);
 
@@ -224,7 +224,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
   };
 
   if (isMintSuccess && amount && mintHash) {
-    const txUrl = chainId === HARDHAT_CHAIN_ID ? '#' : `${ARBITRUM_SEPOLIA_BLOCK_EXPLORER}/tx/${mintHash}`;
+    const txUrl = chainId === HARDHAT_CHAIN_ID ? '#' : `${ARBITRUM_ONE_BLOCK_EXPLORER}/tx/${mintHash}`;
     return (
       <div className="text-center py-8">
         <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">

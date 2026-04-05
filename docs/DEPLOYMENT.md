@@ -616,7 +616,7 @@ npx hardhat run scripts/getNAV.js --network arbitrumSepolia
 
 **Pre-launch checklist:**
 - [ ] Smart contract security audit completed
-- [ ] Bot operated for ≥ 1 week on Arbitrum Sepolia without errors
+- [ ] Bot operated without errors (ideally including a testnet or staging period before mainnet)
 - [ ] `exchangeSwitchDelay` set to `172800` (48 hours) — never `0` on mainnet
 - [ ] Deployer wallet is a hardware wallet or multisig, not a hot wallet
 - [ ] Bot wallet is separate from the deployer/owner wallet

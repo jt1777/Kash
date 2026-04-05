@@ -4,7 +4,7 @@ import { readFileSync, existsSync } from 'fs';
 export const dynamic = 'force-dynamic';
 import { join } from 'path';
 import { CONTRACTS } from '@/lib/contracts/addresses';
-import { ARBITRUM_SEPOLIA_CHAIN_ID } from '@/lib/contracts/addresses';
+import { ARBITRUM_ONE_CHAIN_ID } from '@/lib/contracts/addresses';
 
 // Etherscan API V2 (required; V1 deprecated). Same key works for all chains.
 const ETHERSCAN_V2_API = 'https://api.etherscan.io/v2/api';
@@ -78,7 +78,7 @@ export async function GET(request: NextRequest) {
     console.error('Activity API: ETHERSCAN_API_KEY (or ARBISCAN_API_KEY) required for Etherscan API V2');
     return NextResponse.json({ error: 'Activity API not configured', activities: [] }, { status: 503 });
   }
-  const url = `${ETHERSCAN_V2_API}?chainid=${ARBITRUM_SEPOLIA_CHAIN_ID}&module=account&action=txlist&address=${address}&startblock=0&endblock=99999999&page=1&offset=100&sort=desc&apikey=${apiKey}`;
+  const url = `${ETHERSCAN_V2_API}?chainid=${ARBITRUM_ONE_CHAIN_ID}&module=account&action=txlist&address=${address}&startblock=0&endblock=99999999&page=1&offset=100&sort=desc&apikey=${apiKey}`;
 
   try {
     const res = await fetch(url, { cache: 'no-store' }); // Always fetch fresh so Refresh shows new txs

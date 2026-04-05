@@ -1,6 +1,6 @@
 'use client';
 
-import { ARBITRUM_SEPOLIA_BLOCK_EXPLORER } from '@/lib/contracts/addresses';
+import { ARBITRUM_ONE_BLOCK_EXPLORER } from '@/lib/contracts/addresses';
 import styles from './SiteFooter.module.css';
 
 type SiteFooterProps = {
@@ -21,7 +21,7 @@ export function SiteFooter({ className, contractAddress }: SiteFooterProps) {
           <a href="https://kash-2.gitbook.io/kash-enhanced-yield-protocol" target="_blank" rel="noopener noreferrer">Documentation</a>
           {contractAddress && (
             <a
-              href={`${ARBITRUM_SEPOLIA_BLOCK_EXPLORER}/address/${contractAddress}`}
+              href={`${ARBITRUM_ONE_BLOCK_EXPLORER}/address/${contractAddress}`}
               target="_blank"
               rel="noopener noreferrer"
             >

@@ -1,8 +1,8 @@
 # Risks
 
-KASH is an experimental protocol on testnet. Before using it with real funds on mainnet, you should understand the risks involved.
+KASH is an experimental protocol on **Arbitrum One** mainnet. Using it means depositing real assets; you should understand the risks involved.
 
-> **Important:** KASH has not been audited. Do not use with real funds until a full audit is completed.
+> **Important:** Treat KASH as high risk until you are satisfied with contract review and operational security. Only deposit what you can afford to lose.
 
 ---
 

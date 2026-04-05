@@ -1,5 +1,5 @@
 import { getDefaultConfig } from '@rainbow-me/rainbowkit';
-import { arbitrumSepolia } from 'wagmi/chains';
+import { arbitrum } from 'wagmi/chains';
 import { http } from 'wagmi';
 import type { Config } from 'wagmi';
 import { defineChain } from 'viem';
@@ -13,6 +13,10 @@ const hardhat = defineChain({
     default: { name: 'Hardhat', url: 'http://localhost:8545' },
   },
 });
+
+const arbitrumOneRpc =
+  (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_RPC_URL?.trim()) ||
+  'https://arb1.arbitrum.io/rpc';
 
 // localStorage shim for SSR
 if (typeof window === 'undefined' && typeof global !== 'undefined') {
@@ -34,9 +38,9 @@ export function getConfig(): Config {
     config = getDefaultConfig({
       appName: 'KashYield',
       projectId: process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || 'YOUR_PROJECT_ID',
-      chains: [arbitrumSepolia, hardhat],
+      chains: [arbitrum, hardhat],
       transports: {
-        [arbitrumSepolia.id]: http('https://sepolia-rollup.arbitrum.io/rpc'),
+        [arbitrum.id]: http(arbitrumOneRpc),
         [hardhat.id]: http('http://127.0.0.1:8545'),
       },
       ssr: false,

@@ -48,4 +48,4 @@ This makes KASH composable: KASH tokens could be held in a multisig, sent to ano
 
 - KASH is **not** a stablecoin. KASH-ETH is priced in USD terms and tracks the NAV of the ETH vault.
 - KASH does **not** guarantee returns. Yield can vary and there are risks (see [Risks](risks.md)).
-- KASH is currently on **Arbitrum Sepolia testnet**. Do not use real funds.
+- KASH is deployed on **Arbitrum One** mainnet. You use real ETH and wBTC; understand the [risks](risks.md) before depositing.
