@@ -450,7 +450,7 @@ KASH_YIELD_ETH_ADDRESS=<KashYieldETH> EXCHANGE_NAME=GMX \
 npx hardhat run scripts/setActivePerpExchange.js --network arbitrumSepolia
 ```
 
-For mainnet (delay = 48h), wait 48 hours between registration and `confirmPerpExchange`.
+For mainnet (`exchangeSwitchDelay` = 48h), wait until the timelock expires between **proposing** a **subsequent** adapter and `confirmPerpExchange`. The first adapter on a fresh contract is still registered immediately.
 
 ---
 
@@ -745,10 +745,11 @@ HL_BRIDGE_ADDRESS=0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7
 
 # Filled in as you deploy:
 UNISWAP_ADAPTER_ADDRESS=<UniswapV3Adapter>
-HL_ADAPTER_ADDRESS_ETH=<RealHyperliquidAdapter ETH>
-HL_ADAPTER_ADDRESS_BTC=<RealHyperliquidAdapter BTC>
 KASH_YIELD_ETH_ADDRESS=<KashYieldETH>
 KASH_TOKEN_ETH=<KashTokenEth>
+# HL_ADAPTER_* — add only after deploying HyperliquidAdapter (Step 4 ETH / BTC flow). Must be absent during Step 3; see Step 3 warning.
+# HL_ADAPTER_ADDRESS_ETH=
+# HL_ADAPTER_ADDRESS_BTC=
 ```
 
 ### `bot/.env` (mainnet)
@@ -801,6 +802,8 @@ UNISWAP_ADAPTER_ADDRESS=<UniswapV3Adapter from output>
 
 ### Step 3 — Deploy KashYieldETH
 
+Hardhat loads your **root `.env`** on every run (`hardhat.config.js`). `deploy-arbitrum-sepolia.js` **optionally** calls `setHyperliquid(HL_ADAPTER_ADDRESS_ETH)` **during this deploy** if `HL_ADAPTER_ADDRESS_ETH` is set to a valid address. That is useful on testnet when the adapter already exists; on **this** mainnet order (KashYield before HyperliquidAdapter), you must **not** have `HL_ADAPTER_ADDRESS_ETH` in `.env` yet — remove it, comment it out, or leave it empty. Otherwise KashYield binds HL to an old or placeholder adapter at deploy time, and a later Step 4 deploy will **not** replace it unless you run `setHyperliquid.js` again (then the 48h timelock applies).
+
 ```bash
 BOT_ADDRESS=<your_bot_wallet> \
 WETH_ADDRESS=0x82aF49447D8a07e3bd95BD0d56f35241523fBab1 \
@@ -824,8 +827,10 @@ NEXT_PUBLIC_KASH_TOKEN_ETH=<KashTokenEth from output>
 
 > Requires `KASH_YIELD_ETH_ADDRESS` from Step 3.
 
+Set **`HYPERLIQUID_ADDRESS`** to Hyperliquid **Bridge2** on Arbitrum One ([table above](#hyperliquid)) — this is the live bridge, not a mock (same address as `HL_BRIDGE_ADDRESS` in your mainnet `.env`). The deploy script also accepts `MOCK_HL_ADDRESS` / `HYPERLIQUID_MOCK_ADDRESS` for Sepolia when the underlying contract is `MockHyperliquid`.
+
 ```bash
-MOCK_HL_ADDRESS=0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7 \
+HYPERLIQUID_ADDRESS=0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7 \
 USDC_ADDRESS=0xaf88d065e77c8cC2239327C5EDb3A432268e5831 \
 IS_ETH_ASSET=true \
 KASH_YIELD_ADDRESS=<KASH_YIELD_ETH_ADDRESS from step 3> \
@@ -847,7 +852,7 @@ npx hardhat run scripts/setEthOracle.js --network arbitrumOne
 
 ### Step 6 — Set exchange switch delay
 
-Set the 48-hour timelock before registering any adapter. This is critical on mainnet — it prevents a compromised owner from instantly swapping the live exchange.
+Set **`exchangeSwitchDelay`** to 48 hours on mainnet. This timelock applies only when you **later** propose **another** perp adapter (or replace HL). The **first-ever** registration via `setHyperliquid` / `setPerpExchange` is **immediate** — it does not wait on this delay (contract NatSpec: “First-ever registration is immediate”).
 
 ```bash
 # 172800 = 48 hours
@@ -857,19 +862,28 @@ npx hardhat run scripts/setExchangeSwitchDelay.js --network arbitrumOne
 
 ### Step 7 — Register and activate HL adapter
 
+**Initial mainnet deploy:** register HL, then activate — no 48-hour wait and no `confirmPerpExchange` (there is nothing pending to confirm). `setHyperliquid.js` prints which path ran; on first registration you should see “First-time registration … no timelock”.
+
 ```bash
-# Register (starts the 48-hour timelock set in Step 6)
+# 1. Register HL adapter (first deploy: confirmed immediately)
 KASH_YIELD_ETH_ADDRESS=<KashYieldETH> \
 HYPERLIQUID_ADDRESS=<HL_ADAPTER_ADDRESS_ETH from step 4> \
 npx hardhat run scripts/setHyperliquid.js --network arbitrumOne
 
-# ⚠️ Wait 48 hours before continuing
+# 2. Activate HL as the live exchange (always immediate once the adapter is in the registry)
+KASH_YIELD_ETH_ADDRESS=<KashYieldETH> EXCHANGE_NAME=HL \
+npx hardhat run scripts/setActivePerpExchange.js --network arbitrumOne
+```
 
-# Confirm registration
+**Later — replacing HL or adding another named exchange:** a new proposal uses the Step 6 delay. Then wait until the timelock expires, confirm, then activate if needed:
+
+```bash
+# After setPerpExchange / setHyperliquid proposed a change (script will show expiry time)
+# … wait for exchangeSwitchDelay …
+
 KASH_YIELD_ETH_ADDRESS=<KashYieldETH> EXCHANGE_NAME=HL \
 npx hardhat run scripts/confirmPerpExchange.js --network arbitrumOne
 
-# Activate as the live exchange
 KASH_YIELD_ETH_ADDRESS=<KashYieldETH> EXCHANGE_NAME=HL \
 npx hardhat run scripts/setActivePerpExchange.js --network arbitrumOne
 ```
@@ -878,7 +892,15 @@ npx hardhat run scripts/setActivePerpExchange.js --network arbitrumOne
 
 The first-ever call to `setSpotDex` is **immediate** (no timelock). Subsequent changes require a 48-hour `spotDexTimelock` wait followed by `confirmSpotDex`. The script handles both cases automatically.
 
-UniswapV3Adapter (`0x68b3...`) is pre-whitelisted in the contract. Any other adapter address must first be added via `setAllowedSpotDexRouter`.
+The constructor only pre-whitelists **Uniswap SwapRouter02** (`0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45`). Each **deployed UniswapV3Adapter** (Step 2) has its **own** address and must be whitelisted before `setSpotDex`:
+
+```bash
+KASH_YIELD_ETH_ADDRESS=<KashYieldETH> \
+ROUTER_ADDRESS=<UNISWAP_ADAPTER_ADDRESS from step 2> \
+npx hardhat run scripts/setAllowedSpotDexRouter.js --network arbitrumOne
+```
+
+Then:
 
 ```bash
 KASH_YIELD_ETH_ADDRESS=<KashYieldETH> \
@@ -937,11 +959,9 @@ Expected: Aave pool, WETH, USDC, oracle, spot DEX, and active perp exchange are 
 - [ ] Step 3 — `KashYieldETH` deployed and `KASH_YIELD_ETH_ADDRESS` saved
 - [ ] Step 4 — `HyperliquidAdapter` deployed and `HL_ADAPTER_ADDRESS_ETH` saved
 - [ ] Step 5 — `setEthOracle.js` — Chainlink `0x639Fe6...` set
-- [ ] Step 6 — `setExchangeSwitchDelay.js` — `DELAY_SECONDS=172800` (48 hours)
-- [ ] Step 7 — `setHyperliquid.js` — adapter registered
-- [ ] ⏳ Wait 48 hours
-- [ ] Step 7 — `confirmPerpExchange.js` — registration confirmed
-- [ ] Step 7 — `setActivePerpExchange.js` — HL set as active
+- [ ] Step 6 — `setExchangeSwitchDelay.js` — `DELAY_SECONDS=172800` (48 hours; applies to **future** adapter proposals only)
+- [ ] Step 7 — `setHyperliquid.js` then `setActivePerpExchange.js` — HL registered and active (first deploy: **no** wait, **no** `confirmPerpExchange`)
+- [ ] _(Only when proposing a **subsequent** HL/adapter change)_ Wait for timelock → `confirmPerpExchange.js` → `setActivePerpExchange.js` if needed
 - [ ] Step 8 — `setSpotDex.js` — UniswapV3Adapter set (immediate on first deploy; 48h timelock on changes)
 - [ ] Step 9 — `setCycleDuration.js` — `CYCLE_SECONDS=86400` (daily)
 - [ ] Step 10 — All three contracts verified on Arbiscan

@@ -63,7 +63,9 @@ async function main() {
   if (!isWhitelisted) {
     throw new Error(
       `${spotDexAddress} is not on the allowedSpotDexRouters whitelist.\n` +
-      `Add it first: ROUTER_ADDRESS=${spotDexAddress} npx hardhat run scripts/setAllowedSpotDexRouter.js`
+      `Add it first (owner key), e.g.:\n` +
+      `  KASH_YIELD_ETH_ADDRESS=${kashYieldAddress} ROUTER_ADDRESS=${spotDexAddress} \\\n` +
+      `  npx hardhat run scripts/setAllowedSpotDexRouter.js --network ${hre.network.name}`
     );
   }
 
