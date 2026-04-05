@@ -91,6 +91,7 @@ contract KashYieldETH is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     uint256 public constant ETH_DECIMALS = 18;
+    string public constant VERSION = "1.0.0";
 
     // ── Core state ────────────────────────────────────────────────────────
     address payable public owner;
