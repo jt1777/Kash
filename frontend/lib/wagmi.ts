@@ -2,17 +2,6 @@ import { getDefaultConfig } from '@rainbow-me/rainbowkit';
 import { arbitrum } from 'wagmi/chains';
 import { http } from 'wagmi';
 import type { Config } from 'wagmi';
-import { defineChain } from 'viem';
-
-const hardhat = defineChain({
-  id: 31337,
-  name: 'Hardhat',
-  nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-  rpcUrls: { default: { http: ['http://127.0.0.1:8545'] } },
-  blockExplorers: {
-    default: { name: 'Hardhat', url: 'http://localhost:8545' },
-  },
-});
 
 const arbitrumOneRpc =
   (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_RPC_URL?.trim()) ||
@@ -38,10 +27,9 @@ export function getConfig(): Config {
     config = getDefaultConfig({
       appName: 'KashYield',
       projectId: process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || 'YOUR_PROJECT_ID',
-      chains: [arbitrum, hardhat],
+      chains: [arbitrum],
       transports: {
         [arbitrum.id]: http(arbitrumOneRpc),
-        [hardhat.id]: http('http://127.0.0.1:8545'),
       },
       ssr: false,
     });

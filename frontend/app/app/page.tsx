@@ -186,7 +186,29 @@ function AppContent() {
           z-index: 100;
           box-shadow: 0 0 20px rgba(0, 255, 255, 0.05);
         }
-        .app-page .nav-content { max-width: 1200px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; position: relative; z-index: 101; }
+        .app-page .nav-content {
+          max-width: 1200px;
+          margin: 0 auto;
+          display: grid;
+          grid-template-columns: auto 1fr auto;
+          align-items: center;
+          gap: 24px;
+          position: relative;
+          z-index: 101;
+        }
+        .app-page .app-nav-links {
+          display: flex;
+          align-items: center;
+          gap: 24px;
+          flex-wrap: wrap;
+          justify-self: start;
+        }
+        .app-page .app-nav-wallet {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          justify-self: end;
+        }
         .app-page .nav-logo { font-size: 1.5rem; font-weight: 700; color: #00FFFF; text-decoration: none; text-shadow: 0 0 10px rgba(0, 255, 255, 0.5); }
         .app-page .nav-logo:hover { color: #00FFFF; }
         .app-page .nav-link { color: rgba(255, 255, 255, 0.85); text-decoration: none; font-size: 0.9rem; transition: all 0.3s ease; }
@@ -230,8 +252,46 @@ function AppContent() {
         .app-page .shadow-xl { box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4), 0 0 25px rgba(0, 255, 255, 0.1); }
         .app-page .bg-white:hover { box-shadow: 0 0 20px rgba(0, 255, 255, 0.15), 0 0 40px rgba(0, 255, 255, 0.05) !important; }
         @media (max-width: 768px) {
-          .app-page .nav-content { justify-content: center; }
-          .app-page main { padding-top: 10rem !important; padding-left: 16px !important; padding-right: 16px !important; }
+          .app-page .nav-content {
+            grid-template-columns: 1fr;
+            grid-template-areas:
+              "logo"
+              "navlinks"
+              "wallet";
+            gap: 0;
+            row-gap: 0;
+          }
+          .app-page .nav-logo {
+            grid-area: logo;
+            justify-self: center;
+            align-self: center;
+            padding-bottom: 10px;
+            border-bottom: 1px solid rgba(0, 255, 255, 0.12);
+            width: 100%;
+            text-align: center;
+            font-size: 1.65rem;
+          }
+          .app-page .app-nav-links {
+            grid-area: navlinks;
+            justify-self: stretch;
+            width: 100%;
+            justify-content: center;
+            gap: 20px;
+            padding: 10px 0;
+            border-bottom: 1px solid rgba(0, 255, 255, 0.12);
+          }
+          .app-page .app-nav-wallet {
+            grid-area: wallet;
+            justify-self: stretch;
+            align-self: center;
+            width: 100%;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 8px;
+            padding-top: 10px;
+            min-width: 0;
+          }
+          .app-page main { padding-top: 13rem !important; padding-left: 16px !important; padding-right: 16px !important; }
         }
         @media (max-width: 480px) {
           .app-page .container { padding: 0 16px; }
@@ -241,10 +301,12 @@ function AppContent() {
         <nav className="nav">
           <div className="nav-content">
             <Link href="/" className="nav-logo">KASH</Link>
-            <div className="flex items-center gap-6">
+            <div className="app-nav-links">
               <Link href="/" className="nav-link">Home</Link>
               <Link href="#features" className="nav-link">Features</Link>
               <a href="https://github.com/jt1777/yieldproduct" className="nav-link" target="_blank" rel="noopener noreferrer">GitHub</a>
+            </div>
+            <div className="app-nav-wallet">
               <CustomWalletButton />
             </div>
           </div>

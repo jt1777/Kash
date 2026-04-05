@@ -1,6 +1,6 @@
 # Risks
 
-KASH is an experimental protocol on **Arbitrum One** mainnet. Using it means depositing real assets; you should understand the risks involved.
+KASH is a Decentralized Finance protocol on **Arbitrum One** mainnet. Using it means depositing real assets; you should understand the risks involved.
 
 > **Important:** Treat KASH as high risk until you are satisfied with contract review and operational security. Only deposit what you can afford to lose.
 
@@ -11,11 +11,13 @@ KASH is an experimental protocol on **Arbitrum One** mainnet. Using it means dep
 The protocol is governed entirely by smart contracts. If there is a bug in the code, funds could be lost or locked. Mitigations in place:
 
 - All user-facing functions are protected against reentrancy attacks
-- Ownership transfer requires two steps — the new owner must explicitly accept
-- New exchange adapters require a 48-hour waiting period before they can be activated (preventing a compromised key from instantly routing funds to a malicious contract)
+- New exchanges that KASH may interact with require a 48-hour waiting period before they can be activated (preventing a compromised key from instantly routing funds to a malicious contract)
 - An emergency pause function exists that can halt all user activity
 
-**What you can do:** Review the contract addresses on Arbiscan and verify they match what is displayed in the app footer.
+**What you can do:** Click the Contract Address link in the app footer. This takes you straight to the verified contract page on Arbiscan.  
+Our contracts are fully source-code verified on Arbiscan, so you can review the complete Solidity source code under the Contract tab. Arbiscan has already confirmed that this code compiles byte-for-byte into the exact bytecode deployed on Arbitrum.  
+For maximum transparency, we also publish the full source code in our public GitHub repository — you can cross-check it against the verified code on Arbiscan to confirm it matches the official version the team intended to deploy.
+
 
 ---
 
@@ -39,11 +41,11 @@ The protocol's yield strategy involves transactions with perpetual DEX's, spot D
 
 ## Exchange and counterparty risk
 
-The yield strategy depends on the lending protocol and perp DEX continuing to function correctly. Risks include:
+The yield strategy depends on the lending protocol and perp DEX continuing to function correctly. Risks may include but are not limited to:
 
-- Exchange downtime or insolvency
-- Smart contract vulnerabilities in third-party protocols
-- Regulatory actions affecting either platform
+- Downtime or insolvency of the lending platform or perp DEX
+- Smart contract vulnerabilities in the above protocols
+- Regulatory actions
 
 ---
 
@@ -55,11 +57,9 @@ A common concern with DeFi protocols is whether the contract owner could misuse 
 
 **Users can self-rescue if the contract is paused.** If the contract is ever paused, you can reclaim your pending ETH deposit or pending KASH tokens directly from the contract, without any involvement from the owner. These functions bypass the owner entirely. Note: accessing them requires interacting with the contract directly (e.g. via the "Write Contract" tab on Arbiscan) rather than through the app UI — this is somewhat technical but does not require coding skills.
 
-**New exchange integrations require a 48-hour waiting period.** The owner cannot instantly swap in a new exchange adapter and redirect funds to it. Every new adapter must be proposed and then confirmed after a 48-hour delay.
+**New exchange integrations require a 48-hour waiting period.** The owner cannot instantly connect to a new spot or perp DEX. New DEX can only be confirmed after a 48-hour time-lock.
 
-**Ownership transfer requires acceptance by the new address.** The new owner must explicitly accept the transfer. This prevents accidental transfers to mistyped or inaccessible addresses — but does not prevent an intentional transfer to a malicious address. It is a protection against mistakes, not malice.
-
-**What remains a trust assumption.** The owner submits the daily NAV update that determines how many KASH tokens depositors receive. While all protocol assets are held in on-chain contracts, the NAV is not calculated automatically — the operator computes the full portfolio value (collateral, perp positions, accrued funding) and submits it manually. A dishonest operator could submit an unfavourable NAV, which would benefit or disadvantage users at the batch level. All NAV updates are visible on-chain, so any manipulation would be publicly auditable after the fact. Replacing the single operator with a multi-signature wallet is on the roadmap to reduce this risk.
+**NAV calculation** For each batch, the **bot** calls `updateNAV` on the contract with the NAV that will price mints and redemptions for that cycle. The figure is **not** recomputed inside Solidity: the contract records whatever value is submitted. In normal operations, that value is **derived automatically** from **on-chain balances** the contract exposes together with **perp PnL** from the perp DEX, so the update reflects custodied assets and open perp economics. A **compromised or buggy bot**, or misuse of the bot key, could still post a NAV that does not match a fair mark-to-market.  Each update is accompanied by on-chain parameters and **events** (`NAVProposedAndUpdated`, etc.), so the posted NAV and snapshot are **publicly auditable** after the fact. Replacing the single operator/bot key with a **multi-signature** or additional controls is on the roadmap to reduce this risk.
 
 ---
 
@@ -67,7 +67,7 @@ A common concern with DeFi protocols is whether the contract owner could misuse 
 
 Protocol operations — batch processing, capital deployment, and NAV updates — are currently performed by a single operator. A compromised or unavailable operator key could delay batch processing or mismanage capital.
 
-**Planned improvements:** Multi-signature control and decentralised batch triggering are on the roadmap.
+**Planned improvements:** **Chainlink Automation** is planned so upkeep and batch processing can be invoked on a decentralised schedule, reducing reliance on a single always-online operator key and lowering the risk of missed batches due to downtime. Multi-signature control remains on the roadmap as well.
 
 ---
 
@@ -82,14 +82,3 @@ The value of your deposit at batch time is calculated using on-chain price feeds
 Funds deposited in KASH are not insured. There is no protocol-level insurance fund at this stage. Do not deposit more than you are willing to lose.
 
 ---
-
-## Summary
-
-| Risk | Severity | Mitigation |
-|------|----------|------------|
-| Smart contract bug | High | Audit planned; reentrancy guards; emergency pause |
-| Negative funding rates | Medium | Conservative LTV; strategy designed for bull cycles |
-| Lending protocol liquidation | Medium | LTV capped at ~65%; positions naturally hedge; daily monitoring |
-| Exchange failure | Medium | Emergency withdrawal path exists |
-| Operator key compromise | Medium | 48h timelock on adapter changes; two-step ownership |
-| Oracle failure | Low | Staleness checks on price feeds |

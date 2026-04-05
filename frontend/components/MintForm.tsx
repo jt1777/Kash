@@ -19,6 +19,19 @@ type Product = 'eth' | 'btc';
 const MINT_TOKEN_ETH = { symbol: 'ETH', address: zeroAddress, decimals: 18 };
 const MINT_TOKEN_BTC = { symbol: 'wBTC', address: CONTRACTS.mockWbtc, decimals: 8 };
 
+/** Truncate ETH amount to `decimals` fractional digits (no rounding up). */
+function formatEtherDisplayDecimals(wei: bigint, decimals: number): string {
+  if (decimals < 0 || decimals > 18) decimals = 6;
+  const neg = wei < 0n;
+  const w = neg ? -wei : wei;
+  const whole = w / 10n ** 18n;
+  const rem = w % 10n ** 18n;
+  const scale = 10n ** BigInt(18 - decimals);
+  const fracInt = rem / scale;
+  const fracStr = fracInt.toString().padStart(decimals, '0');
+  return `${neg ? '-' : ''}${whole.toString()}.${fracStr}`;
+}
+
 export function MintForm({ product = 'eth' }: { product?: Product }) {
   const { address } = useAccount();
   const chainId = useChainId();
@@ -280,7 +293,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
           <label className="block text-sm font-medium text-gray-700">Amount</label>
           {depositToken.symbol === 'ETH' && !isBtc && address && (
             <span className="text-xs text-gray-500">
-              Balance: {formatEther(nativeBalance)} ETH
+              Balance: {formatEtherDisplayDecimals(nativeBalance, 6)} ETH
               {maxMintEth > 0n && (
                 <button
                   type="button"
