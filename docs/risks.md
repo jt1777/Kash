@@ -15,7 +15,9 @@ The protocol is governed entirely by smart contracts. If there is a bug in the c
 - An emergency pause function exists that can halt all user activity
 
 **What you can do:** Click the Contract Address link in the app footer. This takes you straight to the verified contract page on Arbiscan.  
+
 Our contracts are fully source-code verified on Arbiscan, so you can review the complete Solidity source code under the Contract tab. Arbiscan has already confirmed that this code compiles byte-for-byte into the exact bytecode deployed on Arbitrum.  
+
 For maximum transparency, we also publish the full source code in our public GitHub repository — you can cross-check it against the verified code on Arbiscan to confirm it matches the official version the team intended to deploy.
 
 

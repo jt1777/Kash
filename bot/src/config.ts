@@ -142,6 +142,23 @@ export const config = {
     try { return BigInt(raw); } catch { return null; }
   })(),
 
+  /**
+   * Override the ops scenario classifier. Useful when the classifier mis-detects price regime
+   * or for testing a specific path manually.
+   * Values: net_zero | net_mint_hl | redeem_hl_falling | redeem_hl_rising | redeem_hl_balanced
+   * Use --ops-scenario=<value> or OPS_SCENARIO=<value>.
+   */
+  opsScenarioOverride: (() => {
+    const arg = process.argv.find((a) => a.startsWith('--ops-scenario='));
+    return (arg ? arg.split('=')[1] : process.env.OPS_SCENARIO) || null;
+  })(),
+
+  /**
+   * Print the full playbook with computed amounts before executing any transactions.
+   * Use --dry-run-ops or DRY_RUN_OPS=true.
+   */
+  dryRunOps: process.argv.includes('--dry-run-ops') || process.env.DRY_RUN_OPS === 'true',
+
   // Strategy allocation (NET_MINT / NET_REDEEM)
   // Override via .env: AAVE_DEPOSIT_PCT=100, BORROW_LTV_PCT=70, SHORT_LEVERAGE=1.7
   strategy: {

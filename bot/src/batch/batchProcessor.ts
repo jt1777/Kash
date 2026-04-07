@@ -2,6 +2,9 @@ import { ethers } from 'ethers';
 import { kashYieldABI } from '../contracts/kashYieldABI';
 import { config } from '../config';
 import { getDailyYield } from './dailyYield';
+import { snapshotOpsContext, computeTotalRedeemAsset, getAaveBorrowedAmountV3 } from './opsContext';
+import { classifyScenario, scenarioLabel } from './opsClassifier';
+import { runMintPlaybook, runRedeemPlaybook, runTestAaveLoopPlaybook } from './opsPlaybooks';
 
 const TOKEN_ADDRESSES = {
   USDC: config.tokens.USDC,
@@ -222,9 +225,28 @@ export class BatchProcessor {
     batchInfo: { totalMintUSD: bigint; totalRedeemUSD: bigint },
     lockedNAV?: bigint
   ): Promise<void> {
-    const netPositionUSD = BigInt(batchInfo.totalMintUSD.toString()) - BigInt(batchInfo.totalRedeemUSD.toString());
-    if (netPositionUSD > 0n) await this.handleNetMint(netPositionUSD, ethers.ZeroAddress);
-    else if (netPositionUSD < 0n) await this.handleNetRedeem(-netPositionUSD, ethers.ZeroAddress, batchCycle, lockedNAV);
+    const net = BigInt(batchInfo.totalMintUSD.toString()) - BigInt(batchInfo.totalRedeemUSD.toString());
+
+    // Classify the top-level scenario (reads activePerpExchange() from contract)
+    const scenario = await classifyScenario(net, this.kashYield);
+    console.log(`📋 Ops scenario: ${scenarioLabel(scenario)}\n`);
+
+    if (scenario === 'net_zero') {
+      console.log('   net = 0; no position changes needed.\n');
+      return;
+    }
+
+    // Snapshot all on-chain state once before executing any steps
+    const ctx = await snapshotOpsContext(this.kashYield, this.provider, batchCycle, lockedNAV);
+
+    if (scenario === 'net_mint_hl') {
+      await runMintPlaybook(ctx, net);
+    } else if (scenario === 'redeem_hl') {
+      // Reactive tail classification happens inside runRedeemPlaybook
+      await runRedeemPlaybook(ctx, lockedNAV);
+    } else if (scenario === 'test_aave_loop') {
+      await runTestAaveLoopPlaybook(ctx);
+    }
   }
 
   /** Step 3: Call updateNAV(newNAV, usdcBalance, assetBalance, perpPnL). Batch must be phase 1.
@@ -252,41 +274,44 @@ export class BatchProcessor {
   }
 
   /** Step 4: Call markBatchOpsDone(batchCycle). Batch must be phase 1.
-   * Verifies the contract holds enough ETH to cover all pending redemptions before advancing
-   * to phase 2, so Phase 2 cannot enter an InsufficientEthForRedeems state due to partial ops. */
+   * Verifies the contract holds enough ETH/wBTC to cover all pending redemptions before advancing
+   * to phase 2, so Phase 2 cannot enter an InsufficientEthForRedeems state due to partial ops.
+   * Uses computeTotalRedeemAsset from opsContext — same formula as the ops playbook steps. */
   private async runStepMarkDone(batchCycle: bigint, lockedNAV?: bigint): Promise<void> {
-    // Pre-flight: ensure the contract has enough ETH to pay all redeemers
-    const redeemers = await this.kashYield.batchRedeemUsers(batchCycle);
-    if (redeemers.length > 0) {
-      const nav = lockedNAV ?? BigInt((await this.kashYield.currentNAV()).toString());
-      const price = isBtc
-        ? BigInt((await this.kashYield.getBtcPrice()).toString())
-        : BigInt((await this.kashYield.getEthPrice()).toString());
-      const feeBps = BigInt((await this.kashYield.feeBps()).toString());
-      const decimals = isBtc ? 8n : 18n;
+    const decimals = isBtc ? 8n : 18n;
+    const price = isBtc
+      ? BigInt((await this.kashYield.getBtcPrice()).toString())
+      : BigInt((await this.kashYield.getEthPrice()).toString());
 
-      let totalRedeemAsset = 0n;
-      for (const addr of redeemers) {
-        const req = await this.kashYield.getPendingRedeemRequest(addr, batchCycle);
-        const kashAmt = BigInt(req.kashAmount.toString());
-        if (kashAmt === 0n) continue;
-        const usdAfterFee = (kashAmt * nav / (10n ** 18n)) * (10000n - feeBps) / 10000n;
-        totalRedeemAsset += usdAfterFee * (10n ** decimals) / price;
+    const totalRedeemAsset = await computeTotalRedeemAsset(
+      this.kashYield,
+      batchCycle,
+      lockedNAV,
+      price,
+      decimals,
+    );
+
+    if (totalRedeemAsset > 0n) {
+      const contractAddr = config.kashYieldAddress!;
+      let contractBalance: bigint;
+      if (isBtc) {
+        try {
+          const wbtcAddr: string = await this.kashYield.wbtcAddress();
+          const wbtc = new ethers.Contract(wbtcAddr, ['function balanceOf(address) view returns (uint256)'], this.provider);
+          contractBalance = BigInt((await wbtc.balanceOf(contractAddr)).toString());
+        } catch { contractBalance = 0n; }
+      } else {
+        contractBalance = BigInt((await this.provider.getBalance(contractAddr)).toString());
       }
 
-      if (totalRedeemAsset > 0n) {
-        const contractAddr = config.kashYieldAddress!;
-        const contractBalance = await this.provider.getBalance(contractAddr);
-        const contractBalanceBn = BigInt(contractBalance.toString());
-        if (contractBalanceBn < totalRedeemAsset) {
-          throw new Error(
-            `Cannot markBatchOpsDone: contract holds ${ethers.formatUnits(contractBalanceBn, Number(decimals))} ` +
-            `but redeemers need ${ethers.formatUnits(totalRedeemAsset, Number(decimals))}. ` +
-            `Pull remaining funds from Aave/HL before proceeding.`
-          );
-        }
-        console.log(`   ✅ Balance check passed: contract has ${ethers.formatUnits(contractBalanceBn, Number(decimals))} (need ${ethers.formatUnits(totalRedeemAsset, Number(decimals))})`);
+      if (contractBalance < totalRedeemAsset) {
+        throw new Error(
+          `Cannot markBatchOpsDone: contract holds ${ethers.formatUnits(contractBalance, Number(decimals))} ` +
+          `but redeemers need ${ethers.formatUnits(totalRedeemAsset, Number(decimals))}. ` +
+          `Pull remaining funds from Aave/HL before proceeding.`
+        );
       }
+      console.log(`   ✅ Balance check passed: contract has ${ethers.formatUnits(contractBalance, Number(decimals))} (need ${ethers.formatUnits(totalRedeemAsset, Number(decimals))})`);
     }
 
     console.log('📋 Step mark-done: Marking batch ops done...');
@@ -962,19 +987,17 @@ export class BatchProcessor {
     }
   }
 
+  /**
+   * Read outstanding USDC debt from Aave, including accrued interest.
+   * Uses getAaveBorrowedAmountV3 which supports both mock (getBorrowedAmount) and
+   * real Aave V3 (variable debt token / getUserAccountData fallback).
+   */
   private async getAaveBorrowedAmount(): Promise<bigint> {
-    const poolAddr = await this.kashYield.aavePoolAddress();
+    const poolAddr = await this.kashYield.aavePoolAddress().catch(() => '');
     if (!poolAddr || poolAddr === ethers.ZeroAddress) return 0n;
-    try {
-      const pool = new ethers.Contract(
-        poolAddr,
-        [{ inputs: [{ name: 'user', type: 'address' }], name: 'getBorrowedAmount', outputs: [{ name: '', type: 'uint256' }], stateMutability: 'view', type: 'function' }],
-        this.provider
-      );
-      return await pool.getBorrowedAmount(config.kashYieldAddress!);
-    } catch {
-      return 0n;
-    }
+    const userAddr = config.aaveUserAddress || config.kashYieldAddress!;
+    const usdcAddr = config.aaveUsdcAddress;
+    return getAaveBorrowedAmountV3(this.provider, poolAddr, usdcAddr, userAddr).catch(() => 0n);
   }
 
   private async getContractUsdcBalance(): Promise<bigint> {
