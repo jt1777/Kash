@@ -9,9 +9,10 @@
  * AMOUNT=1.5    → withdraw an explicit amount in ETH/wBTC units (overrides FRACTION)
  *
  * Usage:
+ *   PRODUCT=eth FRACTION=100 npx hardhat run bot/scripts/ops/10-withdraw-from-aave.js --network arbitrumOne
+ *   PRODUCT=eth FRACTION=50  npx hardhat run bot/scripts/ops/10-withdraw-from-aave.js --network arbitrumOne
+ *   PRODUCT=eth AMOUNT=0.5   npx hardhat run bot/scripts/ops/10-withdraw-from-aave.js --network arbitrumOne
  *   PRODUCT=eth FRACTION=100 npx hardhat run bot/scripts/ops/10-withdraw-from-aave.js --network arbitrumSepolia
- *   PRODUCT=eth FRACTION=50  npx hardhat run bot/scripts/ops/10-withdraw-from-aave.js --network arbitrumSepolia
- *   PRODUCT=eth AMOUNT=0.5   npx hardhat run bot/scripts/ops/10-withdraw-from-aave.js --network arbitrumSepolia
  */
 const { ethers } = require("hardhat");
 const { getContract, getState, displayState, getRedeemFraction, parseAsset, fmtAsset, exec, PRODUCT, ASSET_SYMBOL } = require("./_utils");

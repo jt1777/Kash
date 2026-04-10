@@ -46,7 +46,17 @@ export class BatchProcessor {
   async run(): Promise<void> {
     console.log('🚀 Starting Batch Processor...\n');
 
-    const isProcessingWindow = await this.kashYield.isProcessingWindow();
+    // isProcessingWindow() can revert on some testnet deployments (e.g. cycleDurationSeconds=0
+    // or older contract version). Treat any revert as "not in window" so the skip flag still works.
+    let isProcessingWindow = false;
+    try {
+      isProcessingWindow = await this.kashYield.isProcessingWindow();
+    } catch (err: any) {
+      if (!config.skipProcessingWindowCheck) {
+        throw new Error(`isProcessingWindow() reverted: ${err?.message ?? err}`);
+      }
+      console.log('⚠️  isProcessingWindow() reverted on this contract; treating as outside window.\n');
+    }
     if (!isProcessingWindow) {
       if (config.skipProcessingWindowCheck) {
         console.log('⏳ Not in processing window (23:50-23:59 UTC); continuing anyway (SKIP_PROCESSING_WINDOW_CHECK=true)\n');
@@ -60,6 +70,17 @@ export class BatchProcessor {
           return;
         }
       }
+    }
+
+    // Test scenarios skip all batch management (getCurrentBatchCycle, batchPhase, getBatchInfo, orphan
+    // check) and run ops directly. This avoids any contract call that depends on cycleDurationSeconds
+    // or batch state that may not be set up for ad-hoc testing.
+    if (config.opsScenarioOverride === 'test_aave_loop') {
+      const cycle = config.batchCycleOverride ?? 0n;
+      console.log(`🧪 Test scenario "${config.opsScenarioOverride}" — running ops directly (cycle=${cycle})\n`);
+      const emptyBatchInfo = { totalMintUSD: 0n, totalRedeemUSD: 0n };
+      await this.runStepOps(cycle, emptyBatchInfo, config.lockedNav ?? undefined);
+      return;
     }
 
     const currentCycle = await this.kashYield.getCurrentBatchCycle();
@@ -121,6 +142,15 @@ export class BatchProcessor {
     }
 
     const hasRequests = batchInfo.mintUsersCount > 0n || batchInfo.redeemUsersCount > 0n;
+
+    // Test scenarios (e.g. test_aave_loop) only need ops — no phase1, nav, mark-done, or phase2.
+    // They bypass the "no requests" gate and run regardless of batch phase.
+    const isTestScenario = config.opsScenarioOverride === 'test_aave_loop';
+    if (isTestScenario && !isSingleStepMode()) {
+      console.log(`🧪 Test scenario (${config.opsScenarioOverride}) — skipping phase1/nav/mark-done/phase2\n`);
+      await this.runStepOps(batchCycle, batchInfo, config.lockedNav ?? undefined);
+      return;
+    }
 
     if (isSingleStepMode()) {
       const step = config.batchStep as (typeof BATCH_STEP_NAMES)[number];

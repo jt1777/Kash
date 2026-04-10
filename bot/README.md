@@ -1,6 +1,6 @@
 # KASH Yield Bot
 
-Off-chain automation bot for the KASH Yield Token protocol on Arbitrum Sepolia.
+Off-chain automation bot for the KASH Yield Token protocol on Arbitrum (Sepolia + One).
 
 ## Overview
 
@@ -90,13 +90,16 @@ See `.env.example` for all required variables. Key ones:
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `PRIVATE_KEY` | Bot wallet private key (must be contract owner) | `0x...` |
+| `PRIVATE_KEY` | Bot wallet private key (must be contract owner for current contracts) | `0x...` |
 | `KASH_YIELD_ETH_ADDRESS` | KashYieldETH contract (ETH product) | `0x...` |
 | `KASH_TOKEN_ETH` | KashTokenEth contract (ETH product) | `0x...` |
 | `KASH_YIELD_BTC_ADDRESS` | KashYieldBtc contract (BTC product) | `0x...` |
 | `KASH_TOKEN_BTC` | KashTokenBtc contract (BTC product) | `0x...` |
-| `AAVE_POOL_ADDRESS` | Aave V3 Pool on Arbitrum Sepolia | `0xBfC91D59fdAA134A4ED45f7B584cAf96D7792Eff` |
-| `RPC_URL` | Arbitrum Sepolia RPC endpoint | `https://sepolia-rollup.arbitrum.io/rpc` |
+| `AAVE_POOL_ADDRESS` | Aave V3 pool | Mainnet: `0x794a61358D6845594F94dc1DB02A252b5b4814aD` |
+| `RPC_URL` | RPC endpoint (preferred over ARBITRUM_SEPOLIA_RPC_URL) | Mainnet: `https://arb1.arbitrum.io/rpc` |
+| `HYPERLIQUID_API_URL` | Hyperliquid API base URL (mainnet) | `https://api.hyperliquid.xyz` |
+| `HYPERLIQUID_API_PRIVATE_KEY` | HL API signer key (bot key in direct mode) | `0x...` |
+| `SHORT_LEVERAGE` | Target short multiple for mint playbook | `1` or `1.7` |
 
 ## Bot Components
 
@@ -138,18 +141,93 @@ Before running the bot in production:
 8. ✅ Environment variables configured
 9. ✅ Validation passes (`npm run validate`)
 
-## Network: Arbitrum Sepolia
+## Network Configuration (Sepolia + Mainnet)
 
-This bot is configured for **Arbitrum Sepolia testnet** by default:
-- Chain ID: 421614
-- RPC: https://sepolia-rollup.arbitrum.io/rpc
-- Block Explorer: https://sepolia.arbiscan.io
+### Arbitrum One (mainnet)
+- Chain ID: `42161`
+- RPC: `https://arb1.arbitrum.io/rpc` (or your provider URL in `RPC_URL`)
+- Explorer: `https://arbiscan.io`
+- Core addresses:
+  - Aave Pool: `0x794a61358D6845594F94dc1DB02A252b5b4814aD`
+  - WETH: `0x82aF49447D8a07e3bd95BD0d56f35241523fBab1`
+  - USDC: `0xaf88d065e77c8cC2239327C5EDb3A432268e5831`
 
-For mainnet deployment, update:
-- `RPC_URL` to Arbitrum mainnet endpoint
-- Token addresses to Arbitrum mainnet
-- Aave pool address to Arbitrum mainnet
-- Oracle addresses to Arbitrum mainnet
+### Arbitrum Sepolia (testnet)
+- Chain ID: `421614`
+- RPC: `https://sepolia-rollup.arbitrum.io/rpc`
+- Explorer: `https://sepolia.arbiscan.io`
+
+---
+
+## Mainnet Hyperliquid Setup (Important)
+
+Real Hyperliquid trading is off-chain (API), not an Arbitrum contract call. The adapter must be configured correctly.
+
+### 1) Use direct deposit mode on adapter
+
+After deploying `HyperliquidAdapter`, set:
+- `directDepositMode=true`
+- `hlAccount=<bot EOA>`
+
+From repo root:
+
+```bash
+npx hardhat console --network arbitrumOne
+```
+
+```javascript
+const [signer] = await ethers.getSigners()
+const adapter = await ethers.getContractAt("HyperliquidAdapter", "<HL_ADAPTER_ADDRESS_ETH>", signer)
+await (await adapter.setDirectDepositMode(true, "<BOT_EOA_ADDRESS>")).wait()
+console.log(await adapter.directDepositMode(), await adapter.hlAccount())
+```
+
+Why: contract-address HL users cannot directly sign API actions (`order`, `withdraw3`, `approveAgent`) unless pre-authorized agent plumbing already exists.
+
+### 2) Bot `.env` for real HL
+
+Add these in `bot/.env`:
+
+```env
+RPC_URL=https://arb1.arbitrum.io/rpc
+PRODUCT=eth
+KASH_YIELD_ETH_ADDRESS=<...>
+KASH_TOKEN_ETH=<...>
+
+# HL API
+HYPERLIQUID_API_URL=https://api.hyperliquid.xyz
+HYPERLIQUID_API_PRIVATE_KEY=0x...   # bot signer key
+
+# Strategy
+SHORT_LEVERAGE=1
+```
+
+### 3) Event relay + sync scripts
+
+New scripts for real HL:
+- `bot/scripts/ops/13-hl-event-relay.js`  
+  Watches `ProtocolInteraction` intents, executes actual HL API trades, then calls adapter `syncBalances()` / `syncPosition()`.
+- `bot/scripts/ops/14-hl-sync-state.js`  
+  One-shot reconcile from HL API to adapter state.
+
+Examples:
+
+```bash
+# one-shot backfill
+PRODUCT=eth KASH_YIELD_ETH_ADDRESS=0x... \
+HYPERLIQUID_API_PRIVATE_KEY=0x... FROM_BLOCK=450000000 TO_BLOCK=latest \
+npx hardhat run bot/scripts/ops/13-hl-event-relay.js --network arbitrumOne
+
+# watch mode
+PRODUCT=eth KASH_YIELD_ETH_ADDRESS=0x... \
+HYPERLIQUID_API_PRIVATE_KEY=0x... WATCH=true POLL_INTERVAL_MS=15000 \
+npx hardhat run bot/scripts/ops/13-hl-event-relay.js --network arbitrumOne
+```
+
+### 4) Known operational caveat
+
+`DRY_RUN_OPS=true npm start` skips only ops tx execution but still runs phase1/nav/mark-done/phase2 on-chain.  
+Do not use that mode on live user batches unless you explicitly intend that behavior.
 
 ## Owner Status Script
 

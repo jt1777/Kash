@@ -33,13 +33,16 @@ if (envResult.error) {
 console.log(`🔍 ARBITRUM_SEPOLIA_RPC_URL: ${process.env.ARBITRUM_SEPOLIA_RPC_URL ? 'SET ✓' : 'NOT SET ✗'}`);
 console.log(`🔍 RPC_URL: ${process.env.RPC_URL ? 'SET ✓' : 'NOT SET ✗'}`);
 
-// Determine RPC URL with priority: ARBITRUM_SEPOLIA_RPC_URL > RPC_URL > default
+// Determine RPC URL.
+// Priority: RPC_URL > ARBITRUM_SEPOLIA_RPC_URL (legacy testnet name, kept for back-compat) > Sepolia default.
+// For Arbitrum One mainnet set RPC_URL=https://arb1.arbitrum.io/rpc (or your Alchemy/Infura endpoint).
+// ARBITRUM_SEPOLIA_RPC_URL is kept as a fallback so existing .env files don't break, but RPC_URL wins.
 const getRpcUrl = (): string => {
-  if (process.env.ARBITRUM_SEPOLIA_RPC_URL) {
-    return process.env.ARBITRUM_SEPOLIA_RPC_URL;
-  }
   if (process.env.RPC_URL) {
     return process.env.RPC_URL;
+  }
+  if (process.env.ARBITRUM_SEPOLIA_RPC_URL) {
+    return process.env.ARBITRUM_SEPOLIA_RPC_URL;
   }
   return 'https://sepolia-rollup.arbitrum.io/rpc';
 };

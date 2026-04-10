@@ -8,8 +8,10 @@
  * withdrawable (step 10).
  *
  * Usage:
+ *   PRODUCT=eth npx hardhat run bot/scripts/ops/09-repay-aave-borrow.js --network arbitrumOne
  *   PRODUCT=eth npx hardhat run bot/scripts/ops/09-repay-aave-borrow.js --network arbitrumSepolia
  */
+const { ethers } = require("hardhat");
 const { getContract, getState, displayState, parseUsdc, fmtUsdc, exec, PRODUCT } = require("./_utils");
 
 async function main() {
@@ -30,26 +32,33 @@ async function main() {
   }
 
   let amount;
+  const MAX_UINT256 = ethers.MaxUint256;
+
   if (process.env.AMOUNT) {
     amount = parseUsdc(process.env.AMOUNT);
+  } else if (before.contractUsdc >= before.aaveDebt) {
+    // Contract has enough to cover the full debt — use MAX_UINT256 so Aave repays
+    // the exact outstanding balance (including interest accrued between read and mine).
+    amount = MAX_UINT256;
   } else {
-    // Repay up to the outstanding debt (don't overpay)
-    amount = before.contractUsdc < before.aaveDebt ? before.contractUsdc : before.aaveDebt;
+    // Partial: contract USDC is less than the debt — repay what we have
+    amount = before.contractUsdc;
   }
 
+  const displayAmount = amount === MAX_UINT256 ? `${fmtUsdc(before.aaveDebt)} (full — using MAX)` : fmtUsdc(amount);
   console.log(`\n  Outstanding debt : ${fmtUsdc(before.aaveDebt)}`);
   console.log(`  Available USDC   : ${fmtUsdc(before.contractUsdc)}`);
-  console.log(`  Repaying         : ${fmtUsdc(amount)}`);
+  console.log(`  Repaying         : ${displayAmount}`);
 
-  if (amount < before.aaveDebt) {
+  if (amount !== MAX_UINT256 && amount < before.aaveDebt) {
     const remaining = before.aaveDebt - amount;
     console.log(`\n  ⚠️  Partial repayment — ${fmtUsdc(remaining)} still owed after this step.`);
-    console.log(`     If the USDC shortfall is due to a rising ${before.posActive ? "price" : "price"} scenario,`);
+    console.log(`     If the USDC shortfall is due to a rising price scenario,`);
     console.log(`     use 10-withdraw-from-aave + 11a-swap-asset-for-usdc to cover the gap.`);
   }
 
   await exec(
-    `repayToAave(USDC, ${fmtUsdc(amount)})`,
+    `repayToAave(USDC, ${displayAmount})`,
     contract.repayToAave(usdcAddr, amount)
   );
 

@@ -39,32 +39,34 @@ const KASH_ABI = [
   "function getExchangeAssetBalance() view returns (uint256)",
   "function getHyperliquidPosition(string) view returns (uint256 size, uint256 collateral, uint256 entryPrice, bool isLong, bool isActive)",
   // Aave
-  "function depositToAave(uint256 amount) nonpayable",
-  "function withdrawFromAave(uint256 amount) nonpayable",
-  "function borrowFromAave(address asset, uint256 amount) nonpayable",
-  "function repayToAave(address asset, uint256 amount) nonpayable",
+  "function depositToAave(uint256 amount)",
+  "function withdrawFromAave(uint256 amount)",
+  "function borrowFromAave(address asset, uint256 amount)",
+  "function repayToAave(address asset, uint256 amount)",
   // Perp DEX (USDC-collateral path — HL)
-  "function depositToHyperliquid(uint256 amount) nonpayable",
-  "function withdrawFromHyperliquid(uint256 amount) nonpayable",
-  "function addCollateralToHyperliquid(uint256 amount) nonpayable",
-  "function spotBuyOnHyperliquid(uint256 usdcAmount) nonpayable",
-  "function spotSellOnHyperliquid(uint256 amount) nonpayable",
-  "function openShort(string symbol, uint256 size) nonpayable",
-  "function closeShort(string symbol) nonpayable",
-  "function closeShort(string symbol, uint256 closeSize) nonpayable",
+  "function depositToHyperliquid(uint256 amount)",
+  "function withdrawFromHyperliquid(uint256 amount)",
+  "function addCollateralToHyperliquid(uint256 amount)",
+  "function spotBuyOnHyperliquid(uint256 usdcAmount)",
+  "function spotSellOnHyperliquid(uint256 amount)",
+  "function openShort(string symbol, uint256 size)",
+  "function closeShort(string symbol)",
+  "function closeShort(string symbol, uint256 closeSize)",
   // Perp DEX (asset-collateral path — Aster or other)
-  "function withdrawEthFromHyperliquid(uint256 amount) nonpayable",
-  "function withdrawBtcFromHyperliquid(uint256 amount) nonpayable",
+  "function withdrawEthFromHyperliquid(uint256 amount)",
+  "function withdrawBtcFromHyperliquid(uint256 amount)",
   // Spot DEX (Uniswap / MockSpotDex)
-  "function swapForUsdc(uint256 amount) nonpayable",     // ETH/wBTC → USDC
-  "function swapFromUsdc(uint256 usdcAmount) nonpayable", // USDC → ETH/wBTC
+  "function swapForUsdc(uint256 amount)",     // ETH/wBTC → USDC
+  "function swapFromUsdc(uint256 usdcAmount)", // USDC → ETH/wBTC
 ];
 
-// Minimal Aave pool ABI (covers both MockAaveV3 and real Aave V3)
+// Aave pool ABI — covers MockAaveV3 and real Aave V3
 const AAVE_ABI = [
+  // Mock-only helpers
   "function suppliedAmounts(address user) view returns (uint256)",
   "function borrowedAmounts(address user) view returns (uint256)",
-  // Real Aave V3 fallback
+  // Real Aave V3
+  "function getReserveData(address asset) view returns (tuple(uint256 configuration, uint128 liquidityIndex, uint128 currentLiquidityRate, uint128 variableBorrowIndex, uint128 currentVariableBorrowRate, uint128 currentStableBorrowRate, uint40 lastUpdateTimestamp, uint16 id, address aTokenAddress, address stableDebtTokenAddress, address variableDebtTokenAddress, address interestRateStrategyAddress, uint128 accruedToTreasury, uint128 unbacked, uint128 isolationModeTotalDebt))",
   "function getUserAccountData(address user) view returns (uint256 totalCollateralBase, uint256 totalDebtBase, uint256 availableBorrowsBase, uint256 currentLiquidationThreshold, uint256 ltv, uint256 healthFactor)",
 ];
 
@@ -119,26 +121,63 @@ async function getState(contract) {
   const usdc = new ethers.Contract(usdcAddr, ERC20_ABI, provider);
   const contractUsdc = BigInt((await usdc.balanceOf(addr)).toString());
 
-  // Aave state
+  // Aave state — real Aave V3 compatible
   let aaveSupplied = 0n, aaveDebt = 0n;
   if (aaveAddr && aaveAddr !== ethers.ZeroAddress) {
+    const aave = new ethers.Contract(aaveAddr, AAVE_ABI, provider);
+
+    // Supplied: mock path first, then real Aave V3 via aToken balance
     try {
-      const aave = new ethers.Contract(aaveAddr, AAVE_ABI, provider);
       aaveSupplied = BigInt((await aave.suppliedAmounts(addr)).toString());
-      aaveDebt     = BigInt((await aave.borrowedAmounts(addr)).toString());
     } catch {
-      // Real Aave V3 — not needed for testnet scripts
+      try {
+        const assetAddr = IS_BTC
+          ? await contract.wbtcAddress()
+          : await contract.wethAddress().catch(() => ethers.ZeroAddress);
+        const reserveData = await aave.getReserveData(assetAddr);
+        const aToken = new ethers.Contract(
+          reserveData.aTokenAddress,
+          ["function balanceOf(address) view returns (uint256)"],
+          provider
+        );
+        aaveSupplied = BigInt((await aToken.balanceOf(addr)).toString());
+      } catch { /* leave as 0 */ }
+    }
+
+    // Debt: mock path first, then real Aave V3 via variable debt token, then getUserAccountData
+    try {
+      aaveDebt = BigInt((await aave.borrowedAmounts(addr)).toString());
+    } catch {
+      try {
+        const usdcReserveData = await aave.getReserveData(usdcAddr);
+        const debtToken = new ethers.Contract(
+          usdcReserveData.variableDebtTokenAddress,
+          ["function balanceOf(address) view returns (uint256)"],
+          provider
+        );
+        aaveDebt = BigInt((await debtToken.balanceOf(addr)).toString());
+      } catch {
+        try {
+          const data = await aave.getUserAccountData(addr);
+          aaveDebt = BigInt(data.totalDebtBase.toString()) / 100n; // USD 8-dec → USDC 6-dec
+        } catch { /* leave as 0 */ }
+      }
     }
   }
 
-  // Perp DEX state
-  const perpUsdc  = BigInt((await contract.getHyperliquidSpotBalance()).toString());
-  const perpAsset = BigInt((await contract.getExchangeAssetBalance()).toString());
-  const [posSize, , posEntry, , posActive] = await contract.getHyperliquidPosition(
-    IS_BTC ? "BTC" : "ETH"
-  );
-  const shortSize  = BigInt(posSize.toString());
-  const entryPrice = BigInt(posEntry.toString());
+  // Perp DEX state — HL reads may not be available on-chain for mainnet adapters
+  let perpUsdc = 0n, perpAsset = 0n;
+  let shortSize = 0n, entryPrice = 0n, posActive = false;
+  try { perpUsdc  = BigInt((await contract.getHyperliquidSpotBalance()).toString()); } catch {}
+  try { perpAsset = BigInt((await contract.getExchangeAssetBalance()).toString()); } catch {}
+  try {
+    const [posSize, , posEntry, , posIsActive] = await contract.getHyperliquidPosition(
+      IS_BTC ? "BTC" : "ETH"
+    );
+    shortSize  = BigInt(posSize.toString());
+    entryPrice = BigInt(posEntry.toString());
+    posActive  = Boolean(posIsActive);
+  } catch {}
 
   // Unrealized P&L (short position: profit when price falls)
   let perpPnlUsdc = 0n;

@@ -14,40 +14,7 @@
 import { ethers } from 'ethers';
 import { config } from '../config';
 import { kashYieldABI } from '../contracts/kashYieldABI';
-
-const AAVE_POOL_ABI = [
-  {
-    inputs: [
-      { name: 'asset', type: 'address' },
-      { name: 'user', type: 'address' },
-    ],
-    name: 'getATokenBalance',
-    outputs: [{ name: '', type: 'uint256' }],
-    stateMutability: 'view',
-    type: 'function',
-  },
-  {
-    inputs: [{ name: 'user', type: 'address' }],
-    name: 'getBorrowedAmount',
-    outputs: [{ name: '', type: 'uint256' }],
-    stateMutability: 'view',
-    type: 'function',
-  },
-  {
-    inputs: [],
-    name: 'usdcAddress',
-    outputs: [{ name: '', type: 'address' }],
-    stateMutability: 'view',
-    type: 'function',
-  },
-  {
-    inputs: [],
-    name: 'wbtcAddress',
-    outputs: [{ name: '', type: 'address' }],
-    stateMutability: 'view',
-    type: 'function',
-  },
-] as const;
+import { getAaveSuppliedAmountV3, getAaveBorrowedAmountV3 } from '../batch/opsContext';
 
 const ERC20_ABI = [
   {
@@ -110,6 +77,19 @@ async function main() {
   }
   console.log('');
 
+  // ─── USDC in Contract ──────────────────────────────────────────────────────
+  try {
+    const usdcAddress: string = await kashYield.usdcAddress();
+    const usdc = new ethers.Contract(usdcAddress, ERC20_ABI, provider);
+    const usdcInContract = await usdc.balanceOf(config.kashYieldAddress);
+    console.log('💵 USDC in Contract');
+    console.log('  Total:           ', ethers.formatUnits(usdcInContract, 6), 'USDC');
+    console.log('  Note: This is Arbitrum USDC held directly by KashYield (not Aave debt and not HL spot balance).');
+  } catch (e: any) {
+    console.log('💵 USDC in Contract: failed to fetch –', e?.message ?? e);
+  }
+  console.log('');
+
   // ─── KASH in Contract ────────────────────────────────────────────────────
   try {
     const kashTokenAddr = isBtc
@@ -132,45 +112,23 @@ async function main() {
   if (!aavePoolAddr || aavePoolAddr === ethers.ZeroAddress) {
     console.log('🏦 Aave: Not configured');
   } else {
-    const aavePool = new ethers.Contract(aavePoolAddr, AAVE_POOL_ABI, provider);
     let wethAddr: string | null = null;
     if (!isBtc) {
-      try {
-        wethAddr = await kashYield.wethAddress();
-      } catch {
-        wethAddr = null;
-      }
+      try { wethAddr = await kashYield.wethAddress(); } catch { wethAddr = null; }
     }
     const wbtcAddr = isBtc ? await kashYield.wbtcAddress() : null;
+    const usdcAddr: string = await kashYield.usdcAddress();
 
-    let aaveSupplied = 0n;
+    // Use the real Aave V3-compatible helpers (fall through mock → variable debt token → getUserAccountData)
+    const assetAddr = isBtc ? (wbtcAddr ?? ethers.ZeroAddress) : (wethAddr ?? ethers.ZeroAddress);
+    const aaveSupplied = await getAaveSuppliedAmountV3(provider, aavePoolAddr, assetAddr, config.kashYieldAddress);
+    usdcBorrowed = await getAaveBorrowedAmountV3(provider, aavePoolAddr, usdcAddr, config.kashYieldAddress);
 
-    if (isBtc && wbtcAddr) {
-      try {
-        aaveSupplied = await aavePool.getATokenBalance(wbtcAddr, config.kashYieldAddress);
-      } catch {
-        // Mock may use different asset ids
-      }
-      console.log('🏦 Aave');
+    console.log('🏦 Aave');
+    if (isBtc) {
       console.log('  Supplied wBTC:   ', ethers.formatUnits(aaveSupplied, 8), 'wBTC');
     } else {
-      try {
-        aaveSupplied = await aavePool.getATokenBalance(wethAddr ?? ethers.ZeroAddress, config.kashYieldAddress);
-      } catch {
-        try {
-          aaveSupplied = await aavePool.getATokenBalance(ethers.ZeroAddress, config.kashYieldAddress);
-        } catch {
-          aaveSupplied = 0n;
-        }
-      }
-      console.log('🏦 Aave');
       console.log('  Supplied ETH:    ', ethers.formatEther(aaveSupplied), 'ETH');
-    }
-
-    try {
-      usdcBorrowed = await aavePool.getBorrowedAmount(config.kashYieldAddress);
-    } catch {
-      // Real Aave doesn't have getBorrowedAmount
     }
     console.log('  Borrowed USDC:   ', ethers.formatUnits(usdcBorrowed, 6), 'USDC');
   }
@@ -189,18 +147,23 @@ async function main() {
     try {
       hlSpotBalance = await kashYield.getHyperliquidSpotBalance();
     } catch {
-      // Fallback: call HL directly
-      const hlAbi = [
-        {
-          inputs: [{ name: 'user', type: 'address' }],
-          name: 'getSpotBalance',
-          outputs: [{ name: '', type: 'uint256' }],
-          stateMutability: 'view',
-          type: 'function',
-        },
-      ];
-      const hl = new ethers.Contract(hlAddr, hlAbi, provider);
-      hlSpotBalance = await hl.getSpotBalance(config.kashYieldAddress);
+      // Fallback: mock-only getSpotBalance — not available on mainnet adapters, silently skip
+      try {
+        const hlAbi = [
+          {
+            inputs: [{ name: 'user', type: 'address' }],
+            name: 'getSpotBalance',
+            outputs: [{ name: '', type: 'uint256' }],
+            stateMutability: 'view',
+            type: 'function',
+          },
+        ];
+        const hl = new ethers.Contract(hlAddr, hlAbi, provider);
+        hlSpotBalance = await hl.getSpotBalance(config.kashYieldAddress);
+      } catch {
+        // On-chain HL balance not readable (mainnet: HL is off-chain)
+        hlSpotBalance = 0n;
+      }
     }
     // Asset spot (ETH/wBTC) on Hyperliquid: balances are keyed by the *adapter* on MockHyperliquid, not KashYield.
     // KashYield.getExchangeAssetBalance() → IPerpExchange(adapter).getAssetBalance() → core.ethBalance(adapter).

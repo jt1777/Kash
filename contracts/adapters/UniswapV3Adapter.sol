@@ -101,10 +101,11 @@ contract UniswapV3Adapter is ISpotDex {
         uint256 minAmountOut,
         address recipient
     ) external payable override returns (uint256 amountOut) {
-        address effectiveTokenIn = tokenIn;
+        address effectiveTokenIn  = tokenIn;
+        address effectiveTokenOut = tokenOut;
 
         if (tokenIn == address(0)) {
-            // Native ETH → wrap to WETH, then swap WETH → tokenOut
+            // Native ETH in → wrap to WETH, swap WETH → tokenOut
             require(msg.value == amountIn, "ETH amount mismatch");
             IWETH9(wethAddress).deposit{value: amountIn}();
             effectiveTokenIn = wethAddress;
@@ -112,16 +113,22 @@ contract UniswapV3Adapter is ISpotDex {
             IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
         }
 
+        // ETH out → swap to WETH here, unwrap after
+        bool nativeEthOut = tokenOut == address(0);
+        if (nativeEthOut) {
+            effectiveTokenOut = wethAddress;
+        }
+
         IERC20(effectiveTokenIn).forceApprove(address(swapRouter), amountIn);
 
-        uint24 fee = feeTierOverride[effectiveTokenIn][tokenOut];
+        uint24 fee = feeTierOverride[effectiveTokenIn][effectiveTokenOut];
         if (fee == 0) fee = defaultFeeTier;
 
         IUniswapV3SwapRouter.ExactInputSingleParams memory params = IUniswapV3SwapRouter.ExactInputSingleParams({
             tokenIn:           effectiveTokenIn,
-            tokenOut:          tokenOut,
+            tokenOut:          effectiveTokenOut,
             fee:               fee,
-            recipient:         recipient,
+            recipient:         nativeEthOut ? address(this) : recipient,
             deadline:          block.timestamp + 60,
             amountIn:          amountIn,
             amountOutMinimum:  minAmountOut,
@@ -129,6 +136,14 @@ contract UniswapV3Adapter is ISpotDex {
         });
 
         amountOut = swapRouter.exactInputSingle(params);
+
+        if (nativeEthOut) {
+            // Unwrap WETH → native ETH and forward to the original recipient
+            IWETH9(wethAddress).withdraw(amountOut);
+            (bool ok,) = recipient.call{value: amountOut}("");
+            require(ok, "ETH transfer failed");
+        }
+
         emit SwapExecuted(tokenIn, tokenOut, amountIn, amountOut);
     }
 

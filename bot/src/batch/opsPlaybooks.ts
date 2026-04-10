@@ -291,7 +291,32 @@ const hlWithdrawUsdc: OpStep = {
     const amount = ctx.hlUsdcBalance;
     if (amount === 0n) return;
     console.log(`         ${fmtUsdc(amount)}`);
-    await execTx('withdrawFromHyperliquid', ctx.kashYield.withdrawFromHyperliquid(amount));
+    const contractAddr = config.kashYieldAddress || await ctx.kashYield.getAddress();
+    let beforeUsdc = 0n;
+    let afterUsdc = 0n;
+    try {
+      if (ctx.usdcAddress && ctx.usdcAddress !== ethers.ZeroAddress) {
+        const usdc = new ethers.Contract(ctx.usdcAddress, ['function balanceOf(address) view returns (uint256)'], ctx.provider);
+        beforeUsdc = BigInt((await usdc.balanceOf(contractAddr)).toString());
+        await execTx('withdrawFromHyperliquid', ctx.kashYield.withdrawFromHyperliquid(amount));
+        afterUsdc = BigInt((await usdc.balanceOf(contractAddr)).toString());
+      } else {
+        await execTx('withdrawFromHyperliquid', ctx.kashYield.withdrawFromHyperliquid(amount));
+      }
+    } catch {
+      // Preserve original behavior if balance probing fails.
+      await execTx('withdrawFromHyperliquid', ctx.kashYield.withdrawFromHyperliquid(amount));
+    }
+
+    if (afterUsdc > 0n || beforeUsdc > 0n) {
+      const received = afterUsdc > beforeUsdc ? afterUsdc - beforeUsdc : 0n;
+      console.log(`         received on contract: ${fmtUsdc(received)} (before=${fmtUsdc(beforeUsdc)} → after=${fmtUsdc(afterUsdc)})`);
+      if (received === 0n) {
+        console.warn('         ⚠️  HL withdraw tx confirmed, but 0 USDC reached KashYield on Arbitrum (likely unsettled/no bridged funds).');
+      } else if (received < amount) {
+        console.warn(`         ⚠️  Partial receipt: requested ${fmtUsdc(amount)}, received ${fmtUsdc(received)}.`);
+      }
+    }
   },
 };
 
@@ -621,15 +646,29 @@ const dexSwapAllUsdcToAsset: OpStep = {
  * All steps carry refreshCtx=true — each step must see the state left by the previous one.
  * Steps are cloned with unique IDs so the log clearly shows "round 1" vs "round 2".
  *
+ * WHY a simplified canSkip for deposit steps:
+ * The default aave_deposit.canSkip checks `aaveSupplied >= contractAsset × depositPct`.
+ * After round 1 deposits 1 ETH, aaveSupplied = 1 ETH. After the bridge swap, contractAsset = 0.7 ETH.
+ * The default check would see `1 ETH >= 0.7 ETH` → skip — round 2 never deposits.
+ * The loop-specific canSkip only checks whether there is new asset in the contract to deposit.
+ *
  * Activate with:  OPS_SCENARIO=test_aave_loop  or  --ops-scenario=test_aave_loop
  */
 export function buildAaveLoopPlaybook(): OpStep[] {
+  // Loop deposit: only skip when there is literally nothing in the contract to deposit.
+  const depositForLoop = (id: string): OpStep => ({
+    ...aaveDeposit,
+    id,
+    refreshCtx: true,
+    canSkip: async (ctx) => ctx.contractAsset === 0n,
+  });
+
   return [
-    { ...aaveDeposit, id: 'aave_deposit_round1',  refreshCtx: true },
-    { ...aaveBorrow,  id: 'aave_borrow_round1',   refreshCtx: true },
+    depositForLoop('aave_deposit_round1'),
+    { ...aaveBorrow, id: 'aave_borrow_round1', refreshCtx: true },
     dexSwapAllUsdcToAsset,
-    { ...aaveDeposit, id: 'aave_deposit_round2',  refreshCtx: true },
-    { ...aaveBorrow,  id: 'aave_borrow_round2',   refreshCtx: true },
+    depositForLoop('aave_deposit_round2'),
+    { ...aaveBorrow, id: 'aave_borrow_round2', refreshCtx: true },
   ];
 }
 
@@ -638,10 +677,23 @@ export async function runTestAaveLoopPlaybook(ctx: OpsContext): Promise<void> {
   const price = ctx.price;
   const assetStr = fmtAsset(ctx.contractAsset, ctx);
   const usdStr = fmtUsd((ctx.contractAsset * price) / (10n ** ctx.assetDecimals));
+  const ltv = config.strategy.borrowLtvPct;
+  const round1BorrowUsdc = (ctx.contractAsset * price * BigInt(ltv)) / (100n * (10n ** ctx.assetDecimals) * (10n ** 12n));
+  const round1SwapEth = (round1BorrowUsdc * (10n ** 12n) * (10n ** ctx.assetDecimals)) / price;
+  const round2BorrowUsdc = (round1SwapEth * price * BigInt(ltv)) / (100n * (10n ** ctx.assetDecimals) * (10n ** 12n));
+
   console.log(`\n🧪 TEST: Aave leverage loop — starting with ${assetStr} (${usdStr})\n`);
-  console.log('   Round 1: deposit → borrow 70% USDC');
-  console.log('   Bridge:  swap all USDC → ETH via spot DEX');
-  console.log('   Round 2: deposit swapped ETH → borrow 70% USDC\n');
+  console.log(`   Round 1: deposit ${assetStr} → borrow ${ltv}% LTV = ~${fmtUsdc(round1BorrowUsdc)}`);
+  console.log(`   Bridge:  swap ~${fmtUsdc(round1BorrowUsdc)} → ~${fmtAsset(round1SwapEth, ctx)}`);
+  console.log(`   Round 2: deposit ~${fmtAsset(round1SwapEth, ctx)} → borrow ${ltv}% = ~${fmtUsdc(round2BorrowUsdc)}`);
+
+  if (config.dryRunOps) {
+    console.log('\n   ⚠️  Dry-run note: step descriptions below use the initial snapshot.');
+    console.log('      Steps 2-5 show stale USDC/ETH amounts because each step refreshes');
+    console.log('      context at execution time. The estimates above (this header) are accurate.\n');
+  } else {
+    console.log();
+  }
 
   const steps = buildAaveLoopPlaybook();
   await runPlaybook(steps, ctx);

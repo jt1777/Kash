@@ -2,8 +2,9 @@
  * 00-status — Show full position and balance snapshot.
  *
  * Usage:
+ *   PRODUCT=eth npx hardhat run bot/scripts/ops/00-status.js --network arbitrumOne
+ *   PRODUCT=btc npx hardhat run bot/scripts/ops/00-status.js --network arbitrumOne
  *   PRODUCT=eth npx hardhat run bot/scripts/ops/00-status.js --network arbitrumSepolia
- *   PRODUCT=btc npx hardhat run bot/scripts/ops/00-status.js --network arbitrumSepolia
  */
 const { ethers } = require("hardhat");
 const { getContract, getState, displayState, getRedeemFraction, PRODUCT } = require("./_utils");

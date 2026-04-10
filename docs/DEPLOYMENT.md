@@ -756,6 +756,8 @@ KASH_TOKEN_ETH=<KashTokenEth>
 
 ```env
 PRIVATE_KEY=your_bot_operator_key   # separate key from deployer
+HYPERLIQUID_API_PRIVATE_KEY=your_bot_operator_key   # HL API signer (same key in direct mode)
+HYPERLIQUID_API_URL=https://api.hyperliquid.xyz
 
 ARBITRUM_MAINNET_RPC_URL=https://arb1.g.alchemy.com/v2/YOUR_API_KEY
 
@@ -841,6 +843,38 @@ Save to root `.env`:
 ```env
 HL_ADAPTER_ADDRESS_ETH=<HyperliquidAdapter from output>
 ```
+
+### Step 4a — Set direct deposit mode (required)
+
+Immediately configure the adapter so the HL account is the bot EOA:
+
+- `directDepositMode=true`
+- `hlAccount=<bot wallet address>`
+
+This avoids the contract-address account trap (contract addresses cannot directly sign HL API actions like `order`, `withdraw3`, `approveAgent`).
+
+From repo root:
+
+```bash
+npx hardhat console --network arbitrumOne
+```
+
+Paste line-by-line:
+
+```javascript
+const [signer] = await ethers.getSigners()
+const adapter = await ethers.getContractAt("HyperliquidAdapter", "<HL_ADAPTER_ADDRESS_ETH>", signer)
+const tx = await adapter.setDirectDepositMode(true, "<BOT_EOA_ADDRESS>")
+await tx.wait()
+console.log("directDepositMode =", await adapter.directDepositMode())
+console.log("hlAccount =", await adapter.hlAccount())
+```
+
+Expected output:
+- `directDepositMode = true`
+- `hlAccount = <BOT_EOA_ADDRESS>`
+
+> This setting affects new deposits only. It does not migrate funds already sitting in an old HL account.
 
 ### Step 5 — Set Chainlink oracle
 
