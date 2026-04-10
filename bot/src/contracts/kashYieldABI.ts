@@ -77,6 +77,8 @@ export const kashYieldABI = [
   { inputs: [], name: "getBtcPrice", outputs: [{ name: "", type: "uint256" }], stateMutability: "view", type: "function" },
   { inputs: [], name: "aavePoolAddress", outputs: [{ name: "", type: "address" }], stateMutability: "view", type: "function" },
   { inputs: [], name: "hyperliquidAddress", outputs: [{ name: "", type: "address" }], stateMutability: "view", type: "function" },
+  { inputs: [], name: "activePerpExchange", outputs: [{ name: "", type: "string" }], stateMutability: "view", type: "function" },
+  { inputs: [{ name: "", type: "string" }], name: "perpExchanges", outputs: [{ name: "", type: "address" }], stateMutability: "view", type: "function" },
   { inputs: [], name: "getEthPrice", outputs: [{ name: "", type: "uint256" }], stateMutability: "view", type: "function" },
   { inputs: [], name: "getReservedEth", outputs: [{ name: "", type: "uint256" }], stateMutability: "view", type: "function" },
   { inputs: [], name: "getReservedBtc", outputs: [{ name: "", type: "uint256" }], stateMutability: "view", type: "function" },

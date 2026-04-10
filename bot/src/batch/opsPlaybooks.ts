@@ -96,6 +96,36 @@ async function execTx(label: string, txPromise: Promise<ethers.ContractTransacti
   console.log(`      → ${label} confirmed`);
 }
 
+const HL_ACTION_IFACE = new ethers.Interface([
+  'function openShort(string symbol, uint256 size)',
+  'function closeShort(string symbol)',
+  'function closeShort(string symbol, uint256 closeSize)',
+  'function spotBuyOnHyperliquid(uint256 usdcAmount)',
+  'function spotSellOnHyperliquid(uint256 amount)',
+]);
+
+type HlIntent =
+  | 'EXCHANGE_OPEN_SHORT'
+  | 'EXCHANGE_CLOSE_SHORT'
+  | 'EXCHANGE_SPOT_BUY'
+  | 'EXCHANGE_SPOT_SELL';
+
+function hlUserAddress(ctx: OpsContext): string {
+  if (ctx.hlDirectDepositMode) return ctx.hlAccountAddress || '';
+  return ctx.perpAdapterAddress || '';
+}
+
+function relayStrictMode(): boolean {
+  return (process.env.HL_EVENT_RELAY_STRICT || 'false').toLowerCase() === 'true';
+}
+
+function isRelayEnabled(ctx: OpsContext): boolean {
+  if (!ctx.hlEventRelayEnabled) return false;
+  const ex = (ctx.activePerpExchange || '').toUpperCase();
+  // Accept both canonical "HL" and descriptive names like "HYPERLIQUID".
+  return ex === 'HL' || ex === 'HYPERLIQUID';
+}
+
 function fmtUsdc(v: bigint): string { return ethers.formatUnits(v, 6) + ' USDC'; }
 function fmtAsset(v: bigint, ctx: OpsContext): string {
   return ethers.formatUnits(v, Number(ctx.assetDecimals)) + ' ' + ctx.assetSymbol;
@@ -201,6 +231,9 @@ const hlDepositUsdc: OpStep = {
       return;
     }
     await execTx('depositToHyperliquid', ctx.kashYield.depositToHyperliquid(amount));
+    if (ctx.hlDirectDepositMode) {
+      await maybeBridgeDirectModeDepositToHl(ctx, amount);
+    }
   },
 };
 
@@ -228,7 +261,15 @@ const hlOpenShort = (netMintUSD: bigint): OpStep => ({
     const size = (shortSizeUSD * (10n ** ctx.assetDecimals)) / ctx.price;
     const symbol = ctx.assetSymbol;
     console.log(`         open/extend ${ctx.assetSymbol} short: notional=${fmtAsset(size, ctx)}`);
-    await execTx('openShort', ctx.kashYield.openShort(symbol, size));
+    const tx = await ctx.kashYield.openShort(symbol, size);
+    await tx.wait();
+    console.log('      → openShort confirmed');
+    try {
+      await maybeRunHlEventRelay(ctx, tx.hash, 'EXCHANGE_OPEN_SHORT');
+    } catch (e: any) {
+      if (relayStrictMode()) throw e;
+      console.warn(`      ⚠️  HL relay openShort failed: ${e?.message ?? e}`);
+    }
   },
 });
 
@@ -272,10 +313,26 @@ const hlCloseShort: OpStep = {
     const closeSize = (fullSize * ctx.redeemFraction) / BigInt(1e18);
     if (closeSize >= fullSize) {
       console.log(`         closing full ${symbol} short`);
-      await execTx('closeShort(full)', ctx.kashYield['closeShort(string)'](symbol));
+      const tx = await ctx.kashYield['closeShort(string)'](symbol);
+      await tx.wait();
+      console.log('      → closeShort(full) confirmed');
+      try {
+        await maybeRunHlEventRelay(ctx, tx.hash, 'EXCHANGE_CLOSE_SHORT');
+      } catch (e: any) {
+        if (relayStrictMode()) throw e;
+        console.warn(`      ⚠️  HL relay closeShort failed: ${e?.message ?? e}`);
+      }
     } else {
       console.log(`         closing ${fmtAsset(closeSize, ctx)} of ${fmtAsset(fullSize, ctx)}`);
-      await execTx('closeShort(partial)', ctx.kashYield['closeShort(string,uint256)'](symbol, closeSize));
+      const tx = await ctx.kashYield['closeShort(string,uint256)'](symbol, closeSize);
+      await tx.wait();
+      console.log('      → closeShort(partial) confirmed');
+      try {
+        await maybeRunHlEventRelay(ctx, tx.hash, 'EXCHANGE_CLOSE_SHORT');
+      } catch (e: any) {
+        if (relayStrictMode()) throw e;
+        console.warn(`      ⚠️  HL relay closeShort failed: ${e?.message ?? e}`);
+      }
     }
   },
 };
@@ -492,6 +549,270 @@ const dexSwapForUsdc: OpStep = {
     await execTx('swapForUsdc', ctx.kashYield.swapForUsdc(toSell));
   },
 };
+
+async function maybeBridgeDirectModeDepositToHl(ctx: OpsContext, amountUsdc6: bigint): Promise<void> {
+  if (!ctx.hlDirectDepositMode || amountUsdc6 === 0n) return;
+  if (!ctx.hlBridgeAddress || ctx.hlBridgeAddress === ethers.ZeroAddress) {
+    throw new Error('HL direct mode is enabled but adapter hlBridgeAddress is not set');
+  }
+  const signerPk = process.env.HYPERLIQUID_API_PRIVATE_KEY || config.privateKey;
+  if (!signerPk) throw new Error('HL direct mode requires HYPERLIQUID_API_PRIVATE_KEY (or PRIVATE_KEY)');
+
+  const signer = new ethers.Wallet(signerPk, ctx.provider);
+  if (ctx.hlAccountAddress && ctx.hlAccountAddress !== ethers.ZeroAddress) {
+    if (signer.address.toLowerCase() !== ctx.hlAccountAddress.toLowerCase()) {
+      throw new Error(
+        `HL direct mode requires signer=${ctx.hlAccountAddress}; got ${signer.address}. ` +
+        'Set HYPERLIQUID_API_PRIVATE_KEY to the hlAccount key.'
+      );
+    }
+  }
+
+  const usdc = new ethers.Contract(
+    ctx.usdcAddress,
+    ['function balanceOf(address) view returns (uint256)', 'function transfer(address,uint256) returns (bool)'],
+    signer,
+  );
+  const bal = BigInt((await usdc.balanceOf(signer.address)).toString());
+  if (bal < amountUsdc6) {
+    throw new Error(`HL direct mode bridge transfer failed: signer has ${fmtUsdc(bal)} but needs ${fmtUsdc(amountUsdc6)}`);
+  }
+
+  console.log(`      ↪ direct mode: bridge ${fmtUsdc(amountUsdc6)} from hlAccount ${signer.address} → ${ctx.hlBridgeAddress}`);
+  const tx = await usdc.transfer(ctx.hlBridgeAddress, amountUsdc6);
+  await tx.wait();
+  console.log('      → hlBridge USDC transfer confirmed');
+}
+
+function trimDec(v: string, maxDp = 6): string {
+  const [whole, frac = ''] = v.split('.');
+  if (!frac) return whole;
+  const cut = frac.slice(0, maxDp).replace(/0+$/, '');
+  return cut ? `${whole}.${cut}` : whole;
+}
+
+function formatHlSize(sizeRaw: string, szDecimals: number): string {
+  const [whole, frac = ''] = String(sizeRaw).split('.');
+  if (szDecimals <= 0) return whole;
+  const cut = frac.slice(0, szDecimals).replace(/0+$/, '');
+  return cut ? `${whole}.${cut}` : whole;
+}
+
+function limitPx(midRaw: unknown, isBuy: boolean): string {
+  const mid = Number(midRaw ?? 0);
+  if (!Number.isFinite(mid) || mid <= 0) return '0';
+  const px = isBuy ? mid * 1.03 : mid * 0.97;
+  return trimDec(String(px), 6);
+}
+
+function formatHlLimitPx(midRaw: unknown, isBuy: boolean, szDecimals = 0): string {
+  const mid = Number(midRaw ?? 0);
+  if (!Number.isFinite(mid) || mid <= 0) return '0';
+  const raw = isBuy ? mid * 1.03 : mid * 0.97;
+  // HL price precision constraints:
+  // - max 5 significant figures
+  // - max decimals = 6 - szDecimals
+  const maxDecimals = Math.max(0, 6 - Number(szDecimals || 0));
+  const sigRounded = Number(raw.toPrecision(5));
+  const decRounded = Number(sigRounded.toFixed(maxDecimals));
+  return trimDec(String(decRounded), maxDecimals);
+}
+
+function findPerpAssetId(meta: any, symbol: string): number {
+  const target = symbol.toUpperCase();
+  const idx = (meta?.universe || []).findIndex((u: any) => String(u?.name || '').toUpperCase() === target);
+  if (idx < 0) throw new Error(`HL perp symbol not found in meta universe: ${symbol}`);
+  return idx;
+}
+
+function resolveSpotPairName(spotMeta: any, symbol: string): string {
+  const explicit = process.env.HL_SPOT_PAIR_NAME;
+  if (explicit) return explicit;
+  const target = `${symbol.toUpperCase()}/USDC`;
+  const match = (spotMeta?.universe || []).find((u: any) => String(u?.name || '').toUpperCase() === target);
+  if (!match) throw new Error(`HL spot pair not found: ${target}. Set HL_SPOT_PAIR_NAME or HL_SPOT_ASSET_ID.`);
+  return String(match.name);
+}
+
+function resolveSpotAssetId(spotMeta: any, pairName: string): number {
+  if (process.env.HL_SPOT_ASSET_ID) return parseInt(process.env.HL_SPOT_ASSET_ID, 10);
+  const match = (spotMeta?.universe || []).find((u: any) => String(u?.name || '') === pairName);
+  if (!match) throw new Error(`could not resolve spot pair index for ${pairName}`);
+  return 10000 + Number(match.index);
+}
+
+function findSpotBalance(spotState: any, coin: string): string {
+  const bal = (spotState?.balances || []).find((b: any) =>
+    String(b?.coin || '').toUpperCase() === coin.toUpperCase()
+  );
+  return String(bal?.total || '0');
+}
+
+function findPosition(clearinghouseState: any, symbol: string): any {
+  return (clearinghouseState?.assetPositions || []).find((p: any) =>
+    String(p?.position?.coin || '').toUpperCase() === symbol.toUpperCase()
+  );
+}
+
+function decimalToBigInt(value: unknown, decimals: number): bigint {
+  const s = String(value ?? '0').trim();
+  if (!s || s === '0') return 0n;
+  const neg = s.startsWith('-');
+  const clean = neg ? s.slice(1) : s;
+  const [intPartRaw, fracRaw = ''] = clean.split('.');
+  const intPart = intPartRaw || '0';
+  const fracPadded = (fracRaw + '0'.repeat(decimals)).slice(0, decimals);
+  const combined = `${intPart}${fracPadded}`.replace(/^0+/, '') || '0';
+  const v = BigInt(combined);
+  return neg ? -v : v;
+}
+
+function absDecimal(value: unknown): string {
+  const s = String(value || '0');
+  return s.startsWith('-') ? s.slice(1) : s;
+}
+
+async function maybeRunHlEventRelay(ctx: OpsContext, txHash: string, expected: HlIntent): Promise<void> {
+  if (!isRelayEnabled(ctx)) return;
+  const signerPk = process.env.HYPERLIQUID_API_PRIVATE_KEY || config.privateKey;
+  if (!signerPk) {
+    const msg = `${expected}: missing HYPERLIQUID_API_PRIVATE_KEY (or PRIVATE_KEY) for HL relay`;
+    if (relayStrictMode()) throw new Error(msg);
+    console.warn(`      ⚠️  ${msg}`);
+    return;
+  }
+
+  const hlUser = hlUserAddress(ctx);
+  if (!hlUser || hlUser === ethers.ZeroAddress) {
+    const msg = `${expected}: unable to resolve HL user address`;
+    if (relayStrictMode()) throw new Error(msg);
+    console.warn(`      ⚠️  ${msg}`);
+    return;
+  }
+
+  const tx = await ctx.provider.getTransaction(txHash);
+  if (!tx) throw new Error(`tx not found: ${txHash}`);
+  const parsed = HL_ACTION_IFACE.parseTransaction({ data: tx.data, value: tx.value });
+  if (!parsed) throw new Error(`could not decode tx calldata for ${txHash}`);
+
+  const { ExchangeClient, InfoClient, HttpTransport } = await import('@nktkas/hyperliquid');
+  const hlApiUrl = (process.env.HYPERLIQUID_API_URL || 'https://api.hyperliquid.xyz').replace(/\/+$/, '');
+  const wallet = new ethers.Wallet(signerPk);
+  const sharedTransport = new HttpTransport({ apiUrl: hlApiUrl });
+  const info = new InfoClient({ transport: sharedTransport });
+  const exchange = new ExchangeClient({
+    transport: sharedTransport,
+    wallet,
+    signatureChainId: '0xa4b1',
+  });
+  const orderOpts = wallet.address.toLowerCase() === hlUser.toLowerCase()
+    ? undefined
+    : { vaultAddress: hlUser };
+
+  const perpMeta = await info.meta();
+  const mids = await info.allMids();
+
+  if (expected === 'EXCHANGE_OPEN_SHORT') {
+    const symbol = String(parsed.args[0]).toUpperCase();
+    const assetId = findPerpAssetId(perpMeta, symbol);
+    const szDecimals = Number(perpMeta?.universe?.[assetId]?.szDecimals ?? 0);
+    const rawSize = ethers.formatUnits(BigInt(parsed.args[1].toString()), Number(ctx.assetDecimals));
+    const size = formatHlSize(rawSize, szDecimals);
+    if (!size || size === '0') throw new Error(`computed HL order size is 0 after szDecimals=${szDecimals} rounding`);
+    const px = formatHlLimitPx(mids[symbol], false, szDecimals);
+    console.log(`      ↪ HL relay: SELL ${size} ${symbol} @ IOC ${px}`);
+    await exchange.order({
+      orders: [{ a: assetId, b: false, p: px, s: size, r: false, t: { limit: { tif: 'Ioc' } } }],
+      grouping: 'na',
+    }, orderOpts as any);
+  } else if (expected === 'EXCHANGE_CLOSE_SHORT') {
+    const symbol = String(parsed.args[0]).toUpperCase();
+    let closeSize18 = 0n;
+    if (parsed.name === 'closeShort' && parsed.args.length > 1) {
+      closeSize18 = BigInt(parsed.args[1].toString());
+    } else {
+      const chState: any = await info.clearinghouseState({ user: hlUser });
+      const pos = (chState?.assetPositions || []).find((p: any) =>
+        String(p?.position?.coin || '').toUpperCase() === symbol
+      );
+      if (pos) closeSize18 = ethers.parseUnits(String(pos.position.szi).replace('-', ''), Number(ctx.assetDecimals));
+    }
+    if (closeSize18 > 0n) {
+      const assetId = findPerpAssetId(perpMeta, symbol);
+      const szDecimals = Number(perpMeta?.universe?.[assetId]?.szDecimals ?? 0);
+      const rawSize = ethers.formatUnits(closeSize18, Number(ctx.assetDecimals));
+      const size = formatHlSize(rawSize, szDecimals);
+      if (!size || size === '0') {
+        console.log(`      ↪ HL relay: close size rounds to 0 at szDecimals=${szDecimals}; skipping close order`);
+        return;
+      }
+      const px = formatHlLimitPx(mids[symbol], true, szDecimals);
+      console.log(`      ↪ HL relay: BUY ${size} ${symbol} reduce-only @ IOC ${px}`);
+      await exchange.order({
+        orders: [{ a: assetId, b: true, p: px, s: size, r: true, t: { limit: { tif: 'Ioc' } } }],
+        grouping: 'na',
+      }, orderOpts as any);
+    }
+  } else if (expected === 'EXCHANGE_SPOT_BUY') {
+    const symbol = ctx.assetSymbol.toUpperCase();
+    const usdcAmount6 = BigInt(parsed.args[0].toString());
+    const spotMeta = await info.spotMeta();
+    const pair = resolveSpotPairName(spotMeta, symbol);
+    const spotAssetId = resolveSpotAssetId(spotMeta, pair);
+    const mid = mids[pair] ?? mids[symbol];
+    const mid18 = ethers.parseUnits(String(mid || '0'), 18);
+    if (mid18 <= 0n) throw new Error(`invalid HL mid for ${pair}`);
+    const sizeWei = (usdcAmount6 * (10n ** 30n)) / mid18;
+    const size = trimDec(ethers.formatUnits(sizeWei, Number(ctx.assetDecimals)));
+    const px = limitPx(mid, true);
+    console.log(`      ↪ HL relay: SPOT BUY ${size} ${pair} @ IOC ${px}`);
+    await exchange.order({
+      orders: [{ a: spotAssetId, b: true, p: px, s: size, r: false, t: { limit: { tif: 'Ioc' } } }],
+      grouping: 'na',
+    }, orderOpts as any);
+  } else if (expected === 'EXCHANGE_SPOT_SELL') {
+    const symbol = ctx.assetSymbol.toUpperCase();
+    const amount = BigInt(parsed.args[0].toString());
+    const spotMeta = await info.spotMeta();
+    const pair = resolveSpotPairName(spotMeta, symbol);
+    const spotAssetId = resolveSpotAssetId(spotMeta, pair);
+    const size = trimDec(ethers.formatUnits(amount, Number(ctx.assetDecimals)));
+    const px = limitPx(mids[pair] ?? mids[symbol], false);
+    console.log(`      ↪ HL relay: SPOT SELL ${size} ${pair} @ IOC ${px}`);
+    await exchange.order({
+      orders: [{ a: spotAssetId, b: false, p: px, s: size, r: false, t: { limit: { tif: 'Ioc' } } }],
+      grouping: 'na',
+    }, orderOpts as any);
+  }
+
+  if (ctx.perpAdapterAddress && ctx.perpAdapterAddress !== ethers.ZeroAddress) {
+    const signer = new ethers.Wallet(config.privateKey || signerPk, ctx.provider);
+    const adapter = new ethers.Contract(
+      ctx.perpAdapterAddress,
+      [
+        'function syncBalances(uint256 newUsdcBalance, uint256 newAssetBalance) external',
+        'function syncPosition(string symbol, uint256 size, uint256 entryPrice, bool isActive) external',
+      ],
+      signer,
+    );
+
+    const ch = await info.clearinghouseState({ user: hlUser });
+    const spot = await info.spotClearinghouseState({ user: hlUser }).catch(() => ({ balances: [] }));
+    const usdcStr = findSpotBalance(spot, 'USDC') || String(ch?.withdrawable || '0');
+    const assetStr = findSpotBalance(spot, ctx.assetSymbol);
+    const pos = findPosition(ch, ctx.assetSymbol);
+
+    const usdc6 = decimalToBigInt(usdcStr, 6);
+    const asset18 = decimalToBigInt(assetStr || '0', 18);
+    const size18 = decimalToBigInt(absDecimal(pos?.position?.szi || '0'), 18);
+    const entry18 = decimalToBigInt(pos?.position?.entryPx || '0', 18);
+    const isActive = size18 > 0n;
+
+    await (await adapter.syncBalances(usdc6, asset18)).wait();
+    await (await adapter.syncPosition(ctx.assetSymbol, size18, entry18, isActive)).wait();
+    console.log('      → HL adapter syncBalances + syncPosition confirmed');
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Playbook builders

@@ -82,10 +82,16 @@ export async function classifyScenario(
       // (Aster / other scenarios are deferred per plan)
       console.warn(`   ⚠️  activePerpExchange="${perpName}" is not HL; running net_mint_hl anyway (Aster deferred)`);
     }
+    if ((process.env.HL_EVENT_RELAY_ENABLED || 'true').toLowerCase() === 'false') {
+      console.warn('   ⚠️  HL_EVENT_RELAY_ENABLED=false: on-chain intents will not execute real HL API trades');
+    }
     return 'net_mint_hl';
   }
 
   // net < 0 → redeem
+  if ((process.env.HL_EVENT_RELAY_ENABLED || 'true').toLowerCase() === 'false') {
+    console.warn('   ⚠️  HL_EVENT_RELAY_ENABLED=false: redeem HL close/spot intents rely on off-chain manual execution');
+  }
   return 'redeem_hl';
 }
 

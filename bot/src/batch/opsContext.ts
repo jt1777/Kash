@@ -23,6 +23,12 @@ export interface OpsContext {
   hlAssetBalance: bigint;  // ETH (18 dec) or wBTC (8 dec) — spot position (0 in USDC-collateral model)
   shortSize: bigint;       // asset units
   shortIsActive: boolean;
+  activePerpExchange: string; // e.g. "HL"
+  perpAdapterAddress: string;
+  hlDirectDepositMode: boolean;
+  hlAccountAddress: string;
+  hlBridgeAddress: string;
+  hlEventRelayEnabled: boolean; // env gate for off-chain HL execution path
 
   /** Redemption accounting */
   batchCycle: bigint;
@@ -267,6 +273,12 @@ export async function snapshotOpsContext(
   let hlAssetBalance = 0n;
   let shortSize = 0n;
   let shortIsActive = false;
+  let activePerpExchange = '';
+  let perpAdapterAddress = '';
+  let hlDirectDepositMode = false;
+  let hlAccountAddress = '';
+  let hlBridgeAddress = '';
+  const hlEventRelayEnabled = (process.env.HL_EVENT_RELAY_ENABLED || 'true').toLowerCase() !== 'false';
 
   try { hlUsdcBalance = BigInt((await kashYield.getHyperliquidSpotBalance()).toString()); } catch { hlUsdcBalance = 0n; }
   try { hlAssetBalance = BigInt((await kashYield.getExchangeAssetBalance()).toString()); } catch { hlAssetBalance = 0n; }
@@ -275,6 +287,30 @@ export async function snapshotOpsContext(
     shortSize = BigInt(size.toString());
     shortIsActive = !!isActive;
   } catch { /* no position */ }
+  try {
+    activePerpExchange = await kashYield.activePerpExchange();
+  } catch { activePerpExchange = ''; }
+  try {
+    perpAdapterAddress = activePerpExchange
+      ? await kashYield.perpExchanges(activePerpExchange)
+      : await kashYield.hyperliquidAddress?.().catch(() => '') ?? '';
+  } catch { perpAdapterAddress = ''; }
+  if (perpAdapterAddress && perpAdapterAddress !== ethers.ZeroAddress) {
+    try {
+      const hlAdapter = new ethers.Contract(
+        perpAdapterAddress,
+        [
+          'function directDepositMode() view returns (bool)',
+          'function hlAccount() view returns (address)',
+          'function hlBridgeAddress() view returns (address)',
+        ],
+        provider,
+      );
+      hlDirectDepositMode = await hlAdapter.directDepositMode().catch(() => false);
+      hlAccountAddress = await hlAdapter.hlAccount().catch(() => '');
+      hlBridgeAddress = await hlAdapter.hlBridgeAddress().catch(() => '');
+    } catch { /* leave defaults */ }
+  }
 
   // -- Redemption accounting --
   const redeemFraction = await computeRedeemFraction(kashYield, provider, batchCycle, isBtc);
@@ -291,6 +327,12 @@ export async function snapshotOpsContext(
     hlAssetBalance,
     shortSize,
     shortIsActive,
+    activePerpExchange,
+    perpAdapterAddress,
+    hlDirectDepositMode,
+    hlAccountAddress,
+    hlBridgeAddress,
+    hlEventRelayEnabled,
     batchCycle,
     redeemFraction,
     totalRedeemAsset,

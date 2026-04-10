@@ -197,34 +197,36 @@ KASH_TOKEN_ETH=<...>
 # HL API
 HYPERLIQUID_API_URL=https://api.hyperliquid.xyz
 HYPERLIQUID_API_PRIVATE_KEY=0x...   # bot signer key
+HL_EVENT_RELAY_ENABLED=true          # default true; execute HL API orders inline during npm start
+HL_EVENT_RELAY_STRICT=false          # if true, fail ops step when relay fails
 
 # Strategy
 SHORT_LEVERAGE=1
 ```
 
-### 3) Event relay + sync scripts
+### 3) Inline HL relay during `npm start` (new)
 
-New scripts for real HL:
-- `bot/scripts/ops/13-hl-event-relay.js`  
-  Watches `ProtocolInteraction` intents, executes actual HL API trades, then calls adapter `syncBalances()` / `syncPosition()`.
-- `bot/scripts/ops/14-hl-sync-state.js`  
-  One-shot reconcile from HL API to adapter state.
+The batch ops playbooks now execute Hyperliquid API actions inline during `npm start` for:
+- `EXCHANGE_OPEN_SHORT`
+- `EXCHANGE_CLOSE_SHORT`
+- `EXCHANGE_SPOT_BUY`
+- `EXCHANGE_SPOT_SELL`
 
-Examples:
+After each HL order, the bot syncs adapter state (`syncBalances` + `syncPosition`) on Arbitrum.
 
-```bash
-# one-shot backfill
-PRODUCT=eth KASH_YIELD_ETH_ADDRESS=0x... \
-HYPERLIQUID_API_PRIVATE_KEY=0x... FROM_BLOCK=450000000 TO_BLOCK=latest \
-npx hardhat run bot/scripts/ops/13-hl-event-relay.js --network arbitrumOne
+For direct-deposit mode, after `depositToHyperliquid` the bot also transfers USDC from `hlAccount` to `hlBridgeAddress` (same run), so collateral is pushed to HL L1.
 
-# watch mode
-PRODUCT=eth KASH_YIELD_ETH_ADDRESS=0x... \
-HYPERLIQUID_API_PRIVATE_KEY=0x... WATCH=true POLL_INTERVAL_MS=15000 \
-npx hardhat run bot/scripts/ops/13-hl-event-relay.js --network arbitrumOne
-```
+If `HL_EVENT_RELAY_ENABLED=false`, on-chain intent txs still run but no real HL API trades are executed.
 
-### 4) Known operational caveat
+### 4) Relay scripts (optional recovery/backfill)
+
+Scripts are still available for operational recovery:
+- `bot/scripts/ops/13-hl-event-relay.js` — event backfill/watch relay
+- `bot/scripts/ops/14-hl-sync-state.js` — one-shot state reconcile
+
+Use them when you need to replay missed events, recover after downtime, or reconcile state manually.
+
+### 5) Known operational caveat
 
 `DRY_RUN_OPS=true npm start` skips only ops tx execution but still runs phase1/nav/mark-done/phase2 on-chain.  
 Do not use that mode on live user batches unless you explicitly intend that behavior.
@@ -366,8 +368,8 @@ The value is the NAV in 18-decimal fixed-point (e.g. `$1.0523` = `10523000000000
 Phase 1 NET_MINT and NET_REDEEM are split into **Hyperliquid** steps (deposit/withdraw HL, spot buy/sell, open/close short) and **Aave** steps (deposit/withdraw, borrow/repay). You can run one set at a time for testing or recovery:
 
 - **HL only:** `npm start -- --step=hl` or `BATCH_STEP=hl npm start`
-  - NET_MINT: deposit USDC to HL, spot buy, open short.
-  - NET_REDEEM: close short, spot sell, withdraw USDC from HL.
+  - NET_MINT: deposit USDC to HL, open/extend short (no spot buy in current mint playbook).
+  - NET_REDEEM: close short, withdraw USDC from HL.
 - **Aave only:** `npm start -- --step=aave` or `BATCH_STEP=aave npm start`
   - NET_MINT: deposit to Aave, borrow USDC.
   - NET_REDEEM: repay USDC to Aave, withdraw wBTC/ETH from Aave.
