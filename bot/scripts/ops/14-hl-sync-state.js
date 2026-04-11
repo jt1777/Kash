@@ -76,7 +76,9 @@ async function main() {
   const ch = await info.clearinghouseState({ user: hlUser });
   const spot = await info.spotClearinghouseState({ user: hlUser }).catch(() => ({ balances: [] }));
 
-  const usdcStr = findSpotBalance(spot, "USDC") || String(ch.withdrawable || "0");
+  const usdcSpotStr = findSpotBalance(spot, "USDC");
+  const withdrawableStr = String(ch.withdrawable || "0");
+  const usdcStr = selectUsdcForSync(usdcSpotStr, withdrawableStr);
   const assetStr = findSpotBalance(spot, symbol);
   const pos = (ch.assetPositions || []).find((p) => String(p?.position?.coin || "").toUpperCase() === symbol);
 
@@ -137,6 +139,12 @@ function decimalToBigInt(value, decimals) {
 function absDecimal(value) {
   const s = String(value || "0");
   return s.startsWith("-") ? s.slice(1) : s;
+}
+
+function selectUsdcForSync(spotUsdcStr, withdrawableStr) {
+  const spot6 = decimalToBigInt(spotUsdcStr || "0", 6);
+  const wd6 = decimalToBigInt(withdrawableStr || "0", 6);
+  return wd6 > spot6 ? withdrawableStr : spotUsdcStr;
 }
 
 function trimDecimal(value) {

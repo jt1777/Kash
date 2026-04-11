@@ -307,14 +307,24 @@ If a step errors (e.g. "No active position" during ops), the batch stays in phas
 
 **Targeting a specific batch cycle**
 
-By default the bot targets the current cycle (or the first incomplete orphan). To run on a specific historical batch:
+By default the bot targets the current cycle (or the first incomplete orphan). You can target a specific batch cycle, but there is an important contract constraint:
+
+- `performUpkeep()` always processes the **current timestamp cycle**.
+- So a full forced run on an older phase-0 cycle can fail later with `WrongPhase()`.
 
 ```bash
-npm start -- --batch=20523            # run all 5 steps on batch 20523
-npm start -- --batch=20523 --step=ops # run only the ops step on batch 20523
+npm start -- --batch=20523 --step=ops       # run only ops on batch 20523
+npm start -- --batch=20523 --step=nav       # run only nav on batch 20523
+npm start -- --batch=20523 --step=mark-done # run only mark-done on batch 20523
+npm start -- --batch=20523 --step=phase2    # run only phase2 on batch 20523
 ```
 
 The `BATCH_CYCLE=N` environment variable is equivalent to `--batch=N`.
+
+**Stale past-cycle requests (phase 0):**
+
+If a mint/redeem request is stuck in an older cycle with `phase=0`, it cannot be picked up by `performUpkeep()` anymore.  
+User must cancel (`cancelMintRequest`/`cancelRedeemRequest`) and resubmit in the current cycle.
 
 **Re-running ops on an already-processed batch (`--allow-processed`)**
 

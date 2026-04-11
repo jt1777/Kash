@@ -132,6 +132,36 @@ function fmtAsset(v: bigint, ctx: OpsContext): string {
 }
 function fmtUsd(v: bigint): string { return '$' + ethers.formatEther(v); }
 
+function getHlWithdrawFeeToleranceUsdc6(): bigint {
+  const raw = process.env.HL_WITHDRAW_FEE_TOLERANCE_USDC || '1';
+  try {
+    const parsed = ethers.parseUnits(raw, 6);
+    return parsed >= 0n ? parsed : 0n;
+  } catch {
+    return 1_000_000n; // 1 USDC default fallback
+  }
+}
+
+async function getAaveAvailableBorrowUsdc6(ctx: OpsContext): Promise<bigint> {
+  if (!ctx.aavePoolAddress || ctx.aavePoolAddress === ethers.ZeroAddress) return 0n;
+  try {
+    const pool = new ethers.Contract(
+      ctx.aavePoolAddress,
+      ['function getUserAccountData(address) view returns (uint256 totalCollateralBase, uint256 totalDebtBase, uint256 availableBorrowsBase, uint256 currentLiquidationThreshold, uint256 ltv, uint256 healthFactor)'],
+      ctx.provider,
+    );
+    const userAddr = config.aaveUserAddress || (config.kashYieldAddress || await ctx.kashYield.getAddress());
+    const data = await pool.getUserAccountData(userAddr);
+    const availableBase8 = BigInt(data.availableBorrowsBase.toString()); // USD with 8 decimals
+    // USD(8) -> USDC(6)
+    const availableUsdc6 = availableBase8 / 100n;
+    // Keep a tiny safety buffer (0.05 USDC) to avoid edge reverts between read and tx.
+    return availableUsdc6 > 50_000n ? availableUsdc6 - 50_000n : 0n;
+  } catch {
+    return 0n;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // ─── MINT STEPS ─────────────────────────────────────────────────────────────
 // ---------------------------------------------------------------------------
@@ -189,7 +219,7 @@ const aaveBorrow: OpStep = {
     const targetDebtUSD = (suppliedUSD * ltv) / 100n;
     const targetUsdc6 = targetDebtUSD / (10n ** 12n);
     const toBorrow = targetUsdc6 > ctx.aaveDebt ? targetUsdc6 - ctx.aaveDebt : 0n;
-    return `borrow up to ${ltvPct}% LTV — need ${fmtUsdc(toBorrow)} more USDC`;
+    return `borrow up to ${ltvPct}% LTV — target delta ${fmtUsdc(toBorrow)}`;
   },
   canSkip: async (ctx) => {
     const ltv = BigInt(config.strategy.borrowLtvPct);
@@ -197,7 +227,10 @@ const aaveBorrow: OpStep = {
       ? (ctx.aaveSupplied * ctx.price) / (10n ** 8n)
       : (ctx.aaveSupplied * ctx.price) / (10n ** 18n);
     const targetUsdc6 = (suppliedUSD * ltv) / 100n / (10n ** 12n);
-    return ctx.aaveDebt >= targetUsdc6;
+    if (ctx.aaveDebt >= targetUsdc6) return true;
+    const desiredDelta = targetUsdc6 - ctx.aaveDebt;
+    const availableDelta = await getAaveAvailableBorrowUsdc6(ctx);
+    return availableDelta === 0n || desiredDelta === 0n;
   },
   execute: async (ctx) => {
     const ltv = BigInt(config.strategy.borrowLtvPct);
@@ -205,9 +238,15 @@ const aaveBorrow: OpStep = {
       ? (ctx.aaveSupplied * ctx.price) / (10n ** 8n)
       : (ctx.aaveSupplied * ctx.price) / (10n ** 18n);
     const targetUsdc6 = (suppliedUSD * ltv) / 100n / (10n ** 12n);
-    const toBorrow = targetUsdc6 > ctx.aaveDebt ? targetUsdc6 - ctx.aaveDebt : 0n;
+    const desiredDelta = targetUsdc6 > ctx.aaveDebt ? targetUsdc6 - ctx.aaveDebt : 0n;
+    const availableDelta = await getAaveAvailableBorrowUsdc6(ctx);
+    const toBorrow = desiredDelta < availableDelta ? desiredDelta : availableDelta;
     if (toBorrow === 0n) return;
-    console.log(`         ${fmtUsdc(toBorrow)}`);
+    if (toBorrow < desiredDelta) {
+      console.warn(`         ⚠️  Capping borrow to Aave available headroom: requested ${fmtUsdc(desiredDelta)}, borrowing ${fmtUsdc(toBorrow)}`);
+    } else {
+      console.log(`         ${fmtUsdc(toBorrow)}`);
+    }
     await execTx('borrowFromAave', ctx.kashYield.borrowFromAave(ctx.aaveUsdcAddress, toBorrow));
   },
 };
@@ -349,30 +388,26 @@ const hlWithdrawUsdc: OpStep = {
     if (amount === 0n) return;
     console.log(`         ${fmtUsdc(amount)}`);
     const contractAddr = config.kashYieldAddress || await ctx.kashYield.getAddress();
-    let beforeUsdc = 0n;
-    let afterUsdc = 0n;
-    try {
-      if (ctx.usdcAddress && ctx.usdcAddress !== ethers.ZeroAddress) {
-        const usdc = new ethers.Contract(ctx.usdcAddress, ['function balanceOf(address) view returns (uint256)'], ctx.provider);
-        beforeUsdc = BigInt((await usdc.balanceOf(contractAddr)).toString());
-        await execTx('withdrawFromHyperliquid', ctx.kashYield.withdrawFromHyperliquid(amount));
-        afterUsdc = BigInt((await usdc.balanceOf(contractAddr)).toString());
-      } else {
-        await execTx('withdrawFromHyperliquid', ctx.kashYield.withdrawFromHyperliquid(amount));
-      }
-    } catch {
-      // Preserve original behavior if balance probing fails.
-      await execTx('withdrawFromHyperliquid', ctx.kashYield.withdrawFromHyperliquid(amount));
+    if (!ctx.usdcAddress || ctx.usdcAddress === ethers.ZeroAddress) {
+      throw new Error('Strict HL withdraw check requires usdcAddress on KashYield.');
     }
 
-    if (afterUsdc > 0n || beforeUsdc > 0n) {
-      const received = afterUsdc > beforeUsdc ? afterUsdc - beforeUsdc : 0n;
-      console.log(`         received on contract: ${fmtUsdc(received)} (before=${fmtUsdc(beforeUsdc)} → after=${fmtUsdc(afterUsdc)})`);
-      if (received === 0n) {
-        console.warn('         ⚠️  HL withdraw tx confirmed, but 0 USDC reached KashYield on Arbitrum (likely unsettled/no bridged funds).');
-      } else if (received < amount) {
-        console.warn(`         ⚠️  Partial receipt: requested ${fmtUsdc(amount)}, received ${fmtUsdc(received)}.`);
-      }
+    const usdc = new ethers.Contract(ctx.usdcAddress, ['function balanceOf(address) view returns (uint256)'], ctx.provider);
+    const beforeUsdc = BigInt((await usdc.balanceOf(contractAddr)).toString());
+    await execTx('withdrawFromHyperliquid', ctx.kashYield.withdrawFromHyperliquid(amount));
+    const afterUsdc = BigInt((await usdc.balanceOf(contractAddr)).toString());
+    const received = afterUsdc > beforeUsdc ? afterUsdc - beforeUsdc : 0n;
+    const feeTolerance = getHlWithdrawFeeToleranceUsdc6();
+
+    console.log(`         received on contract: ${fmtUsdc(received)} (before=${fmtUsdc(beforeUsdc)} → after=${fmtUsdc(afterUsdc)})`);
+    if (received + feeTolerance < amount) {
+      console.warn(
+        `         ⚠️  HL withdraw not fully settled yet: expected ${fmtUsdc(amount)} (tolerance ${fmtUsdc(feeTolerance)}), ` +
+        `received ${fmtUsdc(received)}. Waiting/retry logic will run before tail classification.`
+      );
+    } else if (received < amount) {
+      const impliedFee = amount - received;
+      console.log(`         fee/slippage accounted: ${fmtUsdc(impliedFee)} (tolerance ${fmtUsdc(feeTolerance)})`);
     }
   },
 };
@@ -385,6 +420,7 @@ const hlWithdrawUsdc: OpStep = {
 const aaveRepay: OpStep = {
   id: 'aave_repay',
   substep: 'aave',
+  refreshCtx: true,
   describe: (ctx) => {
     const amount = ctx.contractUsdc < ctx.aaveDebt ? ctx.contractUsdc : ctx.aaveDebt;
     return `repay ${fmtUsdc(amount)} to Aave (debt=${fmtUsdc(ctx.aaveDebt)})`;
@@ -406,6 +442,7 @@ const aaveRepay: OpStep = {
 const dexSwapFromUsdc = (lockedNAV: bigint | undefined): OpStep => ({
   id: 'dex_swap_from_usdc',
   substep: 'aave',
+  refreshCtx: true,
   describe: (ctx) => {
     const excess = ctx.contractUsdc;
     const usdcToSwap = excess > 0n ? excess : 0n;
@@ -491,6 +528,7 @@ const aaveWithdraw = (mode: 'proportional' | 'remaining'): OpStep => ({
 const aaveWithdrawPartial: OpStep = {
   id: 'aave_withdraw_partial',
   substep: 'aave',
+  refreshCtx: true,
   describe: (ctx) => {
     const shortfall = ctx.aaveDebt > ctx.contractUsdc ? ctx.aaveDebt - ctx.contractUsdc : 0n;
     const assetNeeded = (shortfall * (10n ** 12n) * (10n ** ctx.assetDecimals)) / ctx.price;
@@ -524,6 +562,7 @@ const aaveWithdrawPartial: OpStep = {
 const dexSwapForUsdc: OpStep = {
   id: 'dex_swap_for_usdc',
   substep: 'aave',
+  refreshCtx: true,
   describe: (ctx) => {
     const shortfall = ctx.aaveDebt > ctx.contractUsdc ? ctx.aaveDebt - ctx.contractUsdc : 0n;
     const assetToSell = (shortfall * (10n ** 12n) * (10n ** ctx.assetDecimals)) / ctx.price;
@@ -672,6 +711,14 @@ function absDecimal(value: unknown): string {
   return s.startsWith('-') ? s.slice(1) : s;
 }
 
+function selectUsdcForSync(spotUsdcStr: string, withdrawableStr: string): string {
+  // For redemption we need the amount that can be bridged out now.
+  // HL can report usable collateral in `withdrawable` while spot USDC is lower.
+  const spot6 = decimalToBigInt(spotUsdcStr || '0', 6);
+  const wd6 = decimalToBigInt(withdrawableStr || '0', 6);
+  return wd6 > spot6 ? withdrawableStr : spotUsdcStr;
+}
+
 async function maybeRunHlEventRelay(ctx: OpsContext, txHash: string, expected: HlIntent): Promise<void> {
   if (!isRelayEnabled(ctx)) return;
   const signerPk = process.env.HYPERLIQUID_API_PRIVATE_KEY || config.privateKey;
@@ -798,7 +845,9 @@ async function maybeRunHlEventRelay(ctx: OpsContext, txHash: string, expected: H
 
     const ch = await info.clearinghouseState({ user: hlUser });
     const spot = await info.spotClearinghouseState({ user: hlUser }).catch(() => ({ balances: [] }));
-    const usdcStr = findSpotBalance(spot, 'USDC') || String(ch?.withdrawable || '0');
+    const usdcSpotStr = findSpotBalance(spot, 'USDC');
+    const withdrawableStr = String(ch?.withdrawable || '0');
+    const usdcStr = selectUsdcForSync(usdcSpotStr, withdrawableStr);
     const assetStr = findSpotBalance(spot, ctx.assetSymbol);
     const pos = findPosition(ch, ctx.assetSymbol);
 
@@ -812,6 +861,36 @@ async function maybeRunHlEventRelay(ctx: OpsContext, txHash: string, expected: H
     await (await adapter.syncPosition(ctx.assetSymbol, size18, entry18, isActive)).wait();
     console.log('      → HL adapter syncBalances + syncPosition confirmed');
   }
+}
+
+async function maybeInitiateHlOffchainWithdraw(ctx: OpsContext, amountUsdc6: bigint): Promise<void> {
+  if (amountUsdc6 <= 0n) return;
+  const signerPk = process.env.HYPERLIQUID_API_PRIVATE_KEY || config.privateKey;
+  if (!signerPk) throw new Error('Missing HYPERLIQUID_API_PRIVATE_KEY (or PRIVATE_KEY) for HL withdraw3');
+  const hlUser = hlUserAddress(ctx);
+  if (!hlUser || hlUser === ethers.ZeroAddress) throw new Error('Unable to resolve HL user for withdraw3');
+
+  const destination = (ctx.perpAdapterAddress && ctx.perpAdapterAddress !== ethers.ZeroAddress)
+    ? ctx.perpAdapterAddress
+    : (config.kashYieldAddress || await ctx.kashYield.getAddress());
+  const amountStr = trimDec(ethers.formatUnits(amountUsdc6, 6), 6);
+  if (!amountStr || Number(amountStr) <= 0) return;
+
+  const { ExchangeClient, HttpTransport } = await import('@nktkas/hyperliquid');
+  const hlApiUrl = (process.env.HYPERLIQUID_API_URL || 'https://api.hyperliquid.xyz').replace(/\/+$/, '');
+  const wallet = new ethers.Wallet(signerPk);
+  const exchange = new ExchangeClient({
+    transport: new HttpTransport({ apiUrl: hlApiUrl }),
+    wallet,
+    signatureChainId: '0xa4b1',
+  });
+
+  const opts = wallet.address.toLowerCase() === hlUser.toLowerCase()
+    ? undefined
+    : ({ vaultAddress: hlUser } as any);
+
+  console.log(`      ↪ HL API withdraw3: amount=${amountStr} USDC, destination=${destination}`);
+  await exchange.withdraw3({ destination, amount: amountStr }, opts);
 }
 
 // ---------------------------------------------------------------------------
@@ -908,7 +987,8 @@ export async function runRedeemPlaybook(
   await runPlaybook(coreSteps, ctx);
 
   // Step 2: Refresh context to read the actual USDC balance now in the contract.
-  const freshCtx = await snapshotOpsContext(ctx.kashYield, ctx.provider, ctx.batchCycle, lockedNAV);
+  let freshCtx = await snapshotOpsContext(ctx.kashYield, ctx.provider, ctx.batchCycle, lockedNAV);
+  freshCtx = await waitForHlWithdrawSettlementIfNeeded(freshCtx, lockedNAV);
 
   // Step 3: Classify tail from freshCtx (contractUsdc vs aaveDebt) and run tail steps.
   const tail: RedeemTail = classifyRedeemTail(freshCtx);
@@ -917,6 +997,85 @@ export async function runRedeemPlaybook(
 
   const tailSteps = buildRedeemTail(tail, lockedNAV);
   await runPlaybook(tailSteps, freshCtx);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForHlWithdrawSettlementIfNeeded(
+  ctx: OpsContext,
+  lockedNAV: bigint | undefined,
+): Promise<OpsContext> {
+  const enabled = (process.env.HL_WITHDRAW_WAIT_ENABLED || 'true').toLowerCase() !== 'false';
+  if (!enabled) return ctx;
+  if (ctx.aaveDebt === 0n || ctx.contractUsdc >= ctx.aaveDebt) return ctx;
+  const feeTolerance = getHlWithdrawFeeToleranceUsdc6();
+
+  const maxMs = Math.max(0, parseInt(process.env.HL_WITHDRAW_WAIT_MAX_MS || '360000', 10)); // default 6 min
+  const pollMs = Math.max(1000, parseInt(process.env.HL_WITHDRAW_WAIT_POLL_MS || '20000', 10)); // default 20s
+  if (maxMs === 0) return ctx;
+
+  console.log(
+    `   ⏳ Waiting for HL withdrawal settlement (up to ${(maxMs / 1000).toFixed(0)}s, poll ${(pollMs / 1000).toFixed(0)}s)` +
+    ` — debt=${fmtUsdc(ctx.aaveDebt)}, contractUsdc=${fmtUsdc(ctx.contractUsdc)}`
+  );
+
+  const started = Date.now();
+  let attempts = 0;
+  let withdrawInitiated = false;
+  let fresh = ctx;
+  while (Date.now() - started < maxMs) {
+    const debtRemaining = fresh.aaveDebt > fresh.contractUsdc ? fresh.aaveDebt - fresh.contractUsdc : 0n;
+    if (debtRemaining <= feeTolerance) break;
+
+    if (!withdrawInitiated && fresh.hlUsdcBalance > 0n) {
+      try {
+        const requestAmt = fresh.hlUsdcBalance < debtRemaining ? fresh.hlUsdcBalance : debtRemaining;
+        await maybeInitiateHlOffchainWithdraw(fresh, requestAmt);
+        withdrawInitiated = true;
+      } catch (e: any) {
+        console.warn(`      ⚠️  HL off-chain withdraw initiation failed: ${e?.message ?? e}`);
+      }
+    }
+
+    // Retry pull from adapter if HL-reported USDC is available.
+    if (fresh.hlUsdcBalance > 0n) {
+      const toPull = fresh.hlUsdcBalance < debtRemaining ? fresh.hlUsdcBalance : debtRemaining;
+      if (toPull > 0n) {
+        attempts++;
+        console.log(`      ↪ settlement retry #${attempts}: withdraw ${fmtUsdc(toPull)} from HL`);
+        try {
+          await execTx(`withdrawFromHyperliquid(retry#${attempts})`, fresh.kashYield.withdrawFromHyperliquid(toPull));
+        } catch (e: any) {
+          console.warn(`      ⚠️  settlement retry #${attempts} failed: ${e?.message ?? e}`);
+        }
+      }
+    }
+
+    await sleep(pollMs);
+    fresh = await snapshotOpsContext(fresh.kashYield, fresh.provider, fresh.batchCycle, lockedNAV);
+    console.log(`      ↪ settlement status: contractUsdc=${fmtUsdc(fresh.contractUsdc)}, aaveDebt=${fmtUsdc(fresh.aaveDebt)}, hlUsdc=${fmtUsdc(fresh.hlUsdcBalance)}`);
+    const shortfallNow = fresh.aaveDebt > fresh.contractUsdc ? fresh.aaveDebt - fresh.contractUsdc : 0n;
+    if (shortfallNow <= feeTolerance) break;
+  }
+
+  const finalShortfall = fresh.aaveDebt > fresh.contractUsdc ? fresh.aaveDebt - fresh.contractUsdc : 0n;
+  if (finalShortfall > feeTolerance) {
+    const missing = fresh.aaveDebt - fresh.contractUsdc;
+    throw new Error(
+      `HL withdraw settlement incomplete: contract USDC ${fmtUsdc(fresh.contractUsdc)} < Aave debt ${fmtUsdc(fresh.aaveDebt)} ` +
+      `(shortfall ${fmtUsdc(missing)}). Stopping before tail classification; wait for HL USDC to arrive, then re-run ops.`
+    );
+  } else {
+    if (finalShortfall > 0n) {
+      console.log(`   ✅ HL settlement wait complete within fee tolerance: shortfall=${fmtUsdc(finalShortfall)} (tolerance ${fmtUsdc(feeTolerance)})`);
+    } else {
+      console.log('   ✅ HL settlement wait complete: contract USDC now covers Aave debt');
+    }
+  }
+
+  return fresh;
 }
 
 // ---------------------------------------------------------------------------

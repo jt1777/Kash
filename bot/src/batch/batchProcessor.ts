@@ -1,8 +1,7 @@
 import { ethers } from 'ethers';
 import { kashYieldABI } from '../contracts/kashYieldABI';
 import { config } from '../config';
-import { getDailyYield } from './dailyYield';
-import { snapshotOpsContext, computeTotalRedeemAsset, getAaveBorrowedAmountV3 } from './opsContext';
+import { snapshotOpsContext, computeTotalRedeemAsset, getAaveBorrowedAmountV3, getAaveSuppliedAmountV3 } from './opsContext';
 import { classifyScenario, scenarioLabel } from './opsClassifier';
 import { runMintPlaybook, runRedeemPlaybook, runTestAaveLoopPlaybook } from './opsPlaybooks';
 
@@ -86,6 +85,11 @@ export class BatchProcessor {
     const currentCycle = await this.kashYield.getCurrentBatchCycle();
     const currentCycleBn = typeof currentCycle === 'bigint' ? currentCycle : BigInt(currentCycle.toString());
 
+    // Detect stale phase-0 requests from prior cycles.
+    // These cannot be processed by performUpkeep() anymore because upkeep always targets
+    // the current timestamp cycle. Users must cancel and resubmit in the current cycle.
+    await this.warnStalePastCycleRequests(currentCycleBn);
+
     if (config.batchCycleOverride !== null) {
       const cycle = config.batchCycleOverride;
       console.log(`📅 Batch cycle: ${cycle} (override via --batch=${cycle} or BATCH_CYCLE)\n`);
@@ -120,6 +124,41 @@ export class BatchProcessor {
 
     const batchInfo = await this.kashYield.getBatchInfo(currentCycleBn);
     await this.runBatch(currentCycleBn, batchInfo);
+  }
+
+  /**
+   * Warn when older cycles (before current) still have phase=0 and pending users.
+   * Those requests are effectively stranded for automated processing and should be
+   * canceled/resubmitted by users.
+   */
+  private async warnStalePastCycleRequests(currentCycle: bigint): Promise<void> {
+    const lookback = 14; // two weeks of daily cycles by default
+    const stale: Array<{ cycle: bigint; mintUsers: bigint; redeemUsers: bigint }> = [];
+    for (let i = 1; i <= lookback; i++) {
+      const cycle = currentCycle - BigInt(i);
+      if (cycle < 0n) break;
+      try {
+        const phase = Number(await this.kashYield.batchPhase(cycle));
+        const info = await this.kashYield.getBatchInfo(cycle);
+        if (info.processed) continue;
+        const mintUsers = BigInt(info.mintUsersCount.toString());
+        const redeemUsers = BigInt(info.redeemUsersCount.toString());
+        if (phase === 0 && (mintUsers > 0n || redeemUsers > 0n)) {
+          stale.push({ cycle, mintUsers, redeemUsers });
+        }
+      } catch {
+        // Non-critical diagnostics; continue scanning.
+      }
+    }
+
+    if (stale.length === 0) return;
+
+    console.warn('⚠️  Found stale phase-0 requests in past cycle(s):');
+    for (const s of stale) {
+      console.warn(`   - cycle ${s.cycle}: mintUsers=${s.mintUsers}, redeemUsers=${s.redeemUsers}`);
+    }
+    console.warn('   These cannot be processed by performUpkeep() because upkeep only processes the current cycle.');
+    console.warn('   Ask users to cancel old requests and resubmit in the current cycle.\n');
   }
 
   /**
@@ -351,22 +390,25 @@ export class BatchProcessor {
 
   /** Compute new NAV (18 decimals) from portfolio and yield; clamp to MIN_NAV. */
   private async computeNewNAV(): Promise<bigint> {
-    const dailyYield = await getDailyYield(this.provider, {
-      kashYield: this.kashYield,
-      aavePoolAddress: AAVE_POOL_ADDRESS,
-      aaveUserAddress: config.aaveUserAddress || config.kashYieldAddress,
-    });
     const tokenAddr = await (isBtc ? this.kashYield.kashTokenBtc() : this.kashYield.kashTokenEth()).catch(() => null);
     const kashSupply = tokenAddr
       ? await new ethers.Contract(tokenAddr, ['function totalSupply() view returns (uint256)'], this.provider).totalSupply()
       : 0n;
-    const portfolioValueUSD = await this.estimatePortfolioValueUSD();
-    const { computeNAVFromPortfolioAndYield } = await import('./dailyYield');
-    let newNAV = computeNAVFromPortfolioAndYield(portfolioValueUSD, dailyYield.netYield, kashSupply);
-    if (newNAV === 0n) {
-      newNAV = await this.kashYield.currentNAV();
+    if (kashSupply === 0n) {
+      let newNAV = await this.kashYield.currentNAV();
       if (newNAV === 0n) newNAV = MIN_NAV;
       console.log(`   📈 KASH supply is 0, using current NAV for updateNAV`);
+      return newNAV < MIN_NAV ? MIN_NAV : newNAV;
+    }
+
+    // Live mark-to-market NAV input:
+    //   portfolioUSD = assetUSD(contract + Aave + HL) + netUSDCUSD(contract + HL - AaveDebt)
+    // This removes dependence on mock-only daily yield views for mainnet operation.
+    const portfolioValueUSD = await this.estimatePortfolioValueUSD();
+    let newNAV = (portfolioValueUSD * (10n ** 18n)) / BigInt(kashSupply.toString());
+    if (newNAV === 0n) {
+      const current = BigInt((await this.kashYield.currentNAV()).toString());
+      newNAV = current > 0n ? current : MIN_NAV;
     }
     if (newNAV > 0n && newNAV < MIN_NAV) {
       newNAV = MIN_NAV;
@@ -376,16 +418,76 @@ export class BatchProcessor {
   }
 
   /**
-   * Rough portfolio value in USD (18 decimals) for NAV. Override or improve with real Aave/HL data.
+   * Live portfolio value in USD (18 decimals) for NAV.
+   *
+   * assetUSD:
+   *   - Contract ETH/wBTC balance
+   *   - Aave supplied collateral (aToken-backed balance)
+   *   - HL spot asset balance (synced on adapter)
+   *
+   * netUSDCUSD:
+   *   - Contract USDC
+   *   - HL USDC (synced on adapter; now based on max(spot, withdrawable))
+   *   - minus Aave USDC debt (includes accrued interest)
    */
   private async estimatePortfolioValueUSD(): Promise<bigint> {
     try {
-      const nav = await this.kashYield.currentNAV();
-      const tokenAddr = await (isBtc ? this.kashYield.kashTokenBtc() : this.kashYield.kashTokenEth()).catch(() => null);
-      const kashSupply = tokenAddr
-        ? await new ethers.Contract(tokenAddr, ['function totalSupply() view returns (uint256)'], this.provider).totalSupply()
-        : 0n;
-      return (BigInt(nav.toString()) * kashSupply) / (10n ** 18n);
+      const price = isBtc
+        ? BigInt((await this.kashYield.getBtcPrice()).toString())
+        : BigInt((await this.kashYield.getEthPrice()).toString());
+      const assetDecimals = isBtc ? 8n : 18n;
+      const kashAddr = config.kashYieldAddress!;
+      const aaveUser = config.aaveUserAddress || kashAddr;
+
+      // 1) Contract-held asset
+      let contractAsset = 0n;
+      let reservedAsset = 0n;
+      if (isBtc) {
+        const wbtcAddr: string = await this.kashYield.wbtcAddress();
+        const wbtc = new ethers.Contract(wbtcAddr, ['function balanceOf(address) view returns (uint256)'], this.provider);
+        contractAsset = BigInt((await wbtc.balanceOf(kashAddr)).toString());
+        try { reservedAsset = BigInt((await this.kashYield.getReservedBtc()).toString()); } catch { reservedAsset = 0n; }
+      } else {
+        contractAsset = BigInt((await this.provider.getBalance(kashAddr)).toString());
+        try { reservedAsset = BigInt((await this.kashYield.getReservedEth()).toString()); } catch { reservedAsset = 0n; }
+      }
+      // Exclude user pending mint deposits from NAV backing; they are not minted KASH yet.
+      if (reservedAsset > 0n && contractAsset >= reservedAsset) {
+        contractAsset -= reservedAsset;
+      }
+
+      // 2) Aave supplied collateral (real Aave V3)
+      const poolAddr: string = await this.kashYield.aavePoolAddress().catch(() => '');
+      let aaveSupplied = 0n;
+      if (poolAddr && poolAddr !== ethers.ZeroAddress) {
+        const reserveAsset = isBtc
+          ? await this.kashYield.wbtcAddress().catch(() => ethers.ZeroAddress)
+          : await this.kashYield.wethAddress?.().catch(() => ethers.ZeroAddress) ?? ethers.ZeroAddress;
+        aaveSupplied = await getAaveSuppliedAmountV3(this.provider, poolAddr, reserveAsset, aaveUser);
+      }
+
+      // 3) HL synced spot asset balance
+      let hlAsset = 0n;
+      try { hlAsset = BigInt((await this.kashYield.getExchangeAssetBalance()).toString()); } catch { hlAsset = 0n; }
+
+      // 4) USDC legs
+      const contractUsdc = await this.getContractUsdcBalance();
+      const hlUsdc = await this.getHyperliquidSpotBalance();
+      const aaveDebtUsdc = await this.getAaveBorrowedAmount();
+
+      const totalAsset = contractAsset + aaveSupplied + hlAsset;
+      const assetUsd18 = (totalAsset * price) / (10n ** assetDecimals);
+      const netUsdc6 = contractUsdc + hlUsdc - aaveDebtUsdc;
+      const netUsdcUsd18 = netUsdc6 * (10n ** 12n);
+      const portfolioUsd18 = assetUsd18 + netUsdcUsd18;
+
+      console.log(
+        `   📈 Live portfolio: asset=${ethers.formatUnits(totalAsset, Number(assetDecimals))} ${isBtc ? 'BTC' : 'ETH'} ` +
+        `(${ethers.formatEther(assetUsd18)} USD), netUSDC=${ethers.formatUnits(netUsdc6, 6)} ` +
+        `(${ethers.formatEther(netUsdcUsd18)} USD), reservedExcluded=${ethers.formatUnits(reservedAsset, Number(assetDecimals))} ${isBtc ? 'BTC' : 'ETH'}`
+      );
+
+      return portfolioUsd18 > 0n ? portfolioUsd18 : 0n;
     } catch {
       return 0n;
     }
@@ -422,14 +524,16 @@ export class BatchProcessor {
       console.log('🔄 Phase 2: Calling performUpkeep()...');
       const tx2 = await this.kashYield.performUpkeep('0x');
       const receipt2 = await tx2.wait();
-      console.log(`   ✅ Phase 2 done in block ${receipt2.blockNumber}\n`);
+      console.log(`   ✅ Phase 2 done in block ${receipt2.blockNumber}`);
+      console.log(`   Tx hash: ${receipt2.hash}\n`);
       await this.handleEventsFromReceipt(receipt2);
     } else {
       console.log(`🔄 Phase 2: Calling processBatchPhase2ForCycle(${batchCycle}) (orphan batch)...`);
       try {
         const tx2 = await this.kashYield.processBatchPhase2ForCycle(batchCycle);
         const receipt2 = await tx2.wait();
-        console.log(`   ✅ Phase 2 for batch ${batchCycle} done in block ${receipt2.blockNumber}\n`);
+        console.log(`   ✅ Phase 2 for batch ${batchCycle} done in block ${receipt2.blockNumber}`);
+        console.log(`   Tx hash: ${receipt2.hash}\n`);
         await this.handleEventsFromReceipt(receipt2);
       } catch (err: any) {
         const info = await this.kashYield.getBatchInfo(batchCycle).catch(() => null);
@@ -496,7 +600,10 @@ export class BatchProcessor {
     }
 
     if (eventsFound === 0) {
-      console.log('⚠️  No ProtocolInteraction events found in receipt\n');
+      console.log(
+        '⚠️  No ProtocolInteraction events in receipt (expected for many Phase 2 txs — ' +
+          'confirm payout on Arbiscan via TokensClaimed / BatchProcessed logs).\n'
+      );
     } else {
       console.log(`✅ Processed ${eventsFound} ProtocolInteraction event(s)\n`);
     }

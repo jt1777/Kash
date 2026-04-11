@@ -346,7 +346,8 @@ async function syncAdapterState({ adapter, info, hlAccountAddress, symbol, dryRu
   const spot = await info.spotClearinghouseState({ user: hlAccountAddress }).catch(() => ({ balances: [] }));
 
   const usdcFromSpot = findSpotBalance(spot, "USDC");
-  const usdcStr = usdcFromSpot || String(ch.withdrawable || "0");
+  const withdrawableStr = String(ch.withdrawable || "0");
+  const usdcStr = selectUsdcForSync(usdcFromSpot, withdrawableStr);
   const assetStr = findSpotBalance(spot, symbol);
   const pos = findPosition(ch, symbol);
 
@@ -435,6 +436,12 @@ function decimalToBigInt(value, decimals) {
 function absDecimal(value) {
   const s = String(value || "0");
   return s.startsWith("-") ? s.slice(1) : s;
+}
+
+function selectUsdcForSync(spotUsdcStr, withdrawableStr) {
+  const spot6 = decimalToBigInt(spotUsdcStr || "0", 6);
+  const wd6 = decimalToBigInt(withdrawableStr || "0", 6);
+  return wd6 > spot6 ? withdrawableStr : spotUsdcStr;
 }
 
 function trimDecimal(value) {
