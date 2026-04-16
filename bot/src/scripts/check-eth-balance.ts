@@ -1,6 +1,7 @@
 import { ethers } from 'ethers';
 import { config } from '../config';
 import { kashYieldABI } from '../contracts/kashYieldABI';
+import { ProtocolAction, protocolActionName } from '../contracts/protocolActionCodes';
 import { getBalancesFromEvents } from '../batch/getContractBalances';
 
 /**
@@ -316,18 +317,19 @@ async function main() {
       for (const event of protocolEvents) {
         if ('args' in event && event.args) {
           const args = event.args as any;
-          const action = args.action || args[0];
+          const actionRaw = args.action ?? args[0];
+          const actionCode = Number(actionRaw);
           const asset = args.asset || args[1];
           const amount = args.amount || args[2];
           
           console.log(`   Event:`);
-          console.log(`     Action: ${action}`);
+          console.log(`     Action: ${protocolActionName(actionCode)} (${actionCode})`);
           console.log(`     Asset: ${asset}`);
           console.log(`     Amount: ${ethers.formatEther(amount)} (raw: ${amount.toString()})`);
           console.log(`     Block: ${event.blockNumber}`);
           console.log(`     TX: ${event.transactionHash}\n`);
           
-          if (action === 'AAVE_DEPOSIT' && (asset === ethers.ZeroAddress || asset === '0x0000000000000000000000000000000000000000')) {
+          if (actionCode === ProtocolAction.AAVE_DEPOSIT && (asset === ethers.ZeroAddress || asset === '0x0000000000000000000000000000000000000000')) {
             const depositAmount = BigInt(amount.toString());
             totalEthDeposited += depositAmount;
             totalEthDepositedFromEvents += depositAmount;
@@ -363,10 +365,10 @@ async function main() {
       for (const event of protocolEvents) {
         if ('args' in event && event.args) {
           const args = event.args as any;
-          const action = args.action || args[0];
+          const actionCode = Number(args.action ?? args[0]);
           const asset = args.asset || args[1];
           
-          if (action === 'AAVE_DEPOSIT' && (asset === ethers.ZeroAddress || asset === '0x0000000000000000000000000000000000000000')) {
+          if (actionCode === ProtocolAction.AAVE_DEPOSIT && (asset === ethers.ZeroAddress || asset === '0x0000000000000000000000000000000000000000')) {
             const txHash = event.transactionHash;
             console.log(`   Checking deposit transaction: ${txHash}`);
             

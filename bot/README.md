@@ -127,6 +127,10 @@ Monitors Aave health factor:
 - Emergency actions at HF < 1.1 (emergency)
 - Panic mode below HF < 1.0 (liquidation imminent)
 
+## Ops scripts: `scripts/ops/_utils.js`
+
+`getState(contract)` loads on-chain balances and returns both **raw** wallet balances (`contractAssetRaw`, `contractUsdcRaw`) and **owner-adjusted** values (`contractAsset`, `contractUsdc`): the adjusted numbers subtract `ownerUsdcReserve` and `ownerEthReserve` (ETH product) or `ownerWbtcReserve` (BTC product), clamped at zero. Use adjusted figures when reasoning about deployable float for Aave / Hyperliquid; use raw + reserve lines when reconciling the actual wallet. `displayState` prints reserves, raw, and adjusted columns. The TypeScript batch pipeline (`snapshotOpsContext`, `getContractUsdcBalance` in `batchProcessor`, and NAV estimation) applies the same reserve subtraction for consistency.
+
 ## Deployment Checklist
 
 Before running the bot in production:

@@ -7,11 +7,8 @@
  * - This script watches those on-chain intents, executes the actual HL trades,
  *   then syncs adapter state on-chain (syncBalances/syncPosition).
  *
- * Supported ProtocolInteraction actions:
- * - EXCHANGE_OPEN_SHORT
- * - EXCHANGE_CLOSE_SHORT
- * - EXCHANGE_SPOT_BUY
- * - EXCHANGE_SPOT_SELL
+ * Supported ProtocolInteraction action codes (see protocolActionCodes.cjs):
+ * - EXCHANGE_OPEN_SHORT (15), EXCHANGE_CLOSE_SHORT (16), EXCHANGE_SPOT_BUY (17), EXCHANGE_SPOT_SELL (18)
  *
  * Usage (one-shot recent range):
  *   PRODUCT=eth KASH_YIELD_ETH_ADDRESS=0x... \
@@ -36,23 +33,28 @@
  *   HL_SPOT_ASSET_ID=10042             # optional hard override for spot order asset id
  *
  * Notes:
+ * - Arbitrum `signer` (hardhat PRIVATE_KEY) must be HyperliquidAdapter **owner** or **operator**
+ *   so on-chain syncBalances/syncPosition succeed (use setOperator(bot) from the multisig once).
  * - If adapter.directDepositMode=false, HL account is usually the adapter address.
  * - If adapter.directDepositMode=true, HL account is adapter.hlAccount().
- * - Your HL signer wallet must be authorised as an HL agent for that HL account.
+ * - Your HL API signer wallet must be authorised as an HL agent for that HL account when not in direct-deposit mode.
  */
 require("dotenv").config({ path: "./bot/.env" });
 const hre = require("hardhat");
 const { ethers } = hre;
+const { assertCanSyncHyperliquidAdapter } = require("./_utils");
+const PA = require("./protocolActionCodes.cjs");
 
-const TARGET_ACTIONS = new Set([
-  "EXCHANGE_OPEN_SHORT",
-  "EXCHANGE_CLOSE_SHORT",
-  "EXCHANGE_SPOT_BUY",
-  "EXCHANGE_SPOT_SELL",
+/** @type {Set<number>} */
+const TARGET_ACTION_CODES = new Set([
+  PA.EXCHANGE_OPEN_SHORT,
+  PA.EXCHANGE_CLOSE_SHORT,
+  PA.EXCHANGE_SPOT_BUY,
+  PA.EXCHANGE_SPOT_SELL,
 ]);
 
 const KASH_ABI = [
-  "event ProtocolInteraction(string action, address token, uint256 amount)",
+  "event ProtocolInteraction(uint8 indexed action, address indexed token, uint256 amount)",
   "function owner() view returns (address)",
   "function activePerpExchange() view returns (string)",
   "function perpExchanges(string) view returns (address)",
@@ -67,6 +69,7 @@ const KASH_ABI = [
 
 const ADAPTER_ABI = [
   "function owner() view returns (address)",
+  "function operator() view returns (address)",
   "function directDepositMode() view returns (bool)",
   "function hlAccount() view returns (address)",
   "function syncBalances(uint256 newUsdcBalance, uint256 newAssetBalance)",
@@ -94,12 +97,7 @@ async function main() {
   }
 
   const [signer] = await ethers.getSigners();
-  const kashContractName = isBtc ? "KashYieldBtc" : "KashYieldETH";
   const kash = new ethers.Contract(kashYieldAddress, KASH_ABI, signer);
-  const owner = await kash.owner();
-  if (signer.address.toLowerCase() !== owner.toLowerCase()) {
-    throw new Error(`Signer ${signer.address} is not KashYield owner (${owner}).`);
-  }
 
   const activeExchange = await kash.activePerpExchange().catch(() => "");
   let adapterAddress = ethers.ZeroAddress;
@@ -114,11 +112,7 @@ async function main() {
     throw new Error("No active perp adapter address found.");
   }
   const adapter = new ethers.Contract(adapterAddress, ADAPTER_ABI, signer);
-
-  const adapterOwner = await adapter.owner();
-  if (signer.address.toLowerCase() !== adapterOwner.toLowerCase()) {
-    throw new Error(`Signer ${signer.address} is not HyperliquidAdapter owner (${adapterOwner}).`);
-  }
+  await assertCanSyncHyperliquidAdapter(adapter, signer.address);
 
   const hlApiUrl = process.env.HYPERLIQUID_API_URL || "https://api.hyperliquid.xyz";
   const hlPk = process.env.HYPERLIQUID_API_PRIVATE_KEY || process.env.PRIVATE_KEY;
@@ -174,7 +168,7 @@ async function main() {
     }
 
     const logs = await kash.queryFilter(kash.filters.ProtocolInteraction(), fromBlock, safeTo);
-    const interesting = logs.filter((ev) => TARGET_ACTIONS.has(ev.args?.action || ""));
+    const interesting = logs.filter((ev) => TARGET_ACTION_CODES.has(Number(ev.args?.action ?? -1)));
     console.log(`\nScanning blocks ${fromBlock}..${safeTo} => ${interesting.length} HL intent event(s).`);
 
     for (const ev of interesting) {
@@ -222,21 +216,21 @@ async function handleEvent(ctx) {
     dryRun,
   } = ctx;
 
-  const action = ev.args.action;
+  const action = Number(ev.args.action);
   const tx = await ethers.provider.getTransaction(ev.transactionHash);
   if (!tx) throw new Error("missing tx for event");
 
   const parsed = ACTION_IFACE.parseTransaction({ data: tx.data, value: tx.value });
   if (!parsed) throw new Error("could not decode tx calldata");
 
-  console.log(`\n▶ ${action} @ tx ${ev.transactionHash}`);
+  console.log(`\n▶ action=${action} @ tx ${ev.transactionHash}`);
   console.log(`   calldata method: ${parsed.signature}`);
 
   const orderOpts = useVaultAddress ? { vaultAddress: hlAccountAddress } : undefined;
   const perpMeta = await info.meta();
   const mids = await info.allMids();
 
-  if (action === "EXCHANGE_OPEN_SHORT") {
+  if (action === PA.EXCHANGE_OPEN_SHORT) {
     const symbol = String(parsed.args[0] ?? defaultSymbol).toUpperCase();
     const sizeWei = BigInt(parsed.args[1].toString());
     const size = trimDecimal(ethers.formatUnits(sizeWei, 18));
@@ -254,7 +248,7 @@ async function handleEvent(ctx) {
     return;
   }
 
-  if (action === "EXCHANGE_CLOSE_SHORT") {
+  if (action === PA.EXCHANGE_CLOSE_SHORT) {
     const symbol = String(parsed.args[0] ?? defaultSymbol).toUpperCase();
     let closeSizeWei = 0n;
     if (parsed.args.length > 1) closeSizeWei = BigInt(parsed.args[1].toString());
@@ -283,7 +277,7 @@ async function handleEvent(ctx) {
     return;
   }
 
-  if (action === "EXCHANGE_SPOT_BUY") {
+  if (action === PA.EXCHANGE_SPOT_BUY) {
     const usdcAmount6 = BigInt(parsed.args[0].toString());
     const symbol = defaultSymbol;
     const spot = await info.spotMeta();
@@ -306,7 +300,7 @@ async function handleEvent(ctx) {
     return;
   }
 
-  if (action === "EXCHANGE_SPOT_SELL") {
+  if (action === PA.EXCHANGE_SPOT_SELL) {
     const amountWei = BigInt(parsed.args[0].toString());
     const symbol = defaultSymbol;
     const spot = await info.spotMeta();

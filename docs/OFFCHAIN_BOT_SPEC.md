@@ -74,7 +74,7 @@ Unrealized PnL = Position Size × (Current Price - Entry Price) × Direction
   1. **Phase 1:** Values mint requests via Chainlink (`getEthPrice()` etc.), computes batch totals and NAV, stores state. Then **stops** until owner marks ops done.
   2. **Owner/bot:** Performs Aave/Hyperliquid ops (deploy or withdraw capital), then calls **`updateNAV(newNAV)`**, then **`markBatchOpsDone()`**.
   3. **Phase 2:** Distributes KASH to minters and ETH (or other tokens) to redeemers, emits `BatchProcessed` and `TokensClaimed`, sets `batchProcessed[batchCycle] = true`.
-- **ProtocolInteraction** events (e.g. `NET_MINT_ETH_DEPLOY`, asset, amount) are emitted when there is net mint or net redeem ETH to deploy/withdraw; the bot should react to these (from the tx receipt or event subscription) and call the contract’s owner functions (e.g. `depositToAave`, `depositToHyperliquid`, `openShort`) as needed.
+- **ProtocolInteraction** events (`uint8 indexed action`, `address indexed asset`, `amount`) encode the action as a numeric code (e.g. `NET_MINT` = 3, `NET_REDEEM` = 4; full table in `ProtocolActionCodes.sol` / `bot/src/contracts/protocolActionCodes.ts`). They are emitted when there is net mint or net redeem flow to deploy/withdraw; the bot should react to these (from the tx receipt or event subscription) and call the contract’s owner functions (e.g. `depositToAave`, `depositToHyperliquid`, `openShort`) as needed.
 
 ### Daily timeline
 

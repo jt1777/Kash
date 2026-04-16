@@ -6,7 +6,7 @@
 //   npx hardhat run scripts/ownerWithdrawFromAave.js --network arbitrumSepolia
 //
 // Env (root .env):
-//   PRIVATE_KEY                    - owner wallet
+//   PRIVATE_KEY                    - bot wallet (or keeperRegistry address) — withdrawFromAave is operator-only
 //   KASH_YIELD_BTC_ADDRESS         - KashYieldBtc contract (the one with wBTC in Aave)
 //
 // Withdraw amount (wBTC, 8 decimals):
@@ -16,6 +16,7 @@
 
 require("dotenv").config();
 const hre = require("hardhat");
+const { assertKashYieldOpsSigner } = require("./opsAccessChecks");
 
 const WBTC_DECIMALS = 8;
 
@@ -34,12 +35,7 @@ async function main() {
     "KashYieldBtc",
     kashYieldBtcAddress
   );
-  const owner = await kashYield.owner();
-  if (signer.address.toLowerCase() !== owner.toLowerCase()) {
-    throw new Error(
-      `Signer ${signer.address} is not the contract owner (${owner}). Use PRIVATE_KEY for the owner.`
-    );
-  }
+  await assertKashYieldOpsSigner(kashYield, signer.address);
 
   const aavePoolAddress = await kashYield.aavePoolAddress();
   const wbtcAddress = await kashYield.wbtcAddress();

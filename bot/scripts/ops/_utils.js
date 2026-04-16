@@ -7,6 +7,10 @@
  */
 require("dotenv").config({ path: "./bot/.env" });
 const { ethers } = require("hardhat");
+const {
+  assertKashYieldOpsSigner,
+  assertCanSyncHyperliquidAdapter,
+} = require("../../../scripts/opsAccessChecks");
 
 // ── Product config ────────────────────────────────────────────────────────────
 const PRODUCT  = (process.env.PRODUCT || "eth").toLowerCase();
@@ -19,6 +23,8 @@ const USDC_DECIMALS = 6;
 const KASH_ABI = [
   // Views
   "function owner() view returns (address)",
+  "function botAddress() view returns (address)",
+  "function keeperRegistry() view returns (address)",
   "function wethAddress() view returns (address)",
   "function wbtcAddress() view returns (address)",
   "function usdcAddress() view returns (address)",
@@ -38,6 +44,14 @@ const KASH_ABI = [
   "function getHyperliquidSpotBalance() view returns (uint256)",
   "function getExchangeAssetBalance() view returns (uint256)",
   "function getHyperliquidPosition(string) view returns (uint256 size, uint256 collateral, uint256 entryPrice, bool isLong, bool isActive)",
+  // Owner / treasury reserves (excluded from user-facing balances in getState)
+  "function ownerUsdcReserve() view returns (uint256)",
+  "function ownerEthReserve() view returns (uint256)",
+  "function ownerWbtcReserve() view returns (uint256)",
+  "function markOwnerUsdcDeposit(uint256 amount)",
+  "function markOwnerEthDeposit() payable",
+  "function markOwnerWbtcDeposit(uint256 amount)",
+  "function coverUsdcShortfall(uint256 amount)",
   // Aave
   "function depositToAave(uint256 amount)",
   "function withdrawFromAave(uint256 amount)",
@@ -58,6 +72,8 @@ const KASH_ABI = [
   // Spot DEX (Uniswap / MockSpotDex)
   "function swapForUsdc(uint256 amount)",     // ETH/wBTC → USDC
   "function swapFromUsdc(uint256 usdcAmount)", // USDC → ETH/wBTC
+  // Owner rescue
+  "function rescueERC20(address token, uint256 amount, address recipient)",
 ];
 
 // Aave pool ABI — covers MockAaveV3 and real Aave V3
@@ -107,19 +123,37 @@ async function getState(contract) {
     ? BigInt((await contract.getBtcPrice()).toString())
     : BigInt((await contract.getEthPrice()).toString());
 
-  // Contract asset balance
-  let contractAsset = 0n;
+  // On-chain balances (raw)
+  let contractAssetRaw = 0n;
   if (IS_BTC) {
     const wbtcAddr = await contract.wbtcAddress();
     const wbtc = new ethers.Contract(wbtcAddr, ERC20_ABI, provider);
-    contractAsset = BigInt((await wbtc.balanceOf(addr)).toString());
+    contractAssetRaw = BigInt((await wbtc.balanceOf(addr)).toString());
   } else {
-    contractAsset = BigInt((await provider.getBalance(addr)).toString());
+    contractAssetRaw = BigInt((await provider.getBalance(addr)).toString());
   }
 
-  // Contract USDC balance
   const usdc = new ethers.Contract(usdcAddr, ERC20_ABI, provider);
-  const contractUsdc = BigInt((await usdc.balanceOf(addr)).toString());
+  const contractUsdcRaw = BigInt((await usdc.balanceOf(addr)).toString());
+
+  let ownerUsdcReserve = 0n;
+  let ownerAssetReserve = 0n;
+  try {
+    ownerUsdcReserve = BigInt((await contract.ownerUsdcReserve()).toString());
+  } catch {
+    /* older deployment */
+  }
+  try {
+    ownerAssetReserve = IS_BTC
+      ? BigInt((await contract.ownerWbtcReserve()).toString())
+      : BigInt((await contract.ownerEthReserve()).toString());
+  } catch {
+    ownerAssetReserve = 0n;
+  }
+
+  const sub0 = (a, b) => (a >= b ? a - b : 0n);
+  const contractAsset = sub0(contractAssetRaw, ownerAssetReserve);
+  const contractUsdc = sub0(contractUsdcRaw, ownerUsdcReserve);
 
   // Aave state — real Aave V3 compatible
   let aaveSupplied = 0n, aaveDebt = 0n;
@@ -191,7 +225,10 @@ async function getState(contract) {
   const batchPhase = Number(await contract.batchPhase(batchCycle));
 
   return {
-    addr, price, contractAsset, contractUsdc,
+    addr, price,
+    contractAssetRaw, contractUsdcRaw,
+    ownerUsdcReserve, ownerAssetReserve,
+    contractAsset, contractUsdc,
     aaveSupplied, aaveDebt,
     perpUsdc, perpAsset,
     shortSize, entryPrice, posActive,
@@ -207,8 +244,12 @@ function displayState(s, label = "State") {
 
   console.log(`\n${label}`);
   console.log(line);
-  console.log(`  Contract ${ASSET_SYMBOL} balance : ${fmt(s.contractAsset)} ${ASSET_SYMBOL}`);
-  console.log(`  Contract USDC balance : ${fmtU(s.contractUsdc)} USDC`);
+  console.log(`  Owner USDC reserve   : ${fmtU(s.ownerUsdcReserve)} USDC (excluded below)`);
+  console.log(`  Owner ${ASSET_SYMBOL} reserve  : ${fmt(s.ownerAssetReserve)} ${ASSET_SYMBOL} (excluded below)`);
+  console.log(`  Contract ${ASSET_SYMBOL} (raw)  : ${fmt(s.contractAssetRaw)} ${ASSET_SYMBOL}`);
+  console.log(`  Contract USDC (raw)  : ${fmtU(s.contractUsdcRaw)} USDC`);
+  console.log(`  Contract ${ASSET_SYMBOL} (adj.) : ${fmt(s.contractAsset)} ${ASSET_SYMBOL}  ← raw minus owner reserve`);
+  console.log(`  Contract USDC (adj.) : ${fmtU(s.contractUsdc)} USDC  ← raw minus owner USDC reserve`);
   console.log(`  ${IS_BTC ? "BTC" : "ETH"} price           : $${fmtP(s.price)}`);
   console.log(`  Aave supplied        : ${fmt(s.aaveSupplied)} ${ASSET_SYMBOL}`);
   console.log(`  Aave borrowed        : ${fmtU(s.aaveDebt)} USDC`);
@@ -287,4 +328,6 @@ module.exports = {
   getContract, getSigner, getState, displayState,
   getRedeemFraction,
   parseAsset, parseUsdc, fmtAsset, fmtUsdc, fmtUsd18, exec,
+  assertKashYieldOpsSigner,
+  assertCanSyncHyperliquidAdapter,
 };

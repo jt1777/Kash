@@ -3,6 +3,8 @@
 //
 // The adapter implements ISpotDex and wraps Uniswap V3 SwapRouter02 for
 // ETH ↔ USDC and wBTC ↔ USDC swaps used by KashYield's swapForUsdc / swapFromUsdc.
+// Older adapter builds used the SwapRouter01 struct (with `deadline`) against Router02
+// and reverted on swap — redeploy if your live adapter predates that ABI fix.
 //
 // Network defaults (can be overridden via env vars):
 //   Arbitrum One:    SwapRouter02 0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45
@@ -100,7 +102,7 @@ async function main() {
     // 1. Whitelist the new adapter
     await (await kashYieldEth.setAllowedSpotDexRouter(adapterAddress, true)).wait();
     console.log("✅ setAllowedSpotDexRouter on KashYieldETH →", adapterAddress);
-    // 2. Propose the new spot DEX (starts 48-hour timelock if one is already set)
+    // 2. Propose the new spot DEX (starts 24-hour timelock if one is already set)
     const currentSpotDex = await kashYieldEth.spotDexAddress();
     await (await kashYieldEth.setSpotDex(adapterAddress)).wait();
     if (currentSpotDex === hre.ethers.ZeroAddress) {
@@ -108,7 +110,7 @@ async function main() {
     } else {
       const readyAt = await kashYieldEth.spotDexPending(adapterAddress);
       const readyDate = new Date(Number(readyAt) * 1000).toISOString();
-      console.log("⏳ setSpotDex on KashYieldETH → 48h timelock started. Ready at:", readyDate);
+      console.log("⏳ setSpotDex on KashYieldETH → 24h timelock started. Ready at:", readyDate);
       console.log("   Run after that time:");
       console.log(`     KASH_YIELD_ETH_ADDRESS=${ethContractAddr} SPOT_DEX_ADDRESS=${adapterAddress} npx hardhat run scripts/confirmSpotDex.js --network ${network}`);
     }
@@ -129,7 +131,7 @@ async function main() {
     } else {
       const readyAtBtc = await kashYieldBtc.spotDexPending(adapterAddress);
       const readyDateBtc = new Date(Number(readyAtBtc) * 1000).toISOString();
-      console.log("⏳ setSpotDex on KashYieldBtc → 48h timelock started. Ready at:", readyDateBtc);
+      console.log("⏳ setSpotDex on KashYieldBtc → 24h timelock started. Ready at:", readyDateBtc);
       console.log("   Run after that time:");
       console.log(`     KASH_YIELD_BTC_ADDRESS=${btcContractAddr} SPOT_DEX_ADDRESS=${adapterAddress} npx hardhat run scripts/confirmSpotDex.js --network ${network}`);
     }

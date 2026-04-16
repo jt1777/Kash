@@ -21,6 +21,8 @@ Your KASH tokens are worth more over time because the protocol is continuously e
 
 The two products are independent. Depositing ETH gives you KASH-ETH; depositing wBTC gives you KASH-BTC. Both follow the same mechanics.
 
+For operators: the live contracts also support **owner / treasury reserves** (USDC and ETH or WBTC) that sit on the vault but are excluded from user NAV accounting; see [DEPLOYMENT.md](DEPLOYMENT.md) for how to mark deposits and how off-chain tooling reports **adjusted** balances.
+
 ---
 
 ## How your yield is tracked — NAV

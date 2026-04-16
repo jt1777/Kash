@@ -10,7 +10,11 @@ export interface OpsContext {
   kashYield: ethers.Contract;
   provider: ethers.Provider;
 
-  /** Contract wallet balances at snapshot time */
+  /**
+   * Contract wallet balances at snapshot time, **after** subtracting owner cushions:
+   * `ownerUsdcReserve` and `ownerEthReserve` / `ownerWbtcReserve` (treasury / gas buffers
+   * not counted toward user NAV in the contracts). Raw on-chain balances are not stored here.
+   */
   contractAsset: bigint;   // ETH (18 dec) or wBTC (8 dec)
   contractUsdc: bigint;    // USDC 6 dec
 
@@ -173,7 +177,6 @@ export async function getAaveSuppliedAmountV3(
  *   - snapshotOpsContext (to populate ctx.totalRedeemAsset)
  *   - runStepMarkDone preflight gate
  *   - 11b swap sizing (how much USDC to swap for the asset shortfall)
- *   - dex_swap_from_usdc canSkip check
  */
 export async function computeTotalRedeemAsset(
   kashYield: ethers.Contract,
@@ -252,6 +255,21 @@ export async function snapshotOpsContext(
       contractUsdc = BigInt((await usdc.balanceOf(contractAddr)).toString());
     } catch { contractUsdc = 0n; }
   }
+
+  let ownerUsdcReserve = 0n;
+  let ownerAssetReserve = 0n;
+  try {
+    ownerUsdcReserve = BigInt((await kashYield.ownerUsdcReserve()).toString());
+  } catch { /* older deployment */ }
+  try {
+    ownerAssetReserve = isBtc
+      ? BigInt((await kashYield.ownerWbtcReserve()).toString())
+      : BigInt((await kashYield.ownerEthReserve()).toString());
+  } catch { ownerAssetReserve = 0n; }
+
+  const sub0 = (a: bigint, b: bigint) => (a >= b ? a - b : 0n);
+  contractAsset = sub0(contractAsset, ownerAssetReserve);
+  contractUsdc = sub0(contractUsdc, ownerUsdcReserve);
 
   // -- Aave position --
   let aaveSupplied = 0n;

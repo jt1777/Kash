@@ -88,11 +88,12 @@ contract MockPerpExchange is IPerpExchange {
         emit SpotDeposited(msg.sender, amount);
     }
 
-    function withdrawCollateral(address token, uint256 amount) external override {
+    function withdrawCollateral(address token, uint256 amount) external override returns (uint256 amountTransferred) {
         require(spotBalances[msg.sender] >= amount, "MockPerp: insufficient spot balance");
         spotBalances[msg.sender] -= amount;
         IERC20(token).safeTransfer(msg.sender, amount);
-        emit SpotWithdrawn(msg.sender, amount);
+        amountTransferred = amount;
+        emit SpotWithdrawn(msg.sender, amountTransferred);
     }
 
     // ── Spot trading ──────────────────────────────────────────────────────

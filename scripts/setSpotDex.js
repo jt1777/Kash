@@ -4,7 +4,7 @@
  * Behaviour:
  *   - First-ever call:  setSpotDex() is immediate — no timelock. This script detects that
  *                       case and prints confirmation that it is already live.
- *   - Subsequent calls: setSpotDex() starts a spotDexTimelock countdown (default 48 h).
+ *   - Subsequent calls: setSpotDex() starts a spotDexTimelock countdown (default 24 h).
  *                       Run this script again after the timelock to call confirmSpotDex().
  *
  * The adapter address must be on the contract's allowedSpotDexRouters whitelist.

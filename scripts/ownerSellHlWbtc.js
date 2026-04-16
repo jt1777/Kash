@@ -5,11 +5,12 @@
 // Usage (from repo root):
 //   npx hardhat run scripts/ownerSellHlWbtc.js --network arbitrumSepolia
 //
-// Env (root .env): PRIVATE_KEY, KASH_YIELD_BTC_ADDRESS (or KASH_YIELD_ADDRESS)
+// Env (root .env): PRIVATE_KEY (bot or keeper), KASH_YIELD_BTC_ADDRESS (or KASH_YIELD_ADDRESS)
 // Network must match where KashYieldBtc and MockHyperliquid are deployed.
 
 require("dotenv").config();
 const hre = require("hardhat");
+const { assertKashYieldOpsSigner } = require("./opsAccessChecks");
 
 async function main() {
   const kashYieldAddress =
@@ -27,12 +28,7 @@ async function main() {
     "KashYieldBtc",
     kashYieldAddress
   );
-  const owner = await kashYield.owner();
-  if (signer.address.toLowerCase() !== owner.toLowerCase()) {
-    throw new Error(
-      `Signer ${signer.address} is not the contract owner (${owner}).`
-    );
-  }
+  await assertKashYieldOpsSigner(kashYield, signer.address);
 
   const hlAddress = await kashYield.hyperliquidAddress();
   if (!hlAddress || hlAddress === hre.ethers.ZeroAddress) {

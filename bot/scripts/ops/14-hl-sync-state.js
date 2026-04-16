@@ -18,6 +18,7 @@
 require("dotenv").config({ path: "./bot/.env" });
 const hre = require("hardhat");
 const { ethers } = hre;
+const { assertCanSyncHyperliquidAdapter } = require("./_utils");
 
 const KASH_ABI = [
   "function owner() view returns (address)",
@@ -28,6 +29,7 @@ const KASH_ABI = [
 
 const ADAPTER_ABI = [
   "function owner() view returns (address)",
+  "function operator() view returns (address)",
   "function directDepositMode() view returns (bool)",
   "function hlAccount() view returns (address)",
   "function syncBalances(uint256 newUsdcBalance, uint256 newAssetBalance)",
@@ -49,10 +51,6 @@ async function main() {
 
   const [signer] = await ethers.getSigners();
   const kash = new ethers.Contract(kashYieldAddress, KASH_ABI, signer);
-  const owner = await kash.owner();
-  if (signer.address.toLowerCase() !== owner.toLowerCase()) {
-    throw new Error(`Signer ${signer.address} is not KashYield owner (${owner}).`);
-  }
 
   const activeExchange = await kash.activePerpExchange().catch(() => "");
   let adapterAddress = ethers.ZeroAddress;
@@ -61,10 +59,7 @@ async function main() {
   if (adapterAddress === ethers.ZeroAddress) throw new Error("No active perp adapter found.");
 
   const adapter = new ethers.Contract(adapterAddress, ADAPTER_ABI, signer);
-  const adapterOwner = await adapter.owner();
-  if (signer.address.toLowerCase() !== adapterOwner.toLowerCase()) {
-    throw new Error(`Signer ${signer.address} is not HyperliquidAdapter owner (${adapterOwner}).`);
-  }
+  await assertCanSyncHyperliquidAdapter(adapter, signer.address);
 
   const hlApiUrl = process.env.HYPERLIQUID_API_URL || "https://api.hyperliquid.xyz";
   const { InfoClient, HttpTransport } = await import("@nktkas/hyperliquid");

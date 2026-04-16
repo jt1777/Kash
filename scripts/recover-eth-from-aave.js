@@ -9,6 +9,10 @@
  * Optional:
  *   KASH_YIELD_ETH_ADDRESS - defaults to 0x8da4FC6A0EAEC834c88f1543Aeb91e25aFDE4BDF
  *   WITHDRAW_AMOUNT_ETH  - amount to withdraw in ETH (default: reads suppliedAmounts)
+ *
+ * Access: setAavePool is owner-only; withdrawFromAave is bot/keeper-only. On testnet
+ * the same key is often both deployer and bot; if not, run pool pointer changes as owner
+ * then withdraw with the bot private key.
  */
 const hre = require("hardhat");
 

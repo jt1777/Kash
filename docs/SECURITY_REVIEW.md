@@ -191,7 +191,7 @@ function borrowFromAave(address asset, uint256 amount) external onlyOwner {
     (,,,,, uint256 healthFactor) = IPool(aavePoolAddress).getUserAccountData(address(this));
     require(healthFactor >= 1.5e18, "Health factor too low after borrow"); // 1.5 minimum
     
-    emit ProtocolInteraction("AAVE_BORROW", asset, amount);
+    emit ProtocolInteraction(8, asset, amount); // ProtocolActionCodes.AAVE_BORROW
 }
 ```
 

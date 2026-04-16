@@ -13,7 +13,7 @@ pragma solidity ^0.8.28;
  * Adding a new exchange in the future requires only:
  *   1. Deploying a new adapter that implements this interface.
  *   2. Calling setPerpExchange("NAME", adapterAddress) on the main contract.
- *   3. (After the 48-hour timelock) Calling confirmActivePerpExchange().
+ *   3. (After the adapter-registration timelock) Calling confirmPerpExchange().
  *   No changes to the main contracts are needed.
  *
  * The adapter IS the on-exchange account: all positions and balances are tracked against
@@ -28,7 +28,8 @@ interface IPerpExchange {
     function depositCollateral(address token, uint256 amount) external;
 
     /// @notice Withdraw stable collateral (USDC) from the exchange spot wallet to msg.sender.
-    function withdrawCollateral(address token, uint256 amount) external;
+    /// @return amountTransferred USDC actually transferred (may be less than `amount` if the adapter caps to balance).
+    function withdrawCollateral(address token, uint256 amount) external returns (uint256 amountTransferred);
 
     // ── Spot trading ──────────────────────────────────────────────────────
 

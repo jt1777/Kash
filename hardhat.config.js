@@ -14,7 +14,9 @@ module.exports = {
         enabled: true,
         runs: 1
       },
-      viaIR: true
+      viaIR: true,
+      // Omit CBOR IPFS hash from bytecode tail — shaves ~50 bytes (helps EIP-170).
+      metadata: { bytecodeHash: "none" }
     }
   },
   networks: {

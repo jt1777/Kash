@@ -26,6 +26,10 @@ These caused 24+ hours of debugging. Don't skip them.
 
 7. **All four mock contracts must stay in sync.** After any price change, run `npm run set:asset-price` to update the oracle, MockAaveV3, MockHyperliquid, and MockSpotDex simultaneously.
 
+8. **Owner / treasury reserves (`ownerUsdcReserve`, asset-specific owner buffer).** The products credit on-chain balances that are **not** part of user NAV: call `markOwnerUsdcDeposit` after the owner sends USDC to the contract; on **KashYieldETH** use payable `markOwnerEthDeposit()` for ETH buffers (`ownerEthReserve`); on **KashYieldBtc** use `markOwnerWbtcDeposit` for WBTC (`ownerWbtcReserve`). The bot may call `coverUsdcShortfall` to move reserved USDC into the working float (reverts with `InsufficientOwnerUsdcReserve` if the reserve is too small). Batch phase 2 and `ownerWithdraw*` enforce these cushions so they are not paid to users or swept accidentally. Ops scripts and `snapshotOpsContext` treat **adjusted** balances (raw minus reserves) as the deployable float.
+
+9. **Contract size (EIP-170, 24576 bytes).** `hardhat.config.js` enables the Solidity optimizer (`runs: 1`), `viaIR: true`, and `metadata.bytecodeHash: "none"`. `ProtocolInteraction` uses **`uint8` action codes** (see `contracts/libraries/ProtocolActionCodes.sol`) instead of string labels to keep bytecode smaller. A **deployed external library** still cannot take a `KashYield*` `storage` layout in Solidity 0.8.x for large batch helpers, so batch settlement stays in the main contracts. After `npx hardhat compile`, confirm there is no “contract code size exceeds 24576 bytes” warning before mainnet deploy. Local Hardhat uses `allowUnlimitedContractSize: true` and does **not** enforce the mainnet limit.
+
 ---
 
 ## Environment Setup

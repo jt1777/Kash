@@ -12,6 +12,7 @@ A capital-efficient yield strategy protocol. Users deposit ETH or wBTC and recei
 - **48-hour timelock on adapter registration**: The *first* adapter registered on a fresh deployment is immediate (no delay). Every subsequent adapter registration requires `setPerpExchange()` followed by `confirmPerpExchange()` after a 48-hour delay, preventing a compromised key from instantly adding a malicious adapter. Switching between already-confirmed adapters is always immediate via `setActivePerpExchange()`.
 - **Security**: `ReentrancyGuard` on all user-facing functions, two-step ownership transfer (`transferOwnership` / `acceptOwnership`), and custom Solidity errors (smaller bytecode, cheaper reverts).
 - **Aave**: Lending/borrowing for capital deployment (owner/bot).
+- **Owner reserves**: On-chain USDC and native ETH / WBTC buffers the treasury can mark as **not** user NAV (`ownerUsdcReserve`, `ownerEthReserve` on ETH, `ownerWbtcReserve` on BTC), plus `coverUsdcShortfall` for the bot to draw reserved USDC into the working float. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) and `bot/scripts/ops/_utils.js` (`getState` returns raw balances and owner-adjusted `contractAsset` / `contractUsdc`).
 
 ## 📋 Architecture
 
@@ -49,7 +50,7 @@ A capital-efficient yield strategy protocol. Users deposit ETH or wBTC and recei
 
 1. **Processing window** (last 10 minutes of each cycle by default): Call `processBatch()` (or use Chainlink Automation).
 2. **Between Phase 1 and Phase 2**: Run Aave/exchange ops, then `updateNAV(newNAV)`, then `markBatchOpsDone()`.
-3. **After batch**: React to `ProtocolInteraction("NET_MINT_ETH_DEPLOY", ...)` / `("NET_REDEEM", ...)` to deploy/withdraw capital. See [docs/OFFCHAIN_BOT_SPEC.md](docs/OFFCHAIN_BOT_SPEC.md) and [bot/README.md](bot/README.md).
+3. **After batch**: React to `ProtocolInteraction` events (`action` is a `uint8` code; `NET_MINT` = 3, `NET_REDEEM` = 4 — see `contracts/libraries/ProtocolActionCodes.sol` / `bot/src/contracts/protocolActionCodes.ts`) to deploy/withdraw capital. See [docs/OFFCHAIN_BOT_SPEC.md](docs/OFFCHAIN_BOT_SPEC.md) and [bot/README.md](bot/README.md).
 
 ## 🕐 Batch Cycle and Time Windows
 

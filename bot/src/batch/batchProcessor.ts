@@ -1,5 +1,6 @@
 import { ethers } from 'ethers';
 import { kashYieldABI } from '../contracts/kashYieldABI';
+import { ProtocolAction, protocolActionName } from '../contracts/protocolActionCodes';
 import { config } from '../config';
 import { snapshotOpsContext, computeTotalRedeemAsset, getAaveBorrowedAmountV3, getAaveSuppliedAmountV3 } from './opsContext';
 import { classifyScenario, scenarioLabel } from './opsClassifier';
@@ -318,13 +319,25 @@ export class BatchProcessor {
     }
   }
 
-  /** Step 3: Call updateNAV(newNAV, usdcBalance, assetBalance, perpPnL). Batch must be phase 1.
-   * In the full batch flow, receives the NAV that was computed before Phase 1 and ops ran,
-   * so Phase 2 settles mints/redeems at the same pre-ops price used for the indicative sizing.
+  /**
+   * Step 3: Call updateNAV(newNAV, usdcBalance, assetBalance, perpPnL). Batch must be phase 1.
+   *
+   * **NAV vs Phase 2 (KashYieldETH `_processBatchPhase2`):**
+   * - The bot passes `newNAV` from the pre-ops snapshot (`computeNewNAV` / locked pipeline).
+   * - `updateNAV` writes that value into on-chain **`currentNAV`** (plus event args for HL balances).
+   * - **Phase 2** reads **`exactNAV = currentNAV()` once** at execution (`_processBatchPhase2`) and uses it for every
+   *   redeemer: `usd = kash * exactNAV / 1e18`, fee, then `eth = usdAfterFee * 1e18 / getEthPrice()`.
+   * - So “locked” in product terms is “whatever `currentNAV` was when `updateNAV` ran for this batch,”
+   *   stored in `batchExactNAV[cycle]` inside the same Phase 2 tx — not a second NAV oracle read.
+   * - **Chainlink `getEthPrice()`** is read again at Phase 2; if ETH/USD moves between `markBatchOpsDone`
+   *   and Phase 2, wei owed can differ slightly from `computeTotalRedeemAsset`’s price snapshot → keep
+   *   extra ETH (e.g. falling-tail 11b converts spendable USDC) as buffer.
+   *
    * When running in single-step mode (--step=nav) no pre-computed value is available, so it
    * falls back to computing on-demand at that point.
    * usdcBalance/assetBalance are snapshotted from on-chain adapter views for transparency.
-   * perpPnL is passed as 0 because Hyperliquid perp PnL is off-chain and not accessible here. */
+   * perpPnL is passed as 0 because Hyperliquid perp PnL is off-chain and not accessible here.
+   */
   private async runStepNav(batchCycle: bigint, precomputedNAV?: bigint): Promise<void> {
     const newNAV = precomputedNAV ?? await this.computeNewNAV();
 
@@ -395,10 +408,9 @@ export class BatchProcessor {
       ? await new ethers.Contract(tokenAddr, ['function totalSupply() view returns (uint256)'], this.provider).totalSupply()
       : 0n;
     if (kashSupply === 0n) {
-      let newNAV = await this.kashYield.currentNAV();
-      if (newNAV === 0n) newNAV = MIN_NAV;
-      console.log(`   📈 KASH supply is 0, using current NAV for updateNAV`);
-      return newNAV < MIN_NAV ? MIN_NAV : newNAV;
+      // No outstanding KASH — use $1.00 per KASH (1e18) instead of stale on-chain currentNAV().
+      console.log(`   📈 KASH supply is 0, using NAV = $1.00 per KASH (1e18) for updateNAV`);
+      return MIN_NAV;
     }
 
     // Live mark-to-market NAV input:
@@ -454,6 +466,11 @@ export class BatchProcessor {
       // Exclude user pending mint deposits from NAV backing; they are not minted KASH yet.
       if (reservedAsset > 0n && contractAsset >= reservedAsset) {
         contractAsset -= reservedAsset;
+      }
+
+      const ownerAssetReserve = await this.getOwnerAssetReserve();
+      if (ownerAssetReserve > 0n && contractAsset >= ownerAssetReserve) {
+        contractAsset -= ownerAssetReserve;
       }
 
       // 2) Aave supplied collateral (real Aave V3)
@@ -580,15 +597,17 @@ export class BatchProcessor {
 
         if (parsedLog && parsedLog.name === 'ProtocolInteraction') {
           eventsFound++;
-          const action = parsedLog.args[0] as string;
+          const actionCode = Number(parsedLog.args[0]);
           const asset = parsedLog.args[1] as string;
           const amount = parsedLog.args[2] as bigint;
 
-          console.log(`📡 ProtocolInteraction: ${action}, asset=${asset}, amount=${ethers.formatEther(amount)}\n`);
+          console.log(
+            `📡 ProtocolInteraction: ${protocolActionName(actionCode)} (${actionCode}), asset=${asset}, amount=${ethers.formatEther(amount)}\n`,
+          );
 
-          if (action === 'NET_MINT') {
+          if (actionCode === ProtocolAction.NET_MINT) {
             await this.handleNetMint(amount, asset);
-          } else if (action === 'NET_REDEEM') {
+          } else if (actionCode === ProtocolAction.NET_REDEEM) {
             const cycle = BigInt((await this.kashYield.getCurrentBatchCycle()).toString());
             await this.handleNetRedeem(amount, asset, cycle);
           }
@@ -615,15 +634,16 @@ export class BatchProcessor {
   private setupEventListener(): void {
     console.log('👂 Setting up ProtocolInteraction event listener (fallback mode)...\n');
 
-    this.kashYield.on('ProtocolInteraction', async (action: string, asset: string, amount: bigint, event: any) => {
+    this.kashYield.on('ProtocolInteraction', async (action: bigint | number, asset: string, amount: bigint, event: any) => {
+      const actionCode = Number(action);
       console.log(`📡 ProtocolInteraction Event (from listener):`);
-      console.log(`   Action: ${action}`);
+      console.log(`   Action: ${protocolActionName(actionCode)} (${actionCode})`);
       console.log(`   Asset: ${asset}`);
       console.log(`   Amount: ${ethers.formatEther(amount)}\n`);
 
-      if (action === 'NET_MINT') {
+      if (actionCode === ProtocolAction.NET_MINT) {
         await this.handleNetMint(amount, asset);
-      } else if (action === 'NET_REDEEM') {
+      } else if (actionCode === ProtocolAction.NET_REDEEM) {
         const cycle = BigInt((await this.kashYield.getCurrentBatchCycle()).toString());
         await this.handleNetRedeem(amount, asset, cycle);
       }
@@ -1137,11 +1157,31 @@ export class BatchProcessor {
     return getAaveBorrowedAmountV3(this.provider, poolAddr, usdcAddr, userAddr).catch(() => 0n);
   }
 
+  private async getOwnerUsdcReserve(): Promise<bigint> {
+    try {
+      return BigInt((await this.kashYield.ownerUsdcReserve()).toString());
+    } catch {
+      return 0n;
+    }
+  }
+
+  private async getOwnerAssetReserve(): Promise<bigint> {
+    try {
+      return isBtc
+        ? BigInt((await this.kashYield.ownerWbtcReserve()).toString())
+        : BigInt((await this.kashYield.ownerEthReserve()).toString());
+    } catch {
+      return 0n;
+    }
+  }
+
   private async getContractUsdcBalance(): Promise<bigint> {
     try {
       const usdcAddr = await this.kashYield.usdcAddress();
       const usdc = new ethers.Contract(usdcAddr, [{ inputs: [{ name: 'account', type: 'address' }], name: 'balanceOf', outputs: [{ name: '', type: 'uint256' }], stateMutability: 'view', type: 'function' }], this.provider);
-      return await usdc.balanceOf(config.kashYieldAddress!);
+      const raw = BigInt((await usdc.balanceOf(config.kashYieldAddress!)).toString());
+      const res = await this.getOwnerUsdcReserve();
+      return raw >= res ? raw - res : 0n;
     } catch {
       return 0n;
     }

@@ -1,7 +1,7 @@
 /**
- * confirmSpotDex — Confirm a previously proposed spot DEX adapter after the 48-hour timelock.
+ * confirmSpotDex — Confirm a previously proposed spot DEX adapter after the 24-hour timelock.
  *
- * Run this script 48 hours after setSpotDex was called (via deploy-uniswap-adapter.js or
+ * Run this script 24 hours after setSpotDex was called (via deploy-uniswap-adapter.js or
  * setSpotDex.js). Once confirmed, the new adapter becomes the active spot DEX immediately.
  *
  * Usage:

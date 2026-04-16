@@ -5,18 +5,21 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "../interfaces/ISpotDex.sol";
 
-/// @dev Uniswap V3 SwapRouter interface (same on all EVM chains).
+/// @dev Uniswap **SwapRouter02** `exactInputSingle` (IV3SwapRouter) — **no `deadline` field**.
+/// SwapRouter01 (`0xE592…`) used a larger struct with `deadline`; encoding that against Router02
+/// mis-aligns ABI slots and swaps revert with empty data. Production Arbitrum uses Router02
+/// (`0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45`).
 interface IUniswapV3SwapRouter {
     struct ExactInputSingleParams {
         address tokenIn;
         address tokenOut;
-        uint24  fee;
+        uint24 fee;
         address recipient;
-        uint256 deadline;
         uint256 amountIn;
         uint256 amountOutMinimum;
         uint160 sqrtPriceLimitX96;
     }
+
     function exactInputSingle(ExactInputSingleParams calldata params) external payable returns (uint256 amountOut);
 }
 
@@ -37,7 +40,7 @@ interface IWETH9 is IERC20 {
  * The fee tier per pool is configurable (default 0.05% = 500), which matches the main
  * WETH/USDC and wBTC/USDC pools on Arbitrum. Override per pair if needed.
  *
- * Deployment addresses (SwapRouter02 — recommended, backward-compatible with ISwapRouter):
+ * Pass **SwapRouter02** only (do not use SwapRouter01 — different `exactInputSingle` struct).
  *   Arbitrum One (mainnet): 0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45
  *   Arbitrum Sepolia:       0x101F443B4d1b059569D643917553c771E1b9663E
  *
@@ -125,13 +128,12 @@ contract UniswapV3Adapter is ISpotDex {
         if (fee == 0) fee = defaultFeeTier;
 
         IUniswapV3SwapRouter.ExactInputSingleParams memory params = IUniswapV3SwapRouter.ExactInputSingleParams({
-            tokenIn:           effectiveTokenIn,
-            tokenOut:          effectiveTokenOut,
-            fee:               fee,
-            recipient:         nativeEthOut ? address(this) : recipient,
-            deadline:          block.timestamp + 60,
-            amountIn:          amountIn,
-            amountOutMinimum:  minAmountOut,
+            tokenIn: effectiveTokenIn,
+            tokenOut: effectiveTokenOut,
+            fee: fee,
+            recipient: nativeEthOut ? address(this) : recipient,
+            amountIn: amountIn,
+            amountOutMinimum: minAmountOut,
             sqrtPriceLimitX96: 0
         });
 

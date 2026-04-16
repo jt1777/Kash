@@ -22,6 +22,7 @@
 // Optional:
 //   IS_ETH_ASSET=true    — set for the ETH product adapter (assetAddress = 0x0, isEthAsset = true)
 //   HL_ADAPTER_LABEL     — label printed in output (e.g. "BTC" or "ETH", default: auto-detected)
+//   HL_ADAPTER_OPERATOR_ADDRESS — bot EOA; after deploy, owner calls setOperator (syncBalances/syncPosition)
 
 require("dotenv").config();
 const hre = require("hardhat");
@@ -84,6 +85,16 @@ async function main() {
 
   console.log(`✅ HyperliquidAdapter (${label}):`, adapterAddress);
 
+  const operatorAddr =
+    process.env.HL_ADAPTER_OPERATOR_ADDRESS ||
+    process.env.HL_ADAPTER_OPERATOR ||
+    process.env.HL_SYNC_OPERATOR_ADDRESS;
+  if (operatorAddr && hre.ethers.isAddress(operatorAddr)) {
+    const txOp = await adapter.setOperator(operatorAddr);
+    await txOp.wait();
+    console.log("✅ Adapter operator set (HL sync):", operatorAddr);
+  }
+
   console.log("\n====================================");
   console.log(`📋 HYPERLIQUID ADAPTER (${label})`);
   console.log("====================================");
@@ -97,11 +108,11 @@ async function main() {
   console.log("\nNext steps:");
   console.log("  1. Add to .env:");
   console.log(`       ${envVarName}=${adapterAddress}`);
-  console.log("  2. Register the adapter on KashYield (first-time: immediate; subsequent: starts 48h timelock):");
+  console.log("  2. Register the adapter on KashYield (first-time: immediate; subsequent: starts 24h timelock):");
   console.log(`       ${kashYieldEnvVar}=<contract> HYPERLIQUID_ADDRESS=${adapterAddress} npx hardhat run scripts/setHyperliquid.js --network ${network}`);
   console.log("  3. Activate HL as the live exchange (always immediate):");
   console.log(`       ${kashYieldEnvVar}=<contract> EXCHANGE_NAME=HL npx hardhat run scripts/setActivePerpExchange.js --network ${network}`);
-  console.log("  (For 2nd+ adapter registrations, run confirmPerpExchange.js after 48h before step 3)\n");
+  console.log("  (For 2nd+ adapter registrations, run confirmPerpExchange.js after the timelock before step 3)\n");
 
   // Save to deployments/
   const deploymentsDir = path.join(__dirname, "..", "deployments");

@@ -46,7 +46,7 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     // Deploy UniswapV3Adapter
     const UniswapV3Adapter = await ethers.getContractFactory("UniswapV3Adapter");
     uniAdapter = await UniswapV3Adapter.deploy(
-      "0xE592427A0AEce92De3Edee1F18E0157C05861564", // SwapRouter01
+      "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45", // SwapRouter02
       WETH_ADDRESS
     );
     await uniAdapter.waitForDeployment();
@@ -98,12 +98,12 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     const ethUsdVal  = ethAmount * ethPrice / (10n ** 18n);
     const borrowUsdc = ethUsdVal * 60n / 100n / (10n ** 12n);
 
-    await kashYieldEth.connect(owner).depositToAave(ethAmount);
-    await kashYieldEth.connect(owner).borrowFromAave(USDC_ADDRESS, borrowUsdc);
-    await kashYieldEth.connect(owner).depositToHyperliquid(borrowUsdc);
+    await kashYieldEth.connect(bot).depositToAave(ethAmount);
+    await kashYieldEth.connect(bot).borrowFromAave(USDC_ADDRESS, borrowUsdc);
+    await kashYieldEth.connect(bot).depositToHyperliquid(borrowUsdc);
 
     await kashYieldEth.connect(bot).updateNAV(10n ** 18n, borrowUsdc, 0n, 0n);
-    await kashYieldEth.connect(owner).markBatchOpsDone(batchCycle);
+    await kashYieldEth.connect(bot).markBatchOpsDone(batchCycle);
     await kashYieldEth.connect(bot).performUpkeep("0x"); // Phase 2
     return batchCycle;
   }
@@ -121,12 +121,12 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     const ethUsdVal  = TOTAL_ETH * ethPrice / (10n ** 18n);
     const borrowUsdc = ethUsdVal * 60n / 100n / (10n ** 12n);
 
-    await kashYieldEth.connect(owner).depositToAave(TOTAL_ETH);
-    await kashYieldEth.connect(owner).borrowFromAave(USDC_ADDRESS, borrowUsdc);
-    await kashYieldEth.connect(owner).depositToHyperliquid(borrowUsdc);
+    await kashYieldEth.connect(bot).depositToAave(TOTAL_ETH);
+    await kashYieldEth.connect(bot).borrowFromAave(USDC_ADDRESS, borrowUsdc);
+    await kashYieldEth.connect(bot).depositToHyperliquid(borrowUsdc);
 
     await kashYieldEth.connect(bot).updateNAV(10n ** 18n, borrowUsdc, 0n, 0n);
-    await kashYieldEth.connect(owner).markBatchOpsDone(batchCycle);
+    await kashYieldEth.connect(bot).markBatchOpsDone(batchCycle);
     await kashYieldEth.connect(bot).performUpkeep("0x"); // Phase 2
 
     const bal1 = await kashTokenEth.balanceOf(user1.address);
@@ -172,17 +172,17 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     await usdc.connect(bridgeSigner).transfer(await hlAdapter.getAddress(), hlReturn);
     await hre.network.provider.send("hardhat_stopImpersonatingAccount", [HL_BRIDGE]);
 
-    await kashYieldEth.connect(owner).withdrawFromHyperliquid(hlReturn);
+    await kashYieldEth.connect(bot).withdrawFromHyperliquid(hlReturn);
 
     // Repay Aave — pool takes only the actual debt; profit USDC stays in contract.
     const usdcBal = await usdc.balanceOf(await kashYieldEth.getAddress());
-    await kashYieldEth.connect(owner).repayToAave(USDC_ADDRESS, usdcBal);
+    await kashYieldEth.connect(bot).repayToAave(USDC_ADDRESS, usdcBal);
 
     // In production, the USDC profit from HL would be swapped to ETH via swapFromUsdc.
     // UniswapV3Adapter doesn't handle native ETH as tokenOut (only WETH), so we skip
     // that call here and instead directly fund the contract with the equivalent ETH.
     // swapForUsdc (ETH→USDC) is tested separately and confirms the swap path works.
-    await kashYieldEth.connect(owner).withdrawFromAave(ethers.parseEther("1"));
+    await kashYieldEth.connect(bot).withdrawFromAave(ethers.parseEther("1"));
 
     // Send 0.15 ETH from owner to simulate the HL profit converted to ETH.
     await owner.sendTransaction({
@@ -192,7 +192,7 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
 
     const ethBefore = await ethers.provider.getBalance(user3.address);
     await kashYieldEth.connect(bot).updateNAV(ethers.parseEther("1.1"), 0n, 0n, 0n);
-    await kashYieldEth.connect(owner).markBatchOpsDone(redeemCycle);
+    await kashYieldEth.connect(bot).markBatchOpsDone(redeemCycle);
     await kashYieldEth.connect(bot).performUpkeep("0x"); // Phase 2
 
     const ethAfter = await ethers.provider.getBalance(user3.address);
@@ -205,10 +205,10 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     // Borrow USDC from Aave (requires collateral already deposited from prior tests).
     // First deposit some ETH collateral.
     await owner.sendTransaction({ to: await kashYieldEth.getAddress(), value: ethers.parseEther("1") });
-    await kashYieldEth.connect(owner).depositToAave(ethers.parseEther("1"));
+    await kashYieldEth.connect(bot).depositToAave(ethers.parseEther("1"));
 
-    await kashYieldEth.connect(owner).borrowFromAave(USDC_ADDRESS, 500n * 10n ** 6n);
-    await kashYieldEth.connect(owner).depositToHyperliquid(500n * 10n ** 6n);
+    await kashYieldEth.connect(bot).borrowFromAave(USDC_ADDRESS, 500n * 10n ** 6n);
+    await kashYieldEth.connect(bot).depositToHyperliquid(500n * 10n ** 6n);
     console.log(`       ✅ Moved 500 USDC from Aave → HL`);
 
     // Move USDC back: simulate HL returning 300 USDC.
@@ -219,8 +219,8 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     await usdc.connect(bridgeSigner).transfer(await hlAdapter.getAddress(), RETURN);
     await hre.network.provider.send("hardhat_stopImpersonatingAccount", [HL_BRIDGE]);
 
-    await kashYieldEth.connect(owner).withdrawFromHyperliquid(RETURN);
-    await kashYieldEth.connect(owner).repayToAave(USDC_ADDRESS, RETURN);
+    await kashYieldEth.connect(bot).withdrawFromHyperliquid(RETURN);
+    await kashYieldEth.connect(bot).repayToAave(USDC_ADDRESS, RETURN);
     console.log(`       ✅ Moved 300 USDC from HL → Aave repay`);
   });
 
@@ -229,7 +229,7 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     await owner.sendTransaction({ to: await kashYieldEth.getAddress(), value: SWAP_ETH });
 
     const usdcBefore = await usdc.balanceOf(await kashYieldEth.getAddress());
-    await kashYieldEth.connect(owner).swapForUsdc(SWAP_ETH);
+    await kashYieldEth.connect(bot).swapForUsdc(SWAP_ETH);
     const usdcAfter = await usdc.balanceOf(await kashYieldEth.getAddress());
 
     expect(usdcAfter).to.be.gt(usdcBefore);

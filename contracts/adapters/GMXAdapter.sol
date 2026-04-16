@@ -166,9 +166,10 @@ contract GMXAdapter is IPerpExchange {
         emit AdapterCall("depositCollateral", amount);
     }
 
-    function withdrawCollateral(address token, uint256 amount) external override {
+    function withdrawCollateral(address token, uint256 amount) external override returns (uint256 amountTransferred) {
         IERC20(token).safeTransfer(msg.sender, amount);
-        emit AdapterCall("withdrawCollateral", amount);
+        amountTransferred = amount;
+        emit AdapterCall("withdrawCollateral", amountTransferred);
     }
 
     // ── Spot trading (not supported on GMX — use ISpotDex / UniswapV3Adapter) ──

@@ -6,6 +6,7 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 import "./KashTokenEth.sol";
+import "./libraries/ProtocolActionCodes.sol";
 import "./interfaces/IPerpExchange.sol";
 import "./interfaces/ISpotDex.sol";
 
@@ -41,6 +42,7 @@ error UsePerformUpkeep();
 error InsufficientEthForRedeems();
 error InsufficientEthInContract();
 error InsufficientExcessEth();
+error InsufficientOwnerUsdcReserve();
 error ExceedsMintEthForCycle();
 error NoUsersProvided();
 error NotPaused();
@@ -68,7 +70,7 @@ event BatchProcessed(uint256 indexed batchCycle, uint256 totalMintValueUSD, uint
 event TokensClaimed(address indexed user, address indexed token, uint256 amount, bool isMint);
 event NAVUpdateExecuted(uint256 newNAV, uint256 timestamp);
     event NAVProposedAndUpdated(uint256 newNAV, uint256 usdcBalance, uint256 assetBalance, uint256 perpPnL, uint256 timestamp);
-event ProtocolInteraction(string action, address indexed asset, uint256 amount);
+event ProtocolInteraction(uint8 indexed action, address indexed asset, uint256 amount);
 event ExchangeRegistered(string indexed name, address adapter);
 event AdapterProposed(string indexed name, address adapter, uint256 readyAt);
 event ExchangeSwitchConfirmed(string indexed name, address adapter);
@@ -84,7 +86,7 @@ event OracleUpdated(address indexed newOracle);
  *
  * EXCHANGE REGISTRY: perpExchanges maps string names ("HL", "GMX", "ASTER", ...) to adapter
  * addresses. activePerpExchange selects which one is used. Registering a new adapter requires
- * a 48-hour timelock (propose → confirm). Switching the active exchange is immediate once the
+ * a 24-hour timelock (propose → confirm). Switching the active exchange is immediate once the
  * adapter is confirmed. Adding a new exchange never requires redeploying this contract.
  */
 contract KashYieldETH is ReentrancyGuard {
@@ -116,11 +118,11 @@ contract KashYieldETH is ReentrancyGuard {
 
     // Adapter registration timelock: proposed adapters wait before they can be confirmed.
     // The very first adapter bypasses the timelock so the protocol can be used immediately on deploy.
-    // Set to 0 for testnet/development; 48 hours recommended for mainnet.
+    // Set to 0 for testnet/development; 24 hours recommended for mainnet.
     bool    private anyAdapterConfirmed;
     mapping(string => address) private pendingAdapters;
     mapping(string => uint256) public  adapterReadyAt;
-    uint256 public exchangeSwitchDelay = 48 hours;
+    uint256 public exchangeSwitchDelay = 24 hours;
 
     // ── Spot DEX ─────────────────────────────────────────────────────────
     // Whitelisted spot DEX routers (UniswapV3 on Arbitrum mainnet)
@@ -132,7 +134,7 @@ contract KashYieldETH is ReentrancyGuard {
     mapping(address => bool) public allowedSpotTokens;
     mapping(address => bool) public allowedSpotDexRouters; // whitelist of permitted DEX adapter contracts
 
-    uint256 public spotDexTimelock = 48 hours;
+    uint256 public spotDexTimelock = 24 hours;
     mapping(address => uint256) public spotDexPending;
 
     uint256 public maxSwapSlippageBps     = 50;
@@ -143,6 +145,11 @@ contract KashYieldETH is ReentrancyGuard {
     uint256 public constant MAX_FEE_BPS = 100;
 
     bool public paused;
+
+    /// @notice Owner / treasury USDC credited on-chain but excluded from user NAV accounting (see markOwnerUsdcDeposit).
+    uint256 public ownerUsdcReserve;
+    /// @notice Owner ETH buffer (gas, HL fees, profit) excluded from user NAV accounting (see markOwnerEthDeposit).
+    uint256 public ownerEthReserve;
 
     // ── Batch state ───────────────────────────────────────────────────────
     uint256 public currentBatchCycle;
@@ -284,7 +291,7 @@ contract KashYieldETH is ReentrancyGuard {
     // ── Exchange registry ─────────────────────────────────────────────────
 
     /// @notice Register a new adapter. First-ever registration is immediate; all subsequent ones
-    ///         require a 48-hour timelock (propose here → confirmPerpExchange after delay).
+    ///         require a 24-hour timelock (propose here → confirmPerpExchange after delay).
     function setPerpExchange(string calldata name, address adapter) external onlyOwner {
         if (adapter == address(0)) revert InvalidAdapter();
         if (!anyAdapterConfirmed) {
@@ -298,7 +305,7 @@ contract KashYieldETH is ReentrancyGuard {
         emit AdapterProposed(name, adapter, adapterReadyAt[name]);
     }
 
-    /// @notice Confirm a previously proposed adapter after the 48-hour timelock has elapsed.
+    /// @notice Confirm a previously proposed adapter after the 24-hour timelock has elapsed.
     function confirmPerpExchange(string calldata name) external onlyOwner {
         if (adapterReadyAt[name] == 0) revert NoPendingAdapter();
         if (block.timestamp < adapterReadyAt[name]) revert TimelockNotExpired();
@@ -346,7 +353,7 @@ contract KashYieldETH is ReentrancyGuard {
         allowedSpotDexRouters[router] = allowed;
     }
 
-    /// @notice Set adapter registration timelock. Use 0 for testnet, 48 hours for mainnet.
+    /// @notice Set adapter registration timelock. Use 0 for testnet, 24 hours for mainnet.
     function setExchangeSwitchDelay(uint256 _seconds) external onlyOwner { exchangeSwitchDelay = _seconds; }
 
     function setMaxSwapSlippageBps(uint256 _bps) external onlyOwner {
@@ -355,7 +362,7 @@ contract KashYieldETH is ReentrancyGuard {
     }
 
     /// @notice Legacy convenience: equivalent to setPerpExchange("HL", adapter).
-    ///         First-ever call is immediate; subsequent calls start a 48h timelock.
+    ///         First-ever call is immediate; subsequent calls start a 24h timelock.
     function setHyperliquid(address adapter) external onlyOwner {
         if (adapter == address(0)) revert InvalidAdapter();
         if (!anyAdapterConfirmed) {
@@ -433,7 +440,7 @@ contract KashYieldETH is ReentrancyGuard {
         batchTotalMintEth[batchCycle] -= amount;
         delete userMintRequests[msg.sender][batchCycle];
         payable(msg.sender).transfer(amount);
-        emit ProtocolInteraction("CANCEL_MINT", ETH_ADDRESS, amount);
+        emit ProtocolInteraction(ProtocolActionCodes.CANCEL_MINT, ETH_ADDRESS, amount);
     }
 
     function cancelRedeemRequest(uint256 batchCycle) external whenNotPaused {
@@ -445,7 +452,7 @@ contract KashYieldETH is ReentrancyGuard {
         batchTotalRedeemKash[batchCycle] -= kashAmount;
         delete userRedeemRequests[msg.sender][batchCycle];
         kashTokenEth.transfer(msg.sender, kashAmount);
-        emit ProtocolInteraction("CANCEL_REDEEM", address(kashTokenEth), kashAmount);
+        emit ProtocolInteraction(ProtocolActionCodes.CANCEL_REDEEM, address(kashTokenEth), kashAmount);
     }
 
     // ── Chainlink Upkeep ──────────────────────────────────────────────────
@@ -499,14 +506,14 @@ contract KashYieldETH is ReentrancyGuard {
         batchIndicativeNAV[batchCycle] = indicativeNAV;
 
         int256 netPositionUSD = int256(totalMintUSD) - int256(totalRedeemUSD);
-        if (netPositionUSD > 0) emit ProtocolInteraction("NET_MINT",   ETH_ADDRESS, uint256(netPositionUSD));
-        else if (netPositionUSD < 0) emit ProtocolInteraction("NET_REDEEM", ETH_ADDRESS, uint256(-netPositionUSD));
+        if (netPositionUSD > 0) emit ProtocolInteraction(ProtocolActionCodes.NET_MINT, ETH_ADDRESS, uint256(netPositionUSD));
+        else if (netPositionUSD < 0) emit ProtocolInteraction(ProtocolActionCodes.NET_REDEEM, ETH_ADDRESS, uint256(-netPositionUSD));
 
         batchPhase[batchCycle] = 1;
         emit BatchPhaseUpdated(batchCycle, 1, indicativeNAV);
     }
 
-    function markBatchOpsDone(uint256 batchCycle) external onlyOwner {
+    function markBatchOpsDone(uint256 batchCycle) external onlyBotOrKeeper {
         if (batchPhase[batchCycle] != 1) revert WrongPhase();
         batchPhase[batchCycle] = 2;
         emit BatchPhaseUpdated(batchCycle, 2, currentNAV);
@@ -530,7 +537,6 @@ contract KashYieldETH is ReentrancyGuard {
         uint256 exactNAV = currentNAV;
         uint256 ethPrice = getEthPrice();
 
-        // ── Pre-compute all payout amounts ────────────────────────────────────
         address[] memory minters  = batchMintUsers[batchCycle];
         address[] memory redeemers = batchRedeemUsers[batchCycle];
 
@@ -554,21 +560,18 @@ contract KashYieldETH is ReentrancyGuard {
                 totalRedeemEthNeeded += redeemEthAmounts[i];
             }
         }
-        if (address(this).balance < totalRedeemEthNeeded) revert InsufficientEthForRedeems();
+        if (address(this).balance < ownerEthReserve + totalRedeemEthNeeded) revert InsufficientEthForRedeems();
 
-        // ── CEI: mark batch done BEFORE any external calls ───────────────────
         batchExactNAV[batchCycle] = exactNAV;
         batchProcessed[batchCycle] = true;
         batchPhase[batchCycle] = 3;
         emit BatchProcessed(batchCycle, batchTotalMintValueUSD[batchCycle], batchTotalRedeemValueUSD[batchCycle], exactNAV);
 
-        // ── Mint / burn net KASH ──────────────────────────────────────────────
         uint256 totalRedeemKash = batchTotalRedeemKash[batchCycle];
         int256 netKash = int256(totalMintKash) - int256(totalRedeemKash);
         if (netKash > 0) kashTokenEth.mint(address(this), uint256(netKash));
         else if (netKash < 0) kashTokenEth.burn(address(this), uint256(-netKash));
 
-        // ── Distribute KASH to minters ────────────────────────────────────────
         uint256 totalDistributableKash = totalMintKash;
         for (uint256 i = 0; i < minters.length; i++) {
             address user = minters[i];
@@ -581,7 +584,6 @@ contract KashYieldETH is ReentrancyGuard {
             }
         }
 
-        // ── Pay redeemers — use .call to avoid one bad address blocking everyone ──
         for (uint256 i = 0; i < redeemers.length; i++) {
             if (redeemEthAmounts[i] == 0) continue;
             address user = redeemers[i];
@@ -591,133 +593,139 @@ contract KashYieldETH is ReentrancyGuard {
             if (success) {
                 emit TokensClaimed(user, ETH_ADDRESS, ethAmount, false);
             } else {
-                // Transfer failed — keep ETH in contract; owner can rescue via rescueERC20 or ownerWithdrawEth
-                emit ProtocolInteraction("REDEEM_TRANSFER_FAILED", user, ethAmount);
+                emit ProtocolInteraction(ProtocolActionCodes.REDEEM_TRANSFER_FAILED, user, ethAmount);
             }
         }
     }
 
     // ── Aave (unchanged) ──────────────────────────────────────────────────
 
-    function depositToAave(uint256 amount) external onlyOwner nonReentrant {
+    function depositToAave(uint256 amount) external onlyBotOrKeeper nonReentrant {
         IWETH(wethAddress).deposit{value: amount}();
         IERC20(wethAddress).forceApprove(aavePoolAddress, amount);
         IPool(aavePoolAddress).supply(wethAddress, amount, address(this), 0);
-        emit ProtocolInteraction("AAVE_DEPOSIT", wethAddress, amount);
+        emit ProtocolInteraction(ProtocolActionCodes.AAVE_DEPOSIT, wethAddress, amount);
     }
 
-    function withdrawFromAave(uint256 amount) external onlyOwner nonReentrant {
+    function withdrawFromAave(uint256 amount) external onlyBotOrKeeper nonReentrant {
         IPool(aavePoolAddress).withdraw(wethAddress, amount, address(this));
         IWETH(wethAddress).withdraw(amount);
-        emit ProtocolInteraction("AAVE_WITHDRAW", ETH_ADDRESS, amount);
+        emit ProtocolInteraction(ProtocolActionCodes.AAVE_WITHDRAW, ETH_ADDRESS, amount);
     }
 
-    function borrowFromAave(address asset, uint256 amount) external onlyOwner nonReentrant {
+    function borrowFromAave(address asset, uint256 amount) external onlyBotOrKeeper nonReentrant {
         IPool(aavePoolAddress).borrow(asset, amount, 2, 0, address(this));
-        emit ProtocolInteraction("AAVE_BORROW", asset, amount);
+        emit ProtocolInteraction(ProtocolActionCodes.AAVE_BORROW, asset, amount);
     }
 
-    function repayToAave(address asset, uint256 amount) external onlyOwner nonReentrant {
+    function repayToAave(address asset, uint256 amount) external onlyBotOrKeeper nonReentrant {
         IERC20(asset).forceApprove(aavePoolAddress, amount);
         IPool(aavePoolAddress).repay(asset, amount, 2, address(this));
-        emit ProtocolInteraction("AAVE_REPAY", asset, amount);
+        emit ProtocolInteraction(ProtocolActionCodes.AAVE_REPAY, asset, amount);
     }
 
-    function addCollateralToAave(uint256 amount) external onlyOwner nonReentrant {
+    function addCollateralToAave(uint256 amount) external onlyBotOrKeeper nonReentrant {
         IWETH(wethAddress).deposit{value: amount}();
         IERC20(wethAddress).forceApprove(aavePoolAddress, amount);
         IPool(aavePoolAddress).supply(wethAddress, amount, address(this), 0);
-        emit ProtocolInteraction("AAVE_ADD_COLLATERAL", wethAddress, amount);
+        emit ProtocolInteraction(ProtocolActionCodes.AAVE_ADD_COLLATERAL, wethAddress, amount);
     }
 
     // ── Exchange operations (route through active IPerpExchange adapter) ──
 
-    function depositToHyperliquid(uint256 amount) external onlyOwner nonReentrant {
+    function depositToHyperliquid(uint256 amount) external onlyBotOrKeeper nonReentrant {
         address adapter = _activePerpAdapter();
         IERC20(usdcAddress).forceApprove(adapter, amount);
         IPerpExchange(adapter).depositCollateral(usdcAddress, amount);
-        emit ProtocolInteraction("EXCHANGE_DEPOSIT", usdcAddress, amount);
+        emit ProtocolInteraction(ProtocolActionCodes.EXCHANGE_DEPOSIT, usdcAddress, amount);
     }
 
-    function withdrawFromHyperliquid(uint256 amount) external onlyOwner nonReentrant {
+    function withdrawFromHyperliquid(uint256 amount) external onlyBotOrKeeper nonReentrant {
         address adapter = _activePerpAdapter();
-        IPerpExchange(adapter).withdrawCollateral(usdcAddress, amount);
-        emit ProtocolInteraction("EXCHANGE_WITHDRAW", usdcAddress, amount);
+        uint256 transferred = IPerpExchange(adapter).withdrawCollateral(usdcAddress, amount);
+        emit ProtocolInteraction(ProtocolActionCodes.EXCHANGE_WITHDRAW, usdcAddress, transferred);
     }
 
-    function withdrawEthFromHyperliquid(uint256 amount) external onlyOwner nonReentrant {
+    function withdrawEthFromHyperliquid(uint256 amount) external onlyBotOrKeeper nonReentrant {
         address adapter = _activePerpAdapter();
         IPerpExchange(adapter).withdrawAsset(amount);
-        emit ProtocolInteraction("EXCHANGE_WITHDRAW_ASSET", ETH_ADDRESS, amount);
+        emit ProtocolInteraction(ProtocolActionCodes.EXCHANGE_WITHDRAW_ASSET, ETH_ADDRESS, amount);
     }
 
-    function addCollateralToHyperliquid(uint256 amount) external onlyOwner nonReentrant {
+    function addCollateralToHyperliquid(uint256 amount) external onlyBotOrKeeper nonReentrant {
         address adapter = _activePerpAdapter();
         IERC20(usdcAddress).forceApprove(adapter, amount);
         IPerpExchange(adapter).depositCollateral(usdcAddress, amount);
-        emit ProtocolInteraction("EXCHANGE_ADD_COLLATERAL", usdcAddress, amount);
+        emit ProtocolInteraction(ProtocolActionCodes.EXCHANGE_ADD_COLLATERAL, usdcAddress, amount);
     }
 
-    function openShort(string calldata symbol, uint256 size) external onlyOwner nonReentrant {
+    function openShort(string calldata symbol, uint256 size) external onlyBotOrKeeper nonReentrant {
         address adapter = _activePerpAdapter();
         IPerpExchange(adapter).openPerpPosition(symbol, size, false);
-        emit ProtocolInteraction("EXCHANGE_OPEN_SHORT", ETH_ADDRESS, size);
+        emit ProtocolInteraction(ProtocolActionCodes.EXCHANGE_OPEN_SHORT, ETH_ADDRESS, size);
     }
 
-    function closeShort(string calldata symbol) external onlyOwner nonReentrant {
+    function closeShort(string calldata symbol) external onlyBotOrKeeper nonReentrant {
+        _closeShort(symbol, true, 0);
+    }
+
+    function closeShort(string calldata symbol, uint256 closeSize) external onlyBotOrKeeper nonReentrant {
+        _closeShort(symbol, false, closeSize);
+    }
+
+    function _closeShort(string calldata symbol, bool fullClose, uint256 closeSize) private {
         address adapter = _activePerpAdapter();
-        IPerpExchange(adapter).closePerpPosition(symbol);
-        emit ProtocolInteraction("EXCHANGE_CLOSE_SHORT", ETH_ADDRESS, 0);
+        if (fullClose) {
+            IPerpExchange(adapter).closePerpPosition(symbol);
+            emit ProtocolInteraction(ProtocolActionCodes.EXCHANGE_CLOSE_SHORT, ETH_ADDRESS, 0);
+        } else {
+            IPerpExchange(adapter).closePerpPosition(symbol, closeSize);
+            emit ProtocolInteraction(ProtocolActionCodes.EXCHANGE_CLOSE_SHORT, ETH_ADDRESS, closeSize);
+        }
     }
 
-    function closeShort(string calldata symbol, uint256 closeSize) external onlyOwner nonReentrant {
-        address adapter = _activePerpAdapter();
-        IPerpExchange(adapter).closePerpPosition(symbol, closeSize);
-        emit ProtocolInteraction("EXCHANGE_CLOSE_SHORT", ETH_ADDRESS, closeSize);
-    }
-
-    function spotBuyOnHyperliquid(uint256 usdcAmount) external onlyOwner nonReentrant {
+    function spotBuyOnHyperliquid(uint256 usdcAmount) external onlyBotOrKeeper nonReentrant {
         address adapter = _activePerpAdapter();
         IERC20(usdcAddress).forceApprove(adapter, usdcAmount);
         uint256 amountOut = IPerpExchange(adapter).tradeSpot(usdcAddress, ETH_ADDRESS, usdcAmount);
-        emit ProtocolInteraction("EXCHANGE_SPOT_BUY", ETH_ADDRESS, amountOut);
+        emit ProtocolInteraction(ProtocolActionCodes.EXCHANGE_SPOT_BUY, ETH_ADDRESS, amountOut);
     }
 
-    function spotSellOnHyperliquid(uint256 amount) external onlyOwner nonReentrant {
+    function spotSellOnHyperliquid(uint256 amount) external onlyBotOrKeeper nonReentrant {
         address adapter = _activePerpAdapter();
         // ETH is already held in the exchange's internal account (ethBalance) from a prior
         // spot buy — no native ETH forwarding required (mirrors how a real HL API call works).
         uint256 amountOut = IPerpExchange(adapter).tradeSpot(ETH_ADDRESS, usdcAddress, amount);
-        emit ProtocolInteraction("EXCHANGE_SPOT_SELL", usdcAddress, amountOut);
+        emit ProtocolInteraction(ProtocolActionCodes.EXCHANGE_SPOT_SELL, usdcAddress, amountOut);
     }
 
-    function cancelHyperliquidOrder(bytes32 orderId) external onlyOwner {
+    function cancelHyperliquidOrder(bytes32 orderId) external onlyBotOrKeeper {
         address adapter = _activePerpAdapter();
         IPerpExchange(adapter).cancelOrder(orderId);
-        emit ProtocolInteraction("EXCHANGE_CANCEL_ORDER", ETH_ADDRESS, 0);
+        emit ProtocolInteraction(ProtocolActionCodes.EXCHANGE_CANCEL_ORDER, ETH_ADDRESS, 0);
     }
 
     // ── Spot DEX swaps (Uniswap V3) ───────────────────────────────────────
 
     /// @notice Swap ETH → USDC via the registered spot DEX. Used to cover residual Aave debt.
-    function swapForUsdc(uint256 ethAmount) external onlyOwner nonReentrant {
+    function swapForUsdc(uint256 ethAmount) external onlyBotOrKeeper nonReentrant {
         if (spotDexAddress == address(0)) revert SpotDexNotSet();
         uint256 minOut = _minUsdcOut(ethAmount);
         uint256 usdcOut = ISpotDex(spotDexAddress).swapExactIn{value: ethAmount}(
             ETH_ADDRESS, usdcAddress, ethAmount, minOut, address(this)
         );
-        emit ProtocolInteraction("DEX_SWAP_FOR_USDC", usdcAddress, usdcOut);
+        emit ProtocolInteraction(ProtocolActionCodes.DEX_SWAP_FOR_USDC, usdcAddress, usdcOut);
     }
 
     /// @notice Swap USDC → ETH via the registered spot DEX.
-    function swapFromUsdc(uint256 usdcAmount) external onlyOwner nonReentrant {
+    function swapFromUsdc(uint256 usdcAmount) external onlyBotOrKeeper nonReentrant {
         if (spotDexAddress == address(0)) revert SpotDexNotSet();
         uint256 minOut = _minEthOut(usdcAmount);
         IERC20(usdcAddress).forceApprove(spotDexAddress, usdcAmount);
         uint256 ethOut = ISpotDex(spotDexAddress).swapExactIn(
             usdcAddress, ETH_ADDRESS, usdcAmount, minOut, address(this)
         );
-        emit ProtocolInteraction("DEX_SWAP_FROM_USDC", ETH_ADDRESS, ethOut);
+        emit ProtocolInteraction(ProtocolActionCodes.DEX_SWAP_FROM_USDC, ETH_ADDRESS, ethOut);
     }
 
     // ── Views ─────────────────────────────────────────────────────────────
@@ -827,24 +835,44 @@ contract KashYieldETH is ReentrancyGuard {
         return reserved;
     }
 
-    function markMintEthDeployed(uint256 batchCycle, uint256 amount) external onlyOwner {
+    function markMintEthDeployed(uint256 batchCycle, uint256 amount) external onlyBotOrKeeper {
         if (batchMintEthDeployedToAave[batchCycle] + amount > batchTotalMintEth[batchCycle]) revert ExceedsMintEthForCycle();
         batchMintEthDeployedToAave[batchCycle] += amount;
-        emit ProtocolInteraction("MINT_ETH_DEPLOYED", ETH_ADDRESS, amount);
+        emit ProtocolInteraction(ProtocolActionCodes.MINT_ETH_DEPLOYED, ETH_ADDRESS, amount);
     }
 
     function ownerWithdrawEth(uint256 amount) external onlyOwner {
         uint256 reserved = getReservedEth();
-        if (amount + reserved > address(this).balance) revert InsufficientExcessEth();
+        if (amount + reserved + ownerEthReserve > address(this).balance) revert InsufficientExcessEth();
         payable(owner).transfer(amount);
-        emit ProtocolInteraction("OWNER_WITHDRAW_ETH", ETH_ADDRESS, amount);
+        emit ProtocolInteraction(ProtocolActionCodes.OWNER_WITHDRAW_ETH, ETH_ADDRESS, amount);
     }
 
     function rescueERC20(address token, uint256 amount, address recipient) external onlyOwner {
         if (token == ETH_ADDRESS) revert InvalidAddress();
         if (recipient == address(0)) revert InvalidAddress();
         IERC20(token).safeTransfer(recipient, amount);
-        emit ProtocolInteraction("RESCUE_ERC20", token, amount);
+        emit ProtocolInteraction(ProtocolActionCodes.RESCUE_ERC20, token, amount);
+    }
+
+    /// @notice Credit owner USDC reserve after USDC has been transferred to this contract (accounting only).
+    function markOwnerUsdcDeposit(uint256 amount) external onlyOwner {
+        ownerUsdcReserve += amount;
+        emit ProtocolInteraction(ProtocolActionCodes.OWNER_USDC_DEPOSIT, usdcAddress, amount);
+    }
+
+    /// @notice Credit owner ETH reserve (msg.value) — excluded from user NAV / ops balance views.
+    function markOwnerEthDeposit() external payable onlyOwner {
+        ownerEthReserve += msg.value;
+        emit ProtocolInteraction(ProtocolActionCodes.OWNER_ETH_DEPOSIT, ETH_ADDRESS, msg.value);
+    }
+
+    /// @notice Bot draws down owner USDC reserve to label a shortfall cover (accounting only).
+    function coverUsdcShortfall(uint256 amount) external onlyBotOrKeeper {
+        if (amount == 0) revert ZeroAmount();
+        if (amount > ownerUsdcReserve) revert InsufficientOwnerUsdcReserve();
+        ownerUsdcReserve -= amount;
+        emit ProtocolInteraction(ProtocolActionCodes.OWNER_USDC_COVER_SHORTFALL, usdcAddress, amount);
     }
 
     function emergencyWithdrawMint(uint256 batchCycle) external {

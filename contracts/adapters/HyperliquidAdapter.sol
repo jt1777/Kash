@@ -69,8 +69,10 @@ import "../interfaces/IPerpExchange.sol";
  * Capital-movement functions (depositCollateral, withdrawCollateral, tradeSpot,
  * openPerpPosition, closePerpPosition, cancelOrder) are restricted to:
  *   - kashYieldAddress (the KashYield contract that owns this adapter)
- *   - owner (deployer / ops wallet for manual operations and scripts)
- * State-sync functions (syncBalances, syncPosition) are owner-only.
+ *   - owner (deployer / governance multisig for manual operations)
+ * State-sync functions (syncBalances, syncPosition) may be called by `owner` or,
+ * when configured via setOperator(), by `operator` (bot worker). If operator is
+ * address(0), only the owner may sync (backwards compatible).
  */
 contract HyperliquidAdapter is IPerpExchange {
     using SafeERC20 for IERC20;
@@ -88,6 +90,9 @@ contract HyperliquidAdapter is IPerpExchange {
 
     address public owner;
     address public pendingOwner;
+
+    /// @notice Bot / worker authorised to call syncBalances and syncPosition when non-zero.
+    address public operator;
 
     /// @notice When true, depositCollateral forwards USDC to hlAccount (bot EOA as HL account).
     /// When false, USDC is sent directly to the bridge (adapter address as HL account).
@@ -114,14 +119,26 @@ contract HyperliquidAdapter is IPerpExchange {
     mapping(string => Position) public positions;
 
     event AdapterCall(string action, uint256 amount);
+    /// @notice USDC forwarded to `to` after capping to adapter balance (requested vs actual).
+    event HyperliquidUsdcWithdrawn(address indexed to, uint256 amountRequested, uint256 amountTransferred);
     event DirectDepositModeUpdated(bool enabled, address hlAccount);
     event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event OperatorUpdated(address indexed previousOperator, address indexed newOperator);
     event BalancesSynced(uint256 usdcBalance, uint256 assetBalance);
     event PositionSynced(string symbol, uint256 size, uint256 entryPrice, bool isActive);
 
     modifier onlyOwner() {
         require(msg.sender == owner, "Only owner");
+        _;
+    }
+
+    modifier onlyOwnerOrOperator() {
+        address snd = msg.sender;
+        require(
+            snd == owner || (operator != address(0) && snd == operator),
+            "Only owner or operator"
+        );
         _;
     }
 
@@ -173,6 +190,13 @@ contract HyperliquidAdapter is IPerpExchange {
         emit DirectDepositModeUpdated(enabled, _hlAccount);
     }
 
+    /// @notice Authorise a bot EOA to refresh on-chain HL mirrors (sync only).
+    /// @param newOperator Pass address(0) to revoke operator and return to owner-only sync.
+    function setOperator(address newOperator) external onlyOwner {
+        emit OperatorUpdated(operator, newOperator);
+        operator = newOperator;
+    }
+
     // ── Capital movement ──────────────────────────────────────────────────────
 
     /**
@@ -215,15 +239,18 @@ contract HyperliquidAdapter is IPerpExchange {
      * If the withdrawal was sent directly to KashYield (rather than this adapter),
      * call this function with amount = 0 to just update the tracked balance.
      */
-    function withdrawCollateral(address token, uint256 amount) external override onlyAuthorized {
+    function withdrawCollateral(address token, uint256 amount) external override onlyAuthorized returns (uint256 amountTransferred) {
         require(token == usdcAddress, "HL only withdraws USDC");
+        uint256 requested = amount;
         uint256 bal = IERC20(token).balanceOf(address(this));
         if (amount > bal) amount = bal; // cap to what has actually settled
+        amountTransferred = amount;
         if (amount > 0) {
             IERC20(token).safeTransfer(msg.sender, amount);
         }
         if (usdcBalance >= amount) usdcBalance -= amount;
-        emit AdapterCall("withdrawCollateral", amount);
+        emit HyperliquidUsdcWithdrawn(msg.sender, requested, amountTransferred);
+        emit AdapterCall("withdrawCollateral", amountTransferred);
     }
 
     // ── Spot trading (no-op stubs) ────────────────────────────────────────────
@@ -284,7 +311,7 @@ contract HyperliquidAdapter is IPerpExchange {
      * @param newUsdcBalance  Current USDC balance in HL spot wallet (6 decimals).
      * @param newAssetBalance Current ETH/wBTC balance in HL spot wallet (18-dec).
      */
-    function syncBalances(uint256 newUsdcBalance, uint256 newAssetBalance) external onlyOwner {
+    function syncBalances(uint256 newUsdcBalance, uint256 newAssetBalance) external onlyOwnerOrOperator {
         usdcBalance  = newUsdcBalance;
         assetBalance = newAssetBalance;
         emit BalancesSynced(newUsdcBalance, newAssetBalance);
@@ -302,7 +329,7 @@ contract HyperliquidAdapter is IPerpExchange {
         uint256 size,
         uint256 entryPrice,
         bool isActive
-    ) external onlyOwner {
+    ) external onlyOwnerOrOperator {
         positions[symbol] = Position({
             size:       size,
             collateral: 0,

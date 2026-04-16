@@ -10,7 +10,7 @@
 //   - KashYieldETH: full redeem cycle (repay Aave, unwrap WETH, return native ETH)
 //   - KashYieldBtc: full mint cycle using real Aave V3 (wBTC collateral, USDC borrow)
 //   - KashYieldBtc: full redeem cycle (repay Aave, return wBTC)
-//   - Uniswap V3: USDC ↔ ETH swaps via real SwapRouter01 (adapter interface)
+//   - Uniswap V3: USDC ↔ ETH swaps via SwapRouter02 (matches UniswapV3Adapter)
 //   - HyperliquidAdapter deposit: USDC reaches real HL bridge on-chain
 //   - HyperliquidAdapter withdrawal: simulated by impersonating bridge
 //     (HL trading is off-chain via REST API — not testable on a fork)
@@ -40,12 +40,8 @@ const USDT_ADDRESS   = "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9";
 // Aave V3 Pool on Arbitrum One is hardcoded inside the KashYield contracts —
 // no need to pass it at deploy time.
 //
-// UniswapV3Adapter uses the SwapRouter01 interface (ExactInputSingleParams WITH
-// the `deadline` field).  SwapRouter02 (0x68b3465...) removed `deadline`, so the
-// ABI doesn't match — the call hits the wrong selector and reverts silently.
-// SwapRouter01 (0xE592427...) has the same interface as the adapter, so use that.
-const UNISWAP_ROUTER_V1 = "0xE592427A0AEce92De3Edee1F18E0157C05861564"; // SwapRouter01 — matches adapter ABI
-const UNISWAP_ROUTER_V2 = "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45"; // SwapRouter02 — used for direct test swaps only
+// UniswapV3Adapter targets SwapRouter02 `exactInputSingle` (no `deadline` in params).
+const UNISWAP_ROUTER_V2 = "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45"; // SwapRouter02 — adapter + direct test swaps
 const HL_BRIDGE      = "0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7";
 // Chainlink oracles — already defaulted in the contracts, listed here for clarity.
 const ETH_ORACLE     = "0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612"; // ETH/USD Arbitrum One
@@ -100,7 +96,7 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
 
       // ── Deploy UniswapV3Adapter ──────────────────────────────────────────
       const UniswapV3Adapter = await ethers.getContractFactory("UniswapV3Adapter");
-      uniAdapter = await UniswapV3Adapter.deploy(UNISWAP_ROUTER_V1, WETH_ADDRESS);
+      uniAdapter = await UniswapV3Adapter.deploy(UNISWAP_ROUTER_V2, WETH_ADDRESS);
       await uniAdapter.waitForDeployment();
       console.log("    ✅ UniswapV3Adapter:", await uniAdapter.getAddress());
 
@@ -174,14 +170,14 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
       expect(await kashYieldEth.batchPhase(batchCycle)).to.equal(1);
 
       // ── Aave: deposit WETH, borrow USDC ───────────────────────────────────
-      await kashYieldEth.connect(owner).depositToAave(MINT_ETH);
+      await kashYieldEth.connect(bot).depositToAave(MINT_ETH);
 
       const ethPrice = await kashYieldEth.getEthPrice();
       const ethUsdValue = MINT_ETH * ethPrice / (10n ** 18n); // 18-dec USD
       const borrowUsdc = ethUsdValue * 60n / 100n / (10n ** 12n); // 6-dec USDC — 60% LTV leaves buffer for accrued interest
       console.log(`       Aave: borrowing ${ethers.formatUnits(borrowUsdc, 6)} USDC`);
 
-      await kashYieldEth.connect(owner).borrowFromAave(USDC_ADDRESS, borrowUsdc);
+      await kashYieldEth.connect(bot).borrowFromAave(USDC_ADDRESS, borrowUsdc);
       const contractUsdc = await usdc.balanceOf(await kashYieldEth.getAddress());
       expect(contractUsdc).to.equal(borrowUsdc);
       console.log(`       ✅ Aave USDC borrowed: ${ethers.formatUnits(contractUsdc, 6)}`);
@@ -189,7 +185,7 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
       // ── HL: deposit USDC to bridge ────────────────────────────────────────
       // On mainnet this sends USDC to the real HL bridge at 0x2Df1c...
       // HL will credit the adapter's Arbitrum address on the HL L1.
-      await kashYieldEth.connect(owner).depositToHyperliquid(borrowUsdc);
+      await kashYieldEth.connect(bot).depositToHyperliquid(borrowUsdc);
       const bridgeUsdc = await usdc.balanceOf(HL_BRIDGE);
       console.log(`       ✅ HL bridge USDC balance: ${ethers.formatUnits(bridgeUsdc, 6)} (includes prior deposits)`);
       // Adapter's internal usdcBalance tracker should reflect the deposit.
@@ -198,10 +194,10 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
 
       // ── HL: spot buy and open short (no-ops on mainnet — off-chain via HL API) ──
       // These emit events for audit but execute no on-chain HL logic.
-      await kashYieldEth.connect(owner).spotBuyOnHyperliquid(borrowUsdc);
+      await kashYieldEth.connect(bot).spotBuyOnHyperliquid(borrowUsdc);
       const shortSizeUSD  = ethUsdValue * 170n / 100n;
       const shortSizeAsset = shortSizeUSD * 10n ** 18n / ethPrice;
-      await kashYieldEth.connect(owner).openShort("ETH", shortSizeAsset);
+      await kashYieldEth.connect(bot).openShort("ETH", shortSizeAsset);
 
       // Simulate HL confirming the position (bot calls syncPosition after HL API confirms).
       await hlAdapter.syncPosition("ETH", shortSizeAsset, ethPrice, true);
@@ -212,7 +208,7 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
 
       // ── NAV + mark done + Phase 2 ─────────────────────────────────────────
       await kashYieldEth.connect(bot).updateNAV(NAV_1, borrowUsdc, 0n, 0n);
-      await kashYieldEth.connect(owner).markBatchOpsDone(batchCycle);
+      await kashYieldEth.connect(bot).markBatchOpsDone(batchCycle);
       await kashYieldEth.connect(bot).performUpkeep("0x");
       expect(await kashYieldEth.batchProcessed(batchCycle)).to.be.true;
 
@@ -242,7 +238,7 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
       await kashYieldEth.connect(bot).performUpkeep("0x");
 
       // ── Close short (no-op — off-chain HL API) ────────────────────────────
-      await kashYieldEth.connect(owner)["closeShort(string)"]("ETH");
+      await kashYieldEth.connect(bot)["closeShort(string)"]("ETH");
 
       // ── Simulate HL closing: sync position as inactive ────────────────────
       await hlAdapter.syncPosition("ETH", 0n, 0n, false);
@@ -264,7 +260,7 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
       await hre.network.provider.send("hardhat_stopImpersonatingAccount", [HL_BRIDGE]);
 
       // ── Withdraw USDC from adapter to KashYield ───────────────────────────
-      await kashYieldEth.connect(owner).withdrawFromHyperliquid(hlReturnAmount);
+      await kashYieldEth.connect(bot).withdrawFromHyperliquid(hlReturnAmount);
       const contractUsdc = await usdc.balanceOf(await kashYieldEth.getAddress());
       expect(contractUsdc).to.be.gte(adapterDeposit);
       console.log(`       ✅ USDC withdrawn from HL: ${ethers.formatUnits(contractUsdc, 6)}`);
@@ -280,19 +276,19 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
       console.log(`       Aave debt: $${(Number(debtBase) / 1e8).toFixed(2)}`);
 
       const usdcBal = await usdc.balanceOf(await kashYieldEth.getAddress());
-      await kashYieldEth.connect(owner).repayToAave(USDC_ADDRESS, usdcBal);
+      await kashYieldEth.connect(bot).repayToAave(USDC_ADDRESS, usdcBal);
       console.log(`       ✅ Aave USDC repaid`);
 
       // ── Withdraw WETH from Aave → native ETH ──────────────────────────────
       const MINT_ETH = ethers.parseEther("1");
       const ethBefore = await ethers.provider.getBalance(user1.address);
-      await kashYieldEth.connect(owner).withdrawFromAave(MINT_ETH);
+      await kashYieldEth.connect(bot).withdrawFromAave(MINT_ETH);
       const contractEth = await ethers.provider.getBalance(await kashYieldEth.getAddress());
       expect(contractEth).to.be.gte(MINT_ETH - ethers.parseEther("0.01")); // allow tiny interest delta
 
       // ── NAV + mark done + Phase 2 ─────────────────────────────────────────
       await kashYieldEth.connect(bot).updateNAV(NAV_1, 0n, 0n, 0n);
-      await kashYieldEth.connect(owner).markBatchOpsDone(redeemCycle);
+      await kashYieldEth.connect(bot).markBatchOpsDone(redeemCycle);
       await kashYieldEth.connect(bot).performUpkeep("0x");
       expect(await kashYieldEth.batchProcessed(redeemCycle)).to.be.true;
 
@@ -313,7 +309,7 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
       await owner.sendTransaction({ to: await kashYieldEth.getAddress(), value: SWAP_ETH });
 
       const usdcBefore = await usdc.balanceOf(await kashYieldEth.getAddress());
-      await kashYieldEth.connect(owner).swapForUsdc(SWAP_ETH);
+      await kashYieldEth.connect(bot).swapForUsdc(SWAP_ETH);
       const usdcAfter = await usdc.balanceOf(await kashYieldEth.getAddress());
 
       expect(usdcAfter).to.be.gt(usdcBefore);
@@ -366,9 +362,9 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
       }
       console.log(`    ✅ Acquired wBTC for user1: ${Number(user1Wbtc) / 1e8} wBTC`);
 
-      // ── Deploy UniswapV3Adapter (must use SwapRouter01 — see ETH suite comment) ─
+      // ── Deploy UniswapV3Adapter (SwapRouter02) ─────────────────────────────
       const UniswapV3Adapter = await ethers.getContractFactory("UniswapV3Adapter");
-      uniAdapter = await UniswapV3Adapter.deploy(UNISWAP_ROUTER_V1, WETH_ADDRESS);
+      uniAdapter = await UniswapV3Adapter.deploy(UNISWAP_ROUTER_V2, WETH_ADDRESS);
 
       // ── Deploy KashYieldBtc ──────────────────────────────────────────────
       // Same as ETH: Aave pool is hardcoded to real Arbitrum One address.
@@ -430,28 +426,28 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
       expect(await kashYieldBtc.batchPhase(batchCycle)).to.equal(1);
 
       // ── Aave: deposit wBTC, borrow USDC ───────────────────────────────────
-      await kashYieldBtc.connect(owner).depositToAave(MINT_BTC);
+      await kashYieldBtc.connect(bot).depositToAave(MINT_BTC);
 
       const btcPrice   = await kashYieldBtc.getBtcPrice();
       const btcUsdValue = MINT_BTC * btcPrice / (10n ** 8n); // 18-dec USD
       const borrowUsdc  = btcUsdValue * 60n / 100n / (10n ** 12n); // 6-dec — 60% LTV leaves buffer for accrued interest
       console.log(`       Aave: borrowing ${ethers.formatUnits(borrowUsdc, 6)} USDC`);
 
-      await kashYieldBtc.connect(owner).borrowFromAave(USDC_ADDRESS, borrowUsdc);
+      await kashYieldBtc.connect(bot).borrowFromAave(USDC_ADDRESS, borrowUsdc);
       const contractUsdc = await usdc.balanceOf(await kashYieldBtc.getAddress());
       expect(contractUsdc).to.be.gte(borrowUsdc);
       console.log(`       ✅ Aave USDC borrowed: ${ethers.formatUnits(contractUsdc, 6)}`);
 
       // ── HL: deposit USDC to bridge ────────────────────────────────────────
-      await kashYieldBtc.connect(owner).depositToHyperliquid(borrowUsdc);
+      await kashYieldBtc.connect(bot).depositToHyperliquid(borrowUsdc);
       expect(await hlAdapter.usdcBalance()).to.equal(borrowUsdc);
       console.log(`       ✅ Adapter usdcBalance: ${ethers.formatUnits(await hlAdapter.usdcBalance(), 6)}`);
 
       // ── HL: spot buy + open short (no-ops, trading is off-chain) ──────────
-      await kashYieldBtc.connect(owner).spotBuyOnHyperliquid(borrowUsdc);
+      await kashYieldBtc.connect(bot).spotBuyOnHyperliquid(borrowUsdc);
       const shortSizeUSD   = btcUsdValue * 170n / 100n;
       const shortSizeAsset = shortSizeUSD * 10n ** 18n / btcPrice;
-      await kashYieldBtc.connect(owner).openShort("BTC", shortSizeAsset);
+      await kashYieldBtc.connect(bot).openShort("BTC", shortSizeAsset);
       await hlAdapter.syncPosition("BTC", shortSizeAsset, btcPrice, true);
       const [posSize, , , , posActive] = await kashYieldBtc.getHyperliquidPosition("BTC");
       expect(posActive).to.be.true;
@@ -459,7 +455,7 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
 
       // ── NAV + mark done + Phase 2 ─────────────────────────────────────────
       await kashYieldBtc.connect(bot).updateNAV(NAV_1, borrowUsdc, 0n, 0n);
-      await kashYieldBtc.connect(owner).markBatchOpsDone(batchCycle);
+      await kashYieldBtc.connect(bot).markBatchOpsDone(batchCycle);
       await kashYieldBtc.connect(bot).performUpkeep("0x");
       expect(await kashYieldBtc.batchProcessed(batchCycle)).to.be.true;
 
@@ -484,7 +480,7 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
       await kashYieldBtc.connect(bot).performUpkeep("0x");
 
       // Close short (no-op), sync position as inactive.
-      await kashYieldBtc.connect(owner)["closeShort(string)"]("BTC");
+      await kashYieldBtc.connect(bot)["closeShort(string)"]("BTC");
       await hlAdapter.syncPosition("BTC", 0n, 0n, false);
 
       // Simulate HL returning principal + 10 USDC (covers any Aave accrued interest).
@@ -496,23 +492,23 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
       await usdc.connect(bridgeSigner).transfer(await hlAdapter.getAddress(), hlReturnAmount);
       await hre.network.provider.send("hardhat_stopImpersonatingAccount", [HL_BRIDGE]);
 
-      await kashYieldBtc.connect(owner).withdrawFromHyperliquid(hlReturnAmount);
+      await kashYieldBtc.connect(bot).withdrawFromHyperliquid(hlReturnAmount);
       console.log(`       ✅ USDC withdrawn from HL: ${ethers.formatUnits(await usdc.balanceOf(await kashYieldBtc.getAddress()), 6)}`);
 
       // Repay Aave — contract now has principal + 10 USDC, more than enough to clear full debt.
       const usdcBal = await usdc.balanceOf(await kashYieldBtc.getAddress());
-      await kashYieldBtc.connect(owner).repayToAave(USDC_ADDRESS, usdcBal);
+      await kashYieldBtc.connect(bot).repayToAave(USDC_ADDRESS, usdcBal);
 
       // Withdraw wBTC from Aave.
       const wbtcBefore = await wbtc.balanceOf(user1.address);
-      await kashYieldBtc.connect(owner).withdrawFromAave(MINT_BTC);
+      await kashYieldBtc.connect(bot).withdrawFromAave(MINT_BTC);
       const contractWbtc = await wbtc.balanceOf(await kashYieldBtc.getAddress());
       expect(contractWbtc).to.be.gte(MINT_BTC - 100n); // allow 100 satoshi dust
       console.log(`       ✅ wBTC in contract: ${Number(contractWbtc) / 1e8} wBTC`);
 
       // NAV + mark done + Phase 2.
       await kashYieldBtc.connect(bot).updateNAV(NAV_1, 0n, 0n, 0n);
-      await kashYieldBtc.connect(owner).markBatchOpsDone(redeemCycle);
+      await kashYieldBtc.connect(bot).markBatchOpsDone(redeemCycle);
       await kashYieldBtc.connect(bot).performUpkeep("0x");
       expect(await kashYieldBtc.batchProcessed(redeemCycle)).to.be.true;
 

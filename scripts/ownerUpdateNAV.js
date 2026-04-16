@@ -7,7 +7,7 @@
 //   # or for BTC product (default): KASH_YIELD_BTC_ADDRESS=0x... NEW_NAV=1050000000000000000 npx hardhat run ...
 //
 // Env (root .env):
-//   PRIVATE_KEY              - owner wallet
+//   PRIVATE_KEY              - bot (or keeperRegistry); updateNAV is operator-only
 //   NEW_NAV                  - new NAV in 18 decimals (e.g. 1050000000000000000 for $1.05, or 1.05e18 in shell)
 //   KASH_YIELD_BTC_ADDRESS   - KashYieldBtc (used if PRODUCT=btc or unset)
 //   KASH_YIELD_ADDRESS       - KashYieldETH or KashYieldBtc (fallback)
@@ -17,6 +17,7 @@
 
 require("dotenv").config();
 const hre = require("hardhat");
+const { assertKashYieldOpsSigner } = require("./opsAccessChecks");
 
 function parseNAV(v) {
   if (v == null || v === "") return null;
@@ -59,12 +60,7 @@ async function main() {
     contractName,
     kashYieldAddress
   );
-  const owner = await kashYield.owner();
-  if (signer.address.toLowerCase() !== owner.toLowerCase()) {
-    throw new Error(
-      `Signer ${signer.address} is not the contract owner (${owner}). Use PRIVATE_KEY for the owner.`
-    );
-  }
+  await assertKashYieldOpsSigner(kashYield, signer.address);
 
   const currentNAV = await kashYield.currentNAV();
   const currentStr = hre.ethers.formatEther(currentNAV);
@@ -72,7 +68,7 @@ async function main() {
   console.log(`Current NAV: ${currentStr} (raw: ${currentNAV})`);
   console.log(`Setting NAV:  ${newStr} (raw: ${newNAV})...`);
 
-  const tx = await kashYield.updateNAV(newNAV);
+  const tx = await kashYield.updateNAV(newNAV, 0n, 0n, 0n);
   await tx.wait();
   const updated = await kashYield.currentNAV();
   console.log(`Updated NAV: ${hre.ethers.formatEther(updated)}`);

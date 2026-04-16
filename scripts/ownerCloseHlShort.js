@@ -6,13 +6,14 @@
 //   npx hardhat run scripts/ownerCloseHlShort.js --network arbitrumSepolia
 //
 // Env (root .env):
-//   PRIVATE_KEY               - owner wallet
+//   PRIVATE_KEY               - bot (or keeperRegistry); closeShort is operator-only
 //   KASH_YIELD_BTC_ADDRESS    - KashYieldBtc contract (default)
 //   PRODUCT                   - "btc" (default) or "eth"
 //   SYMBOL                    - perp symbol to close, e.g. "BTC" or "ETH" (default: BTC for btc product, ETH for eth)
 
 require("dotenv").config();
 const hre = require("hardhat");
+const { assertKashYieldOpsSigner } = require("./opsAccessChecks");
 
 async function main() {
   const product = (process.env.PRODUCT || "btc").toLowerCase();
@@ -33,12 +34,7 @@ async function main() {
   const contractName = product === "eth" ? "KashYieldETH" : "KashYieldBtc";
   const kashYield = await hre.ethers.getContractAt(contractName, kashYieldAddress);
 
-  const owner = await kashYield.owner();
-  if (signer.address.toLowerCase() !== owner.toLowerCase()) {
-    throw new Error(
-      `Signer ${signer.address} is not the contract owner (${owner}).`
-    );
-  }
+  await assertKashYieldOpsSigner(kashYield, signer.address);
 
   const hlAddress = await kashYield.hyperliquidAddress();
   if (!hlAddress || hlAddress === hre.ethers.ZeroAddress) {

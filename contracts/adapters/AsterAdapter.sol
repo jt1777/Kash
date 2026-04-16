@@ -121,10 +121,11 @@ contract AsterAdapter is IPerpExchange {
         emit AdapterCall("depositCollateral", amount);
     }
 
-    function withdrawCollateral(address token, uint256 amount) external override {
+    function withdrawCollateral(address token, uint256 amount) external override returns (uint256 amountTransferred) {
         IAsterVault(vault).withdraw(token, amount);
         IERC20(token).safeTransfer(msg.sender, amount);
-        emit AdapterCall("withdrawCollateral", amount);
+        amountTransferred = amount;
+        emit AdapterCall("withdrawCollateral", amountTransferred);
     }
 
     // ── Spot trading (not supported on Aster) ────────────────────────────

@@ -68,6 +68,9 @@ export const kashYieldABI = [
   { inputs: [], name: "paused", outputs: [{ name: "", type: "bool" }], stateMutability: "view", type: "function" },
   { inputs: [], name: "owner", outputs: [{ name: "", type: "address" }], stateMutability: "view", type: "function" },
   { inputs: [], name: "feeBps", outputs: [{ name: "", type: "uint256" }], stateMutability: "view", type: "function" },
+  { inputs: [], name: "ownerUsdcReserve", outputs: [{ name: "", type: "uint256" }], stateMutability: "view", type: "function" },
+  { inputs: [], name: "ownerEthReserve", outputs: [{ name: "", type: "uint256" }], stateMutability: "view", type: "function" },
+  { inputs: [], name: "ownerWbtcReserve", outputs: [{ name: "", type: "uint256" }], stateMutability: "view", type: "function" },
   { inputs: [], name: "wethAddress", outputs: [{ name: "", type: "address" }], stateMutability: "view", type: "function" },
   { inputs: [], name: "wbtcAddress", outputs: [{ name: "", type: "address" }], stateMutability: "view", type: "function" },
   { inputs: [], name: "usdcAddress", outputs: [{ name: "", type: "address" }], stateMutability: "view", type: "function" },
@@ -209,7 +212,7 @@ export const kashYieldABI = [
   {
     anonymous: false,
     inputs: [
-      { indexed: false, name: "action", type: "string" },
+      { indexed: true, name: "action", type: "uint8" },
       { indexed: true, name: "asset", type: "address" },
       { indexed: false, name: "amount", type: "uint256" },
     ],

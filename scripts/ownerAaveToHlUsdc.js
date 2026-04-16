@@ -6,13 +6,15 @@
 //   USDC_AMOUNT=10000 npx hardhat run scripts/ownerAaveToHlUsdc.js --network arbitrumSepolia
 //
 // Env (root .env):
-//   PRIVATE_KEY, KASH_YIELD_BTC_ADDRESS (or KASH_YIELD_ADDRESS)
+//   PRIVATE_KEY — bot (or keeperRegistry); borrow/deposit ops are operator-only
+//   KASH_YIELD_BTC_ADDRESS (or KASH_YIELD_ADDRESS)
 //   USDC_AMOUNT  - amount of USDC to borrow and send to HL (human units, e.g. 10000 for 10000 USDC)
 //
 // USDC has 6 decimals. The contract uses the same USDC address for Aave repay and HL.
 
 require("dotenv").config();
 const hre = require("hardhat");
+const { assertKashYieldOpsSigner } = require("./opsAccessChecks");
 
 const USDC_DECIMALS = 6;
 
@@ -44,12 +46,7 @@ async function main() {
     "KashYieldBtc",
     kashYieldAddress
   );
-  const owner = await kashYield.owner();
-  if (signer.address.toLowerCase() !== owner.toLowerCase()) {
-    throw new Error(
-      `Signer ${signer.address} is not the contract owner (${owner}).`
-    );
-  }
+  await assertKashYieldOpsSigner(kashYield, signer.address);
 
   const usdcAddress = await kashYield.usdcAddress();
   const hlAddress = await kashYield.hyperliquidAddress();
