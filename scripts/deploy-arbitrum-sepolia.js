@@ -1,13 +1,17 @@
 // scripts/deploy-arbitrum-sepolia.js
-// Deploys KashYieldETH (ETH product) to Arbitrum Sepolia. Uses built-in Sepolia addresses (Aave, tokens, oracles).
-// No mocks; intended for testnet with real protocols.
+// Deploys KashYieldETH (constructor: botAddress, weth, usdc). Aave pool is immutable (Arbitrum One mainnet pool).
+//
+// Networks:
+//   - Arbitrum Sepolia: built-in testnet WETH/USDC defaults (or override via .env).
+//   - Arbitrum One: use --network arbitrumOne; built-in mainnet WETH/USDC (or WETH_ADDRESS / USDC_ADDRESS).
 //
 // Prerequisites:
-//   - .env with PRIVATE_KEY and optionally ARBITRUM_SEPOLIA_RPC_URL, HYPERLIQUID_ADDRESS
-//   - Funded deployer wallet on Arbitrum Sepolia
+//   - Root .env: PRIVATE_KEY; RPC via hardhat.config (ARBITRUM_ONE_RPC_URL / ARBITRUM_SEPOLIA_RPC_URL).
+//   - Funded deployer on the target chain.
 //
 // Usage:
 //   npx hardhat run scripts/deploy-arbitrum-sepolia.js --network arbitrumSepolia
+//   npx hardhat run scripts/deploy-arbitrum-sepolia.js --network arbitrumOne
 
 const hre = require("hardhat");
 const fs = require("fs");
@@ -15,8 +19,10 @@ const path = require("path");
 
 async function main() {
   const network = hre.network.name;
-  if (network !== "arbitrumSepolia") {
-    console.warn(`⚠️  This script is intended for Arbitrum Sepolia. You are on: ${network}`);
+  const isArbitrumOne = network === "arbitrumOne";
+  const isArbitrumSepolia = network === "arbitrumSepolia";
+  if (!isArbitrumOne && !isArbitrumSepolia) {
+    console.warn(`⚠️  Expected arbitrumOne or arbitrumSepolia. You are on: ${network}`);
   }
 
   const signers = await hre.ethers.getSigners();
@@ -33,7 +39,11 @@ async function main() {
   console.log("Balance:", hre.ethers.formatEther(balance), "ETH\n");
 
   if (balance === 0n) {
-    throw new Error("Deployer balance is 0. Get testnet ETH from Arbitrum Sepolia faucet.");
+    throw new Error(
+      isArbitrumOne
+        ? "Deployer balance is 0. Fund the wallet with ETH on Arbitrum One."
+        : "Deployer balance is 0. Get testnet ETH for Arbitrum Sepolia (e.g. faucet / bridge)."
+    );
   }
 
   // ============================================
@@ -92,7 +102,7 @@ async function main() {
       console.log("   Step 3: Run scripts/setActivePerpExchange.js (EXCHANGE_NAME=HL) to activate.");
     }
   } else if (hyperliquidAddress) {
-    console.warn("⚠️  HYPERLIQUID_ADDRESS env set but invalid; skipping.");
+    console.warn("⚠️  HL_ADAPTER_ADDRESS_ETH env set but invalid; skipping.");
   }
 
   // ============================================
@@ -109,8 +119,9 @@ async function main() {
   // ============================================
   // 4. Summary and verification
   // ============================================
+  const deploymentTitle = isArbitrumOne ? "ARBITRUM ONE (MAINNET)" : network.toUpperCase();
   console.log("\n====================================");
-  console.log("📋 ARBITRUM SEPOLIA DEPLOYMENT");
+  console.log("📋 KASHYIELD ETH —", deploymentTitle);
   console.log("====================================");
   console.log("  KashYieldETH:", kashYieldEthAddress);
   console.log("  KashTokenEth:", kashTokenEthAddress);
@@ -156,8 +167,10 @@ async function main() {
   fs.writeFileSync(filepath, JSON.stringify(deploymentInfo, null, 2));
   console.log("💾 Saved:", filepath);
 
-  console.log("\nVerify on Arbiscan (optional):");
-  console.log("  npx hardhat verify --network arbitrumSepolia", kashYieldEthAddress);
+  console.log("\nVerify on Arbiscan (constructor: bot, weth, usdc):");
+  console.log(
+    `  npx hardhat verify --network ${network} ${kashYieldEthAddress} ${botAddress} ${wethAddress} ${usdcAddress}`
+  );
   console.log("\n✅ Done.");
 }
 

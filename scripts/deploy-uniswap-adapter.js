@@ -23,6 +23,7 @@
 //   WETH_ADDRESS             — override WETH address
 //   KASH_YIELD_ETH_ADDRESS   — if set, auto-registers adapter as spot DEX on KashYieldETH
 //   KASH_YIELD_BTC_ADDRESS   — if set, auto-registers adapter as spot DEX on KashYieldBtc
+//                              Omit for ETH-only deploys (otherwise the script may fail if unset/wrong).
 //   DEFAULT_FEE_TIER         — override default fee tier (500, 3000, 10000 — default: 500)
 //
 // Fee tier overrides (set after deploy via setFeeTierOverride on the adapter):
@@ -118,22 +119,41 @@ async function main() {
 
   // ── Optional: register as spot DEX on KashYieldBtc ───────────────────────
   const btcContractAddr = process.env.KASH_YIELD_BTC_ADDRESS;
-  if (btcContractAddr && hre.ethers.isAddress(btcContractAddr)) {
-    const kashYieldBtc = await hre.ethers.getContractAt("KashYieldBtc", btcContractAddr);
-    // 1. Whitelist the new adapter
-    await (await kashYieldBtc.setAllowedSpotDexRouter(adapterAddress, true)).wait();
-    console.log("✅ setAllowedSpotDexRouter on KashYieldBtc →", adapterAddress);
-    // 2. Propose the new spot DEX
-    const currentSpotDexBtc = await kashYieldBtc.spotDexAddress();
-    await (await kashYieldBtc.setSpotDex(adapterAddress)).wait();
-    if (currentSpotDexBtc === hre.ethers.ZeroAddress) {
-      console.log("✅ setSpotDex on KashYieldBtc → immediate (first-ever):", adapterAddress);
+  const btcAddrValid =
+    btcContractAddr &&
+    hre.ethers.isAddress(btcContractAddr) &&
+    btcContractAddr !== hre.ethers.ZeroAddress;
+  if (btcAddrValid) {
+    const btcCode = await hre.ethers.provider.getCode(btcContractAddr);
+    if (btcCode === "0x") {
+      console.warn("⚠️  KASH_YIELD_BTC_ADDRESS has no contract code — skipping KashYieldBtc (ETH-only or wrong address).");
     } else {
-      const readyAtBtc = await kashYieldBtc.spotDexPending(adapterAddress);
-      const readyDateBtc = new Date(Number(readyAtBtc) * 1000).toISOString();
-      console.log("⏳ setSpotDex on KashYieldBtc → 24h timelock started. Ready at:", readyDateBtc);
-      console.log("   Run after that time:");
-      console.log(`     KASH_YIELD_BTC_ADDRESS=${btcContractAddr} SPOT_DEX_ADDRESS=${adapterAddress} npx hardhat run scripts/confirmSpotDex.js --network ${network}`);
+      const kashYieldBtc = await hre.ethers.getContractAt("KashYieldBtc", btcContractAddr);
+      let currentSpotDexBtc;
+      try {
+        currentSpotDexBtc = await kashYieldBtc.spotDexAddress();
+      } catch (e) {
+        console.warn(
+          "⚠️  KashYieldBtc.spotDexAddress() failed (not a KashYieldBtc on this network, or stale address). Skipping BTC spot DEX registration.\n" +
+            "   For ETH-only: remove KASH_YIELD_BTC_ADDRESS from .env.\n" +
+            `   Detail: ${e.shortMessage || e.message}`
+        );
+        currentSpotDexBtc = null;
+      }
+      if (currentSpotDexBtc !== null) {
+        await (await kashYieldBtc.setAllowedSpotDexRouter(adapterAddress, true)).wait();
+        console.log("✅ setAllowedSpotDexRouter on KashYieldBtc →", adapterAddress);
+        await (await kashYieldBtc.setSpotDex(adapterAddress)).wait();
+        if (currentSpotDexBtc === hre.ethers.ZeroAddress) {
+          console.log("✅ setSpotDex on KashYieldBtc → immediate (first-ever):", adapterAddress);
+        } else {
+          const readyAtBtc = await kashYieldBtc.spotDexPending(adapterAddress);
+          const readyDateBtc = new Date(Number(readyAtBtc) * 1000).toISOString();
+          console.log("⏳ setSpotDex on KashYieldBtc → 24h timelock started. Ready at:", readyDateBtc);
+          console.log("   Run after that time:");
+          console.log(`     KASH_YIELD_BTC_ADDRESS=${btcContractAddr} SPOT_DEX_ADDRESS=${adapterAddress} npx hardhat run scripts/confirmSpotDex.js --network ${network}`);
+        }
+      }
     }
   }
 

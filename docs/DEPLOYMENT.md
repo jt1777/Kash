@@ -20,7 +20,7 @@ These caused 24+ hours of debugging. Don't skip them.
 
 4. **ETH price must be set on every new MockAaveV3 deploy.** Fresh deployments have `ethPriceInUsd = 0`, which makes every borrow fail with `"Borrow amount exceeds LTV limit"`.
 
-5. **Set `exchangeSwitchDelay = 0` for testnet** immediately after deploying KashYieldETH/BTC. The default is 48 hours — registering a second adapter without doing this means waiting 2 days.
+5. **Set `exchangeSwitchDelay = 0` for testnet** immediately after deploying KashYieldETH/BTC. The default on a fresh vault is **24 hours** — registering a **second** perp adapter (after the first is confirmed) waits that long unless you zero the delay on testnet.
 
 6. **`AAVE_USDC_ADDRESS` and `USDC_ADDRESS` are different.** The bot uses `AAVE_USDC_ADDRESS` first (MockUSDC for Aave borrows). Keep both in `bot/.env`. Do not delete either.
 
@@ -237,14 +237,14 @@ NEXT_PUBLIC_KASH_TOKEN_ETH=<KashTokenEth from output>
 
 ### Step 8 — Set timelock to 0 for testnet
 
-The default registration timelock is 48 hours. Set it to 0 so you can swap adapters immediately during development.
+The default perp **`exchangeSwitchDelay`** on a fresh `KashYieldETH` / `KashYieldBtc` is **24 hours** (`86400` seconds). Set it to `0` so you can swap adapters immediately during development.
 
 ```bash
 KASH_YIELD_ETH_ADDRESS=<KashYieldETH> DELAY_SECONDS=0 \
 npx hardhat run scripts/setExchangeSwitchDelay.js --network arbitrumSepolia
 ```
 
-> Set to `172800` (48 hours) before mainnet.
+> On mainnet, leave the default **24 hours** or raise it (e.g. `172800` = 48 hours) via `setExchangeSwitchDelay` if you want a longer timelock for **future** adapter changes — never `0`.
 
 ---
 
@@ -454,7 +454,7 @@ KASH_YIELD_ETH_ADDRESS=<KashYieldETH> EXCHANGE_NAME=GMX \
 npx hardhat run scripts/setActivePerpExchange.js --network arbitrumSepolia
 ```
 
-For mainnet (`exchangeSwitchDelay` = 48h), wait until the timelock expires between **proposing** a **subsequent** adapter and `confirmPerpExchange`. The first adapter on a fresh contract is still registered immediately.
+For mainnet (non-zero `exchangeSwitchDelay`, typically **24h** by default), wait until the timelock expires between **proposing** a **subsequent** adapter and `confirmPerpExchange`. The first adapter on a fresh contract is still registered immediately.
 
 ---
 
@@ -536,9 +536,9 @@ npx hardhat verify --network arbitrumSepolia <HL_ADAPTER_ADDRESS_ETH> <HL_ADDR> 
 - **Cause:** Adapter was deployed before `setHyperliquidAddress` was added — old bytecode.
 - **Fix:** Run `fix-hl-usdc.js` (also redeploys the adapter logic indirectly via a new MockHL + adapter update). If the adapter itself is old, redeploy with `deploy-hyperliquid-adapter.js`.
 
-### 48-hour wait when registering a new adapter
-- **Cause:** `exchangeSwitchDelay` is 48 hours (default).
-- **Fix:** `KASH_YIELD_ETH_ADDRESS=<addr> DELAY_SECONDS=0 npx hardhat run scripts/setExchangeSwitchDelay.js --network arbitrumSepolia`
+### Timelock wait when registering a new adapter
+- **Cause:** `exchangeSwitchDelay` is non-zero (default **24 hours** on a fresh vault; longer if you raised it on mainnet).
+- **Fix (testnet):** `KASH_YIELD_ETH_ADDRESS=<addr> DELAY_SECONDS=0 npx hardhat run scripts/setExchangeSwitchDelay.js --network arbitrumSepolia`
 
 ### `"Insufficient funds"` when funding MockSpotDex
 - **Cause:** Trying to send too much ETH from the deployer wallet.
@@ -607,7 +607,7 @@ npx hardhat run scripts/getNAV.js --network arbitrumSepolia
 
 - Never commit `.env` or private keys.
 - Use a separate test wallet for testnets.
-- Set `exchangeSwitchDelay = 172800` (48 hours) before mainnet.
+- On mainnet, **`exchangeSwitchDelay` must not be `0`**; fresh vaults default to **24 hours**. Optionally set `172800` (48 hours) if you want a longer timelock for future perp adapter changes.
 - Audit contracts before mainnet.
 - Test on testnet for at least one week.
 - Consider a professional security audit before mainnet.
@@ -621,7 +621,7 @@ npx hardhat run scripts/getNAV.js --network arbitrumSepolia
 **Pre-launch checklist:**
 - [ ] Smart contract security audit completed
 - [ ] Bot operated without errors (ideally including a testnet or staging period before mainnet)
-- [ ] `exchangeSwitchDelay` set to `172800` (48 hours) — never `0` on mainnet
+- [ ] `exchangeSwitchDelay` is **not** `0` on mainnet (default **24 hours** / `86400`; optional **48 hours** / `172800` via `setExchangeSwitchDelay`)
 - [ ] Deployer wallet is a hardware wallet or multisig, not a hot wallet
 - [ ] Bot wallet is separate from the deployer/owner wallet
 - [ ] All contracts verified on Arbiscan
@@ -694,7 +694,7 @@ This is the most important difference from the testnet setup.
 | Sell spot ETH → USDC | **Off-chain**: call HL API (not an Arbitrum tx) |
 | Withdraw USDC | Off-chain: sign withdrawal on HL, validators settle back to Arbitrum (~3–4 min) |
 
-The `RealHyperliquidAdapter` contract therefore only handles deposits (bridge call) and withdrawal receipts. The trading operations (steps 04–07 in the ops scripts) become **pure bot API calls** that do not involve the KashYield contract at all.
+The deployed **`HyperliquidAdapter`** contract therefore only handles deposits (bridge call) and withdrawal receipts. The trading operations (steps 04–07 in the ops scripts) become **pure bot API calls** that do not involve the KashYield contract at all.
 
 This means the ops scripts for HL trading on mainnet will not call `contract.spotBuyOnHyperliquid()` etc. — they will call the HL REST API directly and update local state tracking.
 
@@ -713,17 +713,22 @@ The `UniswapV3Adapter` must implement `ISpotDex` and wrap Uniswap V3's `SwapRout
 
 ```solidity
 interface ISpotDex {
-    function swapExactIn(address tokenIn, address tokenOut, uint256 amountIn, uint256 minAmountOut)
-        external returns (uint256 amountOut);
+    function swapExactIn(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 minAmountOut,
+        address recipient
+    ) external payable returns (uint256 amountOut);
 }
 ```
 
 Key implementation points:
 - Use `SwapRouter02.exactInputSingle(...)` with `fee = 500` (0.05%) for WETH/USDC and wBTC/USDC
 - Set reasonable `amountOutMinimum` (e.g. 0.5% slippage) — never pass `0` on mainnet
-- The `KashYieldETH` contract calls `swapForUsdc(ethAmount)` → adapter receives WETH, swaps to USDC
-- The `KashYieldETH` contract calls `swapFromUsdc(usdcAmount)` → adapter receives USDC, swaps to WETH
-- WETH approval must be handled: call `WETH.approve(uniswapRouter, amount)` before each swap (or use `permit2`)
+- `KashYieldETH.swapForUsdc` calls `ISpotDex.swapExactIn{value: ethAmount}(ETH_ADDRESS, usdc, …)` — **native ETH** in, USDC out (adapter unwraps / routes per its implementation)
+- `KashYieldETH.swapFromUsdc` approves USDC on the spot adapter, then `swapExactIn(usdc, ETH_ADDRESS, …)` — USDC in, **native ETH** to the vault
+- Approvals: KashYield uses `forceApprove` / payable `swapExactIn` as appropriate; the standalone `UniswapV3Adapter` wraps the router
 
 ---
 
@@ -734,7 +739,10 @@ Key implementation points:
 ```env
 PRIVATE_KEY=your_hardware_wallet_deployer_key
 
-ARBITRUM_MAINNET_RPC_URL=https://arb1.g.alchemy.com/v2/YOUR_API_KEY
+# Hardhat network `arbitrumOne` reads this (see hardhat.config.js):
+ARBITRUM_ONE_RPC_URL=https://arb1.g.alchemy.com/v2/YOUR_API_KEY
+# Used only for local fork tests — not for deploy/verify to mainnet:
+# ARBITRUM_MAINNET_RPC_URL=...
 ARBISCAN_API_KEY=your_arbiscan_api_key
 
 # No mock contracts — use real addresses
@@ -763,7 +771,8 @@ PRIVATE_KEY=your_bot_operator_key   # separate key from deployer
 HYPERLIQUID_API_PRIVATE_KEY=your_bot_operator_key   # HL API signer (same key in direct mode)
 HYPERLIQUID_API_URL=https://api.hyperliquid.xyz
 
-ARBITRUM_MAINNET_RPC_URL=https://arb1.g.alchemy.com/v2/YOUR_API_KEY
+# Bot resolves RPC_URL first (see bot/src/config.ts); set this for Arbitrum One:
+RPC_URL=https://arb1.g.alchemy.com/v2/YOUR_API_KEY
 
 PRODUCT=eth
 KASH_YIELD_ETH_ADDRESS=<KashYieldETH>
@@ -794,10 +803,17 @@ npx hardhat compile
 
 ### Step 2 — Deploy UniswapV3Adapter
 
+Constructor is **`(swapRouter, weth)`** only — no USDC argument. On `arbitrumOne` / `arbitrumSepolia` the script fills defaults; override with `UNISWAP_ROUTER_ADDRESS` / `WETH_ADDRESS` if needed.
+
 ```bash
-WETH_ADDRESS=0x82aF49447D8a07e3bd95BD0d56f35241523fBab1 \
-USDC_ADDRESS=0xaf88d065e77c8cC2239327C5EDb3A432268e5831 \
+npx hardhat run scripts/deploy-uniswap-adapter.js --network arbitrumOne
+```
+
+(Optional explicit overrides:)
+
+```bash
 UNISWAP_ROUTER_ADDRESS=0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45 \
+WETH_ADDRESS=0x82aF49447D8a07e3bd95BD0d56f35241523fBab1 \
 npx hardhat run scripts/deploy-uniswap-adapter.js --network arbitrumOne
 ```
 
@@ -814,9 +830,10 @@ Hardhat loads your **root `.env`** on every run (`hardhat.config.js`). `deploy-a
 BOT_ADDRESS=<your_bot_wallet> \
 WETH_ADDRESS=0x82aF49447D8a07e3bd95BD0d56f35241523fBab1 \
 USDC_ADDRESS=0xaf88d065e77c8cC2239327C5EDb3A432268e5831 \
-AAVE_POOL_ADDRESS=0x794a61358D6845594F94dc1DB02A252b5b4814aD \
 npx hardhat run scripts/deploy-arbitrum-sepolia.js --network arbitrumOne
 ```
+
+(`AAVE_POOL_ADDRESS` is not read by this deploy script — the Aave pool is **immutable** inside `KashYieldETH` at `0x794a…`.)
 
 Save to root `.env`, `bot/.env`, and `frontend/.env.local`:
 ```env
@@ -833,10 +850,10 @@ NEXT_PUBLIC_KASH_TOKEN_ETH=<KashTokenEth from output>
 
 > Requires `KASH_YIELD_ETH_ADDRESS` from Step 3.
 
-Set **`HYPERLIQUID_ADDRESS`** to Hyperliquid **Bridge2** on Arbitrum One ([table above](#hyperliquid)) — this is the live bridge, not a mock (same address as `HL_BRIDGE_ADDRESS` in your mainnet `.env`). The deploy script also accepts `MOCK_HL_ADDRESS` / `HYPERLIQUID_MOCK_ADDRESS` for Sepolia when the underlying contract is `MockHyperliquid`.
+Pass the **Bridge2** address as **`MOCK_HL_ADDRESS`** (or **`HYPERLIQUID_ADDRESS`** — the script accepts either; see `deploy-hyperliquid-adapter.js`). On Arbitrum One this is the live bridge ([table above](#hyperliquid)), not `MockHyperliquid`.
 
 ```bash
-HYPERLIQUID_ADDRESS=0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7 \
+MOCK_HL_ADDRESS=0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7 \
 USDC_ADDRESS=0xaf88d065e77c8cC2239327C5EDb3A432268e5831 \
 IS_ETH_ASSET=true \
 KASH_YIELD_ADDRESS=<KASH_YIELD_ETH_ADDRESS from step 3> \
@@ -882,15 +899,19 @@ Expected output:
 
 ### Step 5 — Set Chainlink oracle
 
+`KashYieldETH` already defaults **`ethOracle`** to the Arbitrum One ETH/USD feed (`0x639Fe6…`). This step is **optional on mainnet** but recommended so deployment docs and on-chain state explicitly match the feed you expect (and matches `diagnose-eth.js` checks).
+
 ```bash
 KASH_YIELD_ETH_ADDRESS=<KashYieldETH> \
 ETH_ORACLE_ADDRESS=0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612 \
 npx hardhat run scripts/setEthOracle.js --network arbitrumOne
 ```
 
-### Step 6 — Set exchange switch delay
+### Step 6 — Set exchange switch delay (optional)
 
-Set **`exchangeSwitchDelay`** to 48 hours on mainnet. This timelock applies only when you **later** propose **another** perp adapter (or replace HL). The **first-ever** registration via `setHyperliquid` / `setPerpExchange` is **immediate** — it does not wait on this delay (contract NatSpec: “First-ever registration is immediate”).
+Fresh **`KashYieldETH`** already defaults **`exchangeSwitchDelay`** to **24 hours** (`86400`), matching the in-contract mainnet guidance. That timelock applies only when you **later** propose **another** perp adapter (or replace HL). The **first-ever** registration via `setHyperliquid` / `setPerpExchange` is **immediate** — it does not wait on this delay (contract NatSpec: “First-ever registration is immediate”).
+
+**Skip this step** if 24 hours is enough. **Optionally** lengthen to 48 hours for future adapter changes:
 
 ```bash
 # 172800 = 48 hours
@@ -900,7 +921,7 @@ npx hardhat run scripts/setExchangeSwitchDelay.js --network arbitrumOne
 
 ### Step 7 — Register and activate HL adapter
 
-**Initial mainnet deploy:** register HL, then activate — no 48-hour wait and no `confirmPerpExchange` (there is nothing pending to confirm). `setHyperliquid.js` prints which path ran; on first registration you should see “First-time registration … no timelock”.
+**Initial mainnet deploy:** register HL, then activate — no perp timelock wait and no `confirmPerpExchange` (there is nothing pending to confirm). `setHyperliquid.js` prints which path ran; on first registration you should see “First-time registration … no timelock”.
 
 ```bash
 # 1. Register HL adapter (first deploy: confirmed immediately)
@@ -946,7 +967,7 @@ SPOT_DEX_ADDRESS=<UNISWAP_ADAPTER_ADDRESS from step 2> \
 npx hardhat run scripts/setSpotDex.js --network arbitrumOne
 ```
 
-The script will confirm whether the DEX was applied immediately or a timelock was started. If a timelock was started, re-run the same command after 48 hours to call `confirmSpotDex`.
+The script will confirm whether the DEX was applied immediately or a timelock was started. If a timelock was started, wait until **`spotDexTimelock`** expires (default **24 hours** on a fresh vault), then run `confirmSpotDex` (see `setSpotDex.js` / contract `confirmSpotDex`).
 
 ### Step 9 — Set cycle duration
 
@@ -964,11 +985,10 @@ npx hardhat verify --network arbitrumOne <KASH_YIELD_ETH_ADDRESS> <BOT_ADDRESS> 
   0x82aF49447D8a07e3bd95BD0d56f35241523fBab1 \
   0xaf88d065e77c8cC2239327C5EDb3A432268e5831
 
-# UniswapV3Adapter (constructor args: weth, usdc, swapRouter)
+# UniswapV3Adapter (constructor args: swapRouter, weth)
 npx hardhat verify --network arbitrumOne <UNISWAP_ADAPTER_ADDRESS> \
-  0x82aF49447D8a07e3bd95BD0d56f35241523fBab1 \
-  0xaf88d065e77c8cC2239327C5EDb3A432268e5831 \
-  0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45
+  0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45 \
+  0x82aF49447D8a07e3bd95BD0d56f35241523fBab1
 
 # HyperliquidAdapter (constructor args: hlBridge, usdc, assetAddress, isEthAsset, kashYieldAddress)
 npx hardhat verify --network arbitrumOne <HL_ADAPTER_ADDRESS_ETH> \
@@ -997,10 +1017,10 @@ Expected: Aave pool, WETH, USDC, oracle, spot DEX, and active perp exchange are 
 - [ ] Step 3 — `KashYieldETH` deployed and `KASH_YIELD_ETH_ADDRESS` saved
 - [ ] Step 4 — `HyperliquidAdapter` deployed and `HL_ADAPTER_ADDRESS_ETH` saved
 - [ ] Step 5 — `setEthOracle.js` — Chainlink `0x639Fe6...` set
-- [ ] Step 6 — `setExchangeSwitchDelay.js` — `DELAY_SECONDS=172800` (48 hours; applies to **future** adapter proposals only)
+- [ ] Step 6 — _(Optional)_ `setExchangeSwitchDelay.js` — default is already **24h**; use `DELAY_SECONDS=172800` only if you want **48h** for **future** perp adapter proposals
 - [ ] Step 7 — `setHyperliquid.js` then `setActivePerpExchange.js` — HL registered and active (first deploy: **no** wait, **no** `confirmPerpExchange`)
 - [ ] _(Only when proposing a **subsequent** HL/adapter change)_ Wait for timelock → `confirmPerpExchange.js` → `setActivePerpExchange.js` if needed
-- [ ] Step 8 — `setSpotDex.js` — UniswapV3Adapter set (immediate on first deploy; 48h timelock on changes)
+- [ ] Step 8 — `setSpotDex.js` — UniswapV3Adapter set (immediate on first deploy; default **24h** `spotDexTimelock` on subsequent DEX changes)
 - [ ] Step 9 — `setCycleDuration.js` — `CYCLE_SECONDS=86400` (daily)
 - [ ] Step 10 — All three contracts verified on Arbiscan
 - [ ] Step 11 — `diagnose-eth.js` — all addresses non-zero, Chainlink price non-zero
@@ -1027,7 +1047,7 @@ Scripts `04` (spot buy), `05` (open short), `06` (close short), and `07` (spot s
 
 For mainnet operations:
 - **Steps 01–03** (Aave deposit, borrow, HL deposit): unchanged — these are on-chain Arbitrum transactions.
-- **Steps 04–07** (spot buy, open short, close short, spot sell): call the HL REST API directly using the HL SDK or manually via the HL UI. The `RealHyperliquidAdapter` records the resulting balances when polled.
+- **Steps 04–07** (spot buy, open short, close short, spot sell): call the HL REST API directly using the HL SDK or manually via the HL UI. **`HyperliquidAdapter.syncBalances` / `syncPosition`** (or your bot’s polling path) records the resulting state on-chain after API trades.
 - **Steps 08–12** (USDC withdraw from HL, Aave repay, Aave withdraw, Uniswap swaps): unchanged — these are on-chain Arbitrum transactions.
 
 The HL USDC collateral model is confirmed correct for all scripts:
