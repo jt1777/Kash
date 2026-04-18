@@ -19,10 +19,10 @@ export const CONTRACTS = {
   // ETH: NEXT_PUBLIC_* for browser; KASH_* matches next.config.js `env` (single source in .env.local).
   kashYieldEth: addr(
     'NEXT_PUBLIC_KASH_YIELD_ETH_ADDRESS',
-    '0x390251c16eD7aC483EBA292533159438932AF23D',
+    '0x92c5833Deaac65a7aCB47867Cf009cAC1bF1dD5a',
     'KASH_YIELD_ETH_ADDRESS',
   ),
-  kashTokenEth: addr('NEXT_PUBLIC_KASH_TOKEN_ETH', '0x32aBd9511DCcB81eC277ff5cF150be03CCDa6963', 'KASH_TOKEN_ETH'),
+  kashTokenEth: addr('NEXT_PUBLIC_KASH_TOKEN_ETH', '0x8642483DcCE55270692aD559dCac7cf7eA0F9Bd9', 'KASH_TOKEN_ETH'),
   // BTC product (env key MOCK_WBTC is legacy; on mainnet this is canonical wBTC)
   kashYieldBtc: addr(
     'NEXT_PUBLIC_KASH_YIELD_BTC_ADDRESS',

@@ -21,10 +21,6 @@ Your KASH tokens are worth more over time because the protocol is continuously e
 
 The two products are independent. Depositing ETH gives you KASH-ETH; depositing wBTC gives you KASH-BTC. Both follow the same mechanics.
 
-For operators: the live contracts also support **owner / treasury reserves** (USDC and ETH or WBTC) that sit on the vault but are excluded from user NAV accounting; see [DEPLOYMENT.md](DEPLOYMENT.md) for how to mark deposits and how off-chain tooling reports **adjusted** balances.
-
-To **deploy or upgrade** contracts (including **KashYieldETH on Arbitrum One**), use the Hardhat scripts and the **[mainnet section of DEPLOYMENT.md](DEPLOYMENT.md#mainnet-deployment-arbitrum-one)** — token addresses, Aave pool wiring, Hyperliquid adapter, `exchangeSwitchDelay`, and Arbiscan verification are all documented there. This README is product overview only, not a deploy runbook.
-
 ---
 
 ## How your yield is tracked — NAV
