@@ -100,6 +100,19 @@ See `.env.example` for all required variables. Key ones:
 | `HYPERLIQUID_API_URL` | Hyperliquid API base URL (mainnet) | `https://api.hyperliquid.xyz` |
 | `HYPERLIQUID_API_PRIVATE_KEY` | HL API signer key (bot key in direct mode) | `0x...` |
 | `SHORT_LEVERAGE` | Target short multiple for mint playbook | `1` or `1.7` |
+| `SMALL_SWAP_SKIP_MAX_USDC` | Rising tail — see [Redeem tail / spot dust thresholds](#redeem-tail--spot-dust-thresholds) | `2` |
+| `FALLING_11B_USDC_RESERVE` | Falling tail — same section | `2` |
+
+### Redeem tail / spot dust thresholds
+
+Used by [`opsPlaybooks.ts`](src/batch/opsPlaybooks.ts) to avoid tiny **11a** / **11b** Uniswap legs (dust swaps, fragile `minOut` behavior). Values are **human USDC amounts** (6 decimals), e.g. `2` means **$2.00**.
+
+| Variable | When it applies | Behavior |
+|----------|-----------------|----------|
+| **`SMALL_SWAP_SKIP_MAX_USDC`** | **Rising** price tail (ops path: repay Aave USDC) | Let `sf = aaveDebt − contractUsdc` (adjusted USDC on KashYield). If `0 < sf <` this threshold, the bot **skips** partial Aave withdraw and **11a** (ETH→USDC). You must **send enough USDC** to KashYield (and optionally call `coverUsdcShortfall` if using owner reserve accounting), then complete repay / playbook. Default **`2`**. |
+| **`FALLING_11B_USDC_RESERVE`** | **Falling** price tail (ops path: **11b** USDC→ETH) | **Two roles:** (1) **Idle reserve** — spendable USDC for swaps is `contractUsdc −` this amount. (2) **Min notional** — if the **intended** 11b swap size is `> 0` but **strictly less than** this value, the bot **skips 11b** entirely. Top up **ETH** on KashYield with a **plain transfer** (do not use `markOwnerEthDeposit` if you need that ETH to count toward redeem float—marking increases `ownerEthReserve` and does not increase spendable ETH the same way). Default **`2`**. |
+
+Swaps **above** these thresholds still use on-chain **`minOut`** from Chainlink + slippage settings in the vault; these env vars only gate **whether** the bot submits a swap at all for small notionals.
 
 ## Bot Components
 

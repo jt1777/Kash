@@ -81,10 +81,20 @@ async function main() {
   try {
     const usdcAddress: string = await kashYield.usdcAddress();
     const usdc = new ethers.Contract(usdcAddress, ERC20_ABI, provider);
-    const usdcInContract = await usdc.balanceOf(config.kashYieldAddress);
+    const usdcRaw = await usdc.balanceOf(config.kashYieldAddress);
+    let ownerUsdcReserve = 0n;
+    try {
+      ownerUsdcReserve = BigInt((await kashYield.ownerUsdcReserve()).toString());
+    } catch {
+      /* older deployment */
+    }
+    const sub0 = (a: bigint, b: bigint) => (a >= b ? a - b : 0n);
+    const usdcAdj = sub0(usdcRaw, ownerUsdcReserve);
     console.log('💵 USDC in Contract');
-    console.log('  Total:           ', ethers.formatUnits(usdcInContract, 6), 'USDC');
-    console.log('  Note: This is Arbitrum USDC held directly by KashYield (not Aave debt and not HL spot balance).');
+    console.log('  Total (raw):     ', ethers.formatUnits(usdcRaw, 6), 'USDC');
+    console.log('  Owner reserve:   ', ethers.formatUnits(ownerUsdcReserve, 6), 'USDC (markOwnerUsdcDeposit / coverUsdcShortfall)');
+    console.log('  Ops float (adj.):', ethers.formatUnits(usdcAdj, 6), 'USDC  ← raw minus owner reserve (bot / batch views)');
+    console.log('  Note: On-chain balance only; excludes Aave debt and HL spot. Credit owner reserve after USDC is already on the vault.');
   } catch (e: any) {
     console.log('💵 USDC in Contract: failed to fetch –', e?.message ?? e);
   }

@@ -200,12 +200,13 @@ function getHlWithdrawFeeToleranceUsdc6(): bigint {
   }
 }
 
-/** USDC (6 dec) left on KashYield when swapping in falling tail — not converted USDC→ETH (fee buffer / ops dust). */
+/**
+ * USDC (6 dec) from env FALLING_11B_USDC_RESERVE (default 2). Used for:
+ * - Idle reserve: spendable = contractUsdc − this (not swapped as fee / buffer).
+ * - Min notional: skip 11b USDC→ETH when 0 < intended swap < this (avoids dust swaps).
+ */
 function getFalling11bUsdcReserveUsdc6(): bigint {
-  const raw =
-    process.env.FALLING_11B_USDC_RESERVE ||
-    process.env.HL_WITHDRAW_FEE_TOLERANCE_USDC ||
-    '2';
+  const raw = process.env.FALLING_11B_USDC_RESERVE || '2';
   try {
     const parsed = ethers.parseUnits(raw, 6);
     return parsed >= 0n ? parsed : 0n;
@@ -217,6 +218,20 @@ function getFalling11bUsdcReserveUsdc6(): bigint {
 function falling11bSpendableUsdc(ctx: OpsContext): bigint {
   const res = getFalling11bUsdcReserveUsdc6();
   return ctx.contractUsdc > res ? ctx.contractUsdc - res : 0n;
+}
+
+/** Intended 11b swap size in USDC (6 dec) before min-notional skip. */
+function computeFalling11bUsdcToSwap(ctx: OpsContext): bigint {
+  const spendable = falling11bSpendableUsdc(ctx);
+  if (spendable === 0n) return 0n;
+  const assetNeeded =
+    ctx.totalRedeemAsset > ctx.contractAsset ? ctx.totalRedeemAsset - ctx.contractAsset : 0n;
+  if (assetNeeded > 0n) {
+    const usdcNeeded =
+      (assetNeeded * ctx.price) / (10n ** ctx.assetDecimals) / (10n ** 12n);
+    return usdcNeeded < spendable ? usdcNeeded : spendable;
+  }
+  return spendable;
 }
 
 /** Rising tail: skip 11a ETH→USDC swap when USDC shortfall is strictly below this (6-dec USDC). Default $2. */
@@ -234,12 +249,7 @@ function usdcShortfallVsContract(ctx: OpsContext): bigint {
   return ctx.aaveDebt > ctx.contractUsdc ? ctx.aaveDebt - ctx.contractUsdc : 0n;
 }
 
-/** True when we skip partial Aave withdraw + 11a swap and expect USDC on KashYield to finish repay. */
-function shouldSkipTinyUsdcSwap(ctx: OpsContext): boolean {
-  const sf = usdcShortfallVsContract(ctx);
-  const cap = getSmallSwapSkipMaxUsdc6();
-  return sf > 0n && sf < cap;
-}
+/** Rising-tail cap (USDC 6-dec): env SMALL_SWAP_SKIP_MAX_USDC, default $2. Skip partial withdraw + 11a when 0 < shortfall < cap. */
 
 async function getAaveAvailableBorrowUsdc6(ctx: OpsContext): Promise<bigint> {
   if (!ctx.aavePoolAddress || ctx.aavePoolAddress === ethers.ZeroAddress) return 0n;
@@ -605,11 +615,10 @@ const aaveRepayContractFirst: OpStep = {
 /**
  * 11b — Swap USDC → asset (falling price tail) after Aave repay.
  *
- * Always swaps **spendable** USDC = `contractUsdc − FALLING_11B_USDC_RESERVE` (defaults to
- * HL_WITHDRAW_FEE_TOLERANCE_USDC, then 2 USDC) so fee-buffer / idle USDC is not sold.
- * - If ETH is short for redeem sizing: swap `min(usdcNeeded, spendable)`.
- * - If ETH is already enough: still swap **all spendable** USDC → ETH (HL proceeds + PnL),
- *   so Phase 2 is not short when mark-done used a slightly different ETH/USD snapshot than Phase 2.
+ * Spendable USDC = contractUsdc − FALLING_11B_USDC_RESERVE (env, default 2 USDC).
+ * Skips swap when intended swap amount is &gt; 0 but strictly below that same threshold (dust).
+ * - If asset short for redeem sizing: swap min(usdcNeeded, spendable).
+ * - If asset already enough: swap all spendable (HL proceeds + PnL), subject to min-notional skip.
  *
  * Phase 2 redeem math on-chain: see batchProcessor comment on `currentNAV` / `exactNAV` / oracle timing.
  */
@@ -629,6 +638,15 @@ const dexSwapFromUsdc = (_lockedNAV: bigint | undefined): OpStep => ({
       return true;
     }
     if (falling11bSpendableUsdc(ctx) === 0n) return true;
+    const usdcToSwap = computeFalling11bUsdcToSwap(ctx);
+    const cap = getFalling11bUsdcReserveUsdc6();
+    if (usdcToSwap > 0n && usdcToSwap < cap) {
+      console.log(
+        `         ↪ skip 11b USDC→${ctx.assetSymbol} — swap amount ${fmtUsdc(usdcToSwap)} < ${fmtUsdc(cap)} ` +
+          '(FALLING_11B_USDC_RESERVE min notional; fund ETH another way or raise env)',
+      );
+      return true;
+    }
     return false;
   },
   execute: async (ctx) => {
@@ -636,15 +654,15 @@ const dexSwapFromUsdc = (_lockedNAV: bigint | undefined): OpStep => ({
     if (spendable === 0n) return;
     const assetNeeded =
       ctx.totalRedeemAsset > ctx.contractAsset ? ctx.totalRedeemAsset - ctx.contractAsset : 0n;
-    let usdcToSwap: bigint;
-    if (assetNeeded > 0n) {
-      const usdcNeeded =
-        (assetNeeded * ctx.price) / (10n ** ctx.assetDecimals) / (10n ** 12n);
-      usdcToSwap = usdcNeeded < spendable ? usdcNeeded : spendable;
-    } else {
-      usdcToSwap = spendable;
-    }
+    const usdcToSwap = computeFalling11bUsdcToSwap(ctx);
     if (usdcToSwap === 0n) return;
+    const cap = getFalling11bUsdcReserveUsdc6();
+    if (usdcToSwap < cap) {
+      console.log(
+        `         ↪ skip 11b swap — ${fmtUsdc(usdcToSwap)} < ${fmtUsdc(cap)} (FALLING_11B_USDC_RESERVE)`,
+      );
+      return;
+    }
     const res = getFalling11bUsdcReserveUsdc6();
     console.log(
       `         swap ${fmtUsdc(usdcToSwap)} USDC (spendable≤${fmtUsdc(spendable)}, reserve ${fmtUsdc(res)})` +
@@ -718,10 +736,11 @@ const aaveWithdrawPartial: OpStep = {
   },
   canSkip: async (ctx) => {
     if (ctx.aaveDebt <= ctx.contractUsdc) return true; // no shortfall
-    if (shouldSkipTinyUsdcSwap(ctx)) {
-      const sf = usdcShortfallVsContract(ctx);
+    const sf = usdcShortfallVsContract(ctx);
+    const cap = getSmallSwapSkipMaxUsdc6();
+    if (sf > 0n && sf < cap) {
       console.log(
-        `         ↪ skip partial Aave withdraw — USDC shortfall ${fmtUsdc(sf)} < ${fmtUsdc(getSmallSwapSkipMaxUsdc6())} ` +
+        `         ↪ skip partial Aave withdraw — USDC shortfall ${fmtUsdc(sf)} < ${fmtUsdc(cap)} ` +
           '(SMALL_SWAP_SKIP_MAX_USDC); 11a swap skipped — use USDC on KashYield to finish repay)',
       );
       return true;
@@ -760,10 +779,11 @@ const dexSwapForUsdc: OpStep = {
   },
   canSkip: async (ctx) => {
     if (ctx.aaveDebt <= ctx.contractUsdc) return true; // gap already closed
-    if (shouldSkipTinyUsdcSwap(ctx)) {
-      const sf = usdcShortfallVsContract(ctx);
+    const sf = usdcShortfallVsContract(ctx);
+    const cap = getSmallSwapSkipMaxUsdc6();
+    if (sf > 0n && sf < cap) {
       console.log(
-        `         ↪ skip 11a swap (ETH→USDC) — shortfall ${fmtUsdc(sf)} < ${fmtUsdc(getSmallSwapSkipMaxUsdc6())} USDC`,
+        `         ↪ skip 11a swap (ETH→USDC) — shortfall ${fmtUsdc(sf)} < ${fmtUsdc(cap)} USDC (SMALL_SWAP_SKIP_MAX_USDC)`,
       );
       return true;
     }
