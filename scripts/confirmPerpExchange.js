@@ -18,6 +18,7 @@
 
 require("dotenv").config();
 const hre = require("hardhat");
+const { resolveKashYieldProduct } = require("./resolveKashYieldProduct");
 
 async function main() {
   const [signer] = await hre.ethers.getSigners();
@@ -28,24 +29,7 @@ async function main() {
     throw new Error('Set EXCHANGE_NAME in env (e.g. EXCHANGE_NAME=HL). This is the key used when registering the adapter.');
   }
 
-  const productEnv = (process.env.PRODUCT || "").toLowerCase();
-  const kashYieldBtcAddress = process.env.KASH_YIELD_BTC_ADDRESS;
-  const kashYieldEthAddress = process.env.KASH_YIELD_ETH_ADDRESS || process.env.KASH_YIELD_ADDRESS;
-  const isBtc =
-    productEnv === "btc" ||
-    (productEnv !== "eth" &&
-      kashYieldBtcAddress &&
-      hre.ethers.isAddress(kashYieldBtcAddress) &&
-      !kashYieldEthAddress);
-  const kashYieldAddress = isBtc ? kashYieldBtcAddress : kashYieldEthAddress;
-  const contractName = isBtc ? "KashYieldBtc" : "KashYieldETH";
-
-  if (!kashYieldAddress || !hre.ethers.isAddress(kashYieldAddress)) {
-    throw new Error(
-      `Set KASH_YIELD_ETH_ADDRESS (ETH product) or KASH_YIELD_BTC_ADDRESS (BTC product) in .env.\n` +
-      `Current value: "${kashYieldAddress}"`
-    );
-  }
+  const { isBtc, kashYieldAddress, contractName } = resolveKashYieldProduct(hre.ethers);
 
   console.log("Network:         ", network);
   console.log(`${contractName}:  `, kashYieldAddress);

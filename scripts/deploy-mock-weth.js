@@ -71,7 +71,7 @@ async function main() {
     console.log(`   KASH_YIELD_ETH_ADDRESS=<your-kashyieldeth> AAVE_POOL_ADDRESS=<your-mock-aave> \\\n   WETH_ADDRESS=${mockWethAddress} \\\n   npx hardhat run scripts/deploy-mock-weth.js --network arbitrumSepolia`);
     console.log("   (or call setWethAddress manually on MockAaveV3)");
   }
-  console.log("\n4. Re-run npm run set:asset-price to sync MockSpotDex if needed.");
+  console.log("\n4. If you use MockSpotDex, refresh its rates (e.g. scripts/update-mock-spot-dex-price.js) so they match your mock oracle/Aave/HL prices.");
 }
 
 main().catch((error) => {

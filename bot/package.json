@@ -25,9 +25,7 @@
     "update:aave-address": "ts-node src/scripts/update-aave-address.ts",
     "withdraw:mock-aave": "ts-node src/scripts/withdraw-from-mock-aave.ts",
     "reset:aave": "ts-node src/scripts/reset-aave.ts",
-    "close:aave": "ts-node src/scripts/close-aave-position.ts",
-    "set:asset-price": "ts-node src/scripts/setAssetPrice.ts",
-    "set:prices": "ts-node src/scripts/setAssetPrice.ts"
+    "close:aave": "ts-node src/scripts/close-aave-position.ts"
   },
   "dependencies": {
     "ethers": "6.16.0",

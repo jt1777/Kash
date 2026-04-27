@@ -39,8 +39,12 @@ async function main() {
   const hlAddress        = process.env.MOCK_HL_ADDRESS || process.env.HYPERLIQUID_MOCK_ADDRESS || process.env.HYPERLIQUID_ADDRESS;
   const usdcAddress      = process.env.USDC_ADDRESS   || process.env.MOCK_USDC_ADDRESS;
   const wbtcAddress      = process.env.WBTC_ADDRESS   || process.env.MOCK_WBTC_ADDRESS || process.env.MOCK_WBTC;
-  const kashYieldAddress = process.env.KASH_YIELD_ADDRESS || process.env.KASH_YIELD_ETH_ADDRESS || process.env.KASH_YIELD_BTC_ADDRESS;
   const isEth            = (process.env.IS_ETH_ASSET || "").toLowerCase() === "true";
+  // Prefer the vault that matches the product — root .env often has both KASH_YIELD_ETH_ADDRESS and
+  // KASH_YIELD_BTC_ADDRESS; a naive A || B || C would always pick ETH and break BTC adapter deploys.
+  const kashYieldAddress = isEth
+    ? (process.env.KASH_YIELD_ETH_ADDRESS || process.env.KASH_YIELD_ADDRESS)
+    : (process.env.KASH_YIELD_BTC_ADDRESS || process.env.KASH_YIELD_ADDRESS);
   const label            = process.env.HL_ADAPTER_LABEL || (isEth ? "ETH" : "BTC");
 
   if (!hlAddress || !hre.ethers.isAddress(hlAddress)) {
@@ -53,10 +57,10 @@ async function main() {
     throw new Error("Set USDC_ADDRESS (or MOCK_USDC_ADDRESS) in .env.");
   }
   if (!kashYieldAddress || !hre.ethers.isAddress(kashYieldAddress)) {
-    throw new Error(
-      "Set KASH_YIELD_ADDRESS (or KASH_YIELD_ETH_ADDRESS / KASH_YIELD_BTC_ADDRESS) in .env — " +
-      "the KashYield contract that is authorised to call capital-movement functions on this adapter."
-    );
+    const hint = isEth
+      ? "Set KASH_YIELD_ETH_ADDRESS (or KASH_YIELD_ADDRESS); use IS_ETH_ASSET=true."
+      : "Set KASH_YIELD_BTC_ADDRESS (or KASH_YIELD_ADDRESS); use IS_ETH_ASSET=false so .env does not pick the ETH vault.";
+    throw new Error("KashYield vault address missing or invalid — " + hint);
   }
 
   // For the ETH product the on-chain asset is native ETH, so assetAddress = 0x0.

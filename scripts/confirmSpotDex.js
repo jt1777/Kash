@@ -15,28 +15,18 @@
  */
 require("dotenv").config();
 const hre = require("hardhat");
+const { resolveKashYieldProduct } = require("./resolveKashYieldProduct");
 
 async function main() {
-  const productEnv = (process.env.PRODUCT || "").toLowerCase();
-  const kashYieldEthAddr = process.env.KASH_YIELD_ETH_ADDRESS || process.env.KASH_YIELD_ADDRESS;
-  const kashYieldBtcAddr = process.env.KASH_YIELD_BTC_ADDRESS;
   const adapterAddress =
     process.env.SPOT_DEX_ADDRESS ||
     process.env.ROUTER_ADDRESS ||
     process.env.UNISWAP_ADAPTER_ADDRESS;
 
-  const isBtc =
-    productEnv === "btc" ||
-    (productEnv !== "eth" && kashYieldBtcAddr && hre.ethers.isAddress(kashYieldBtcAddr) && !kashYieldEthAddr);
-
-  const kashYieldAddress = isBtc ? kashYieldBtcAddr : kashYieldEthAddr;
-  const contractName = isBtc ? "KashYieldBtc" : "KashYieldETH";
+  const { kashYieldAddress, contractName } = resolveKashYieldProduct(hre.ethers);
 
   if (!adapterAddress || !hre.ethers.isAddress(adapterAddress)) {
     throw new Error("Set SPOT_DEX_ADDRESS (or ROUTER_ADDRESS / UNISWAP_ADAPTER_ADDRESS) to the adapter to confirm.");
-  }
-  if (!kashYieldAddress || !hre.ethers.isAddress(kashYieldAddress)) {
-    throw new Error("Set KASH_YIELD_ETH_ADDRESS (ETH) or KASH_YIELD_BTC_ADDRESS (BTC) in .env");
   }
 
   const [signer] = await hre.ethers.getSigners();

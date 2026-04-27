@@ -15,22 +15,14 @@
 // Usage (BTC product):
 //   KASH_YIELD_BTC_ADDRESS=0x<kashYieldBtc> HYPERLIQUID_ADDRESS=0x<adapter> \
 //   npx hardhat run scripts/setHyperliquid.js --network arbitrumSepolia
+// If both ETH and BTC vault addresses are valid in .env, set PRODUCT=btc (or PRODUCT=eth).
 
 require("dotenv").config();
 const hre = require("hardhat");
+const { resolveKashYieldProduct } = require("./resolveKashYieldProduct");
 
 async function main() {
-  // Explicit PRODUCT=eth|btc overrides auto-detection.
-  // Auto-detection: BTC only if KASH_YIELD_BTC_ADDRESS is set AND KASH_YIELD_ETH_ADDRESS is not.
-  const productEnv = (process.env.PRODUCT || "").toLowerCase();
-  const kashYieldBtcAddress = process.env.KASH_YIELD_BTC_ADDRESS;
-  const kashYieldEthAddress = process.env.KASH_YIELD_ETH_ADDRESS || process.env.KASH_YIELD_ADDRESS;
-  const isBtc =
-    productEnv === "btc" ||
-    (productEnv !== "eth" &&
-      kashYieldBtcAddress &&
-      hre.ethers.isAddress(kashYieldBtcAddress) &&
-      !kashYieldEthAddress);
+  const { isBtc, kashYieldAddress, contractName } = resolveKashYieldProduct(hre.ethers);
 
   // Product-specific name takes priority over the generic HYPERLIQUID_ADDRESS
   const HYPERLIQUID_ADDRESS =
@@ -46,16 +38,6 @@ async function main() {
   }
   if (!hre.ethers.isAddress(HYPERLIQUID_ADDRESS)) {
     throw new Error("Invalid HYPERLIQUID_ADDRESS: " + HYPERLIQUID_ADDRESS);
-  }
-
-  const kashYieldAddress = isBtc ? kashYieldBtcAddress : kashYieldEthAddress;
-  const contractName = isBtc ? "KashYieldBtc" : "KashYieldETH";
-
-  if (!kashYieldAddress || !hre.ethers.isAddress(kashYieldAddress)) {
-    throw new Error(
-      `Set ${isBtc ? "KASH_YIELD_BTC_ADDRESS" : "KASH_YIELD_ETH_ADDRESS"} in .env.\n` +
-      `Current value: "${kashYieldAddress}"`
-    );
   }
 
   const network = hre.network.name;

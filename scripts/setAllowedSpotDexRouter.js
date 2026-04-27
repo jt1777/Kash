@@ -19,32 +19,20 @@
  */
 require("dotenv").config();
 const hre = require("hardhat");
+const { resolveKashYieldProduct } = require("./resolveKashYieldProduct");
 
 async function main() {
-  const productEnv = (process.env.PRODUCT || "").toLowerCase();
-  const kashYieldBtcAddress = process.env.KASH_YIELD_BTC_ADDRESS;
-  const kashYieldEthAddress = process.env.KASH_YIELD_ETH_ADDRESS || process.env.KASH_YIELD_ADDRESS;
   const routerAddress =
     process.env.ROUTER_ADDRESS ||
     process.env.SPOT_DEX_ADDRESS ||
     process.env.UNISWAP_ADAPTER_ADDRESS;
 
-  const isBtc =
-    productEnv === "btc" ||
-    (productEnv !== "eth" &&
-      kashYieldBtcAddress &&
-      hre.ethers.isAddress(kashYieldBtcAddress) &&
-      !kashYieldEthAddress);
-  const kashYieldAddress = isBtc ? kashYieldBtcAddress : kashYieldEthAddress;
-  const contractName = isBtc ? "KashYieldBtc" : "KashYieldETH";
+  const { kashYieldAddress, contractName } = resolveKashYieldProduct(hre.ethers);
 
   if (!routerAddress || !hre.ethers.isAddress(routerAddress)) {
     throw new Error(
       "Set ROUTER_ADDRESS (or SPOT_DEX_ADDRESS / UNISWAP_ADAPTER_ADDRESS) to the spot adapter contract."
     );
-  }
-  if (!kashYieldAddress || !hre.ethers.isAddress(kashYieldAddress)) {
-    throw new Error("Set KASH_YIELD_ETH_ADDRESS (ETH) or KASH_YIELD_BTC_ADDRESS (BTC) in .env");
   }
 
   const allowed = (process.env.ALLOWED || "true").toLowerCase() !== "false";

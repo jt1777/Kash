@@ -1,9 +1,9 @@
 // scripts/setEthOracle.js
 // Sets the ETH/USD price feed oracle address on KashYieldETH.
 //
-// This is needed when using a MockChainlinkPriceFeed on testnet so that
-// scripts/setAssetPrice.ts can simulate price changes via setPrice().
-// Without this, KashYieldETH uses the built-in default (real Chainlink)
+// This is needed when using a MockChainlinkPriceFeed on testnet so KashYieldETH
+// reads that feed (you can call setPrice() on the mock for simulations).
+// Without this, KashYieldETH uses the built-in default (real Chainlink),
 // which cannot have its price overridden.
 //
 // Usage:
@@ -46,7 +46,7 @@ async function main() {
     console.log("✅ getEthPrice() =", hre.ethers.formatUnits(price, 18), "USD (18-dec)");
   } catch (e) {
     console.warn("⚠️  getEthPrice() reverted — oracle may need a price set:");
-    console.warn("   cd bot && ETH_PRICE_USD=3000 npm run set:asset-price");
+    console.warn("   On a mock feed, call setPrice on MockChainlinkPriceFeed; sync MockAaveV3/MockHyperliquid if your stack uses them.");
   }
 }
 

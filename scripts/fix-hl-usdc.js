@@ -70,8 +70,7 @@ async function main() {
   console.log("Adapter updated:    ", adapterAddress);
   console.log("\nAdd to your .env files:");
   console.log("  HYPERLIQUID_ADDRESS=" + newHLAddress);
-  console.log("\nThen set ETH price on new MockHL:");
-  console.log("  cd bot && ETH_PRICE_USD=3000 npm run set:asset-price");
+  console.log("\nThen set ETH price on new MockHL (and matching mock oracle/Aave if needed), e.g. MockHyperliquid.setEthPrice(...).");
   console.log("\nThen re-run the bot.");
 }
 

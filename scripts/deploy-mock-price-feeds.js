@@ -1,9 +1,8 @@
 // scripts/deploy-mock-price-feeds.js
 // Deploys two MockChainlinkPriceFeed contracts — one for BTC/USD and one for ETH/USD.
 //
-// These are needed so that scripts/setAssetPrice.ts can update the oracle price
-// for price-change simulations. Without them the contracts point to the real
-// Chainlink feeds (read-only; setPrice() would revert).
+// Mocks expose setPrice() for test simulations. Mainnet Chainlink feeds are
+// read-only (setPrice() would revert).
 //
 // Usage:
 //   npx hardhat run scripts/deploy-mock-price-feeds.js --network arbitrumSepolia
