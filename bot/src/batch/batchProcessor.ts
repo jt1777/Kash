@@ -2,7 +2,13 @@ import { ethers } from 'ethers';
 import { kashYieldABI } from '../contracts/kashYieldABI';
 import { ProtocolAction, protocolActionName } from '../contracts/protocolActionCodes';
 import { config } from '../config';
-import { snapshotOpsContext, computeTotalRedeemAsset, getAaveBorrowedAmountV3, getAaveSuppliedAmountV3 } from './opsContext';
+import {
+  snapshotOpsContext,
+  computeTotalRedeemAsset,
+  getAaveBorrowedAmountV3,
+  getAaveSuppliedAmountV3,
+  readHyperliquidAdapterAddress,
+} from './opsContext';
 import { classifyScenario, scenarioLabel } from './opsClassifier';
 import { runMintPlaybook, runRedeemPlaybook, runTestAaveLoopPlaybook } from './opsPlaybooks';
 
@@ -376,24 +382,35 @@ export class BatchProcessor {
     if (totalRedeemAsset > 0n) {
       const contractAddr = config.kashYieldAddress!;
       let contractBalance: bigint;
+      let ownerAssetReserve = 0n;
       if (isBtc) {
         try {
           const wbtcAddr: string = await this.kashYield.wbtcAddress();
           const wbtc = new ethers.Contract(wbtcAddr, ['function balanceOf(address) view returns (uint256)'], this.provider);
           contractBalance = BigInt((await wbtc.balanceOf(contractAddr)).toString());
+          ownerAssetReserve = BigInt((await this.kashYield.ownerWbtcReserve()).toString());
         } catch { contractBalance = 0n; }
       } else {
         contractBalance = BigInt((await this.provider.getBalance(contractAddr)).toString());
+        try {
+          ownerAssetReserve = BigInt((await this.kashYield.ownerEthReserve()).toString());
+        } catch { ownerAssetReserve = 0n; }
       }
 
-      if (contractBalance < totalRedeemAsset) {
+      // Must match on-chain Phase 2: balance >= owner*Reserve + total redeem asset (KashYieldBtc / KashYieldETH).
+      const requiredForPhase2 = totalRedeemAsset + ownerAssetReserve;
+      if (contractBalance < requiredForPhase2) {
         throw new Error(
           `Cannot markBatchOpsDone: contract holds ${ethers.formatUnits(contractBalance, Number(decimals))} ` +
-          `but redeemers need ${ethers.formatUnits(totalRedeemAsset, Number(decimals))}. ` +
-          `Pull remaining funds from Aave/HL before proceeding.`
+          `but Phase 2 needs ${ethers.formatUnits(requiredForPhase2, Number(decimals))} ` +
+          `(redeemers ${ethers.formatUnits(totalRedeemAsset, Number(decimals))} + owner reserve ${ethers.formatUnits(ownerAssetReserve, Number(decimals))}). ` +
+          `Withdraw more ${isBtc ? 'wBTC' : 'ETH'} from Aave (or reduce owner reserve) before proceeding.`
         );
       }
-      console.log(`   ✅ Balance check passed: contract has ${ethers.formatUnits(contractBalance, Number(decimals))} (need ${ethers.formatUnits(totalRedeemAsset, Number(decimals))})`);
+      console.log(
+        `   ✅ Balance check passed: contract has ${ethers.formatUnits(contractBalance, Number(decimals))} ` +
+          `(need ${ethers.formatUnits(requiredForPhase2, Number(decimals))} = redeem ${ethers.formatUnits(totalRedeemAsset, Number(decimals))} + owner reserve ${ethers.formatUnits(ownerAssetReserve, Number(decimals))})`,
+      );
     }
 
     console.log('📋 Step mark-done: Marking batch ops done...');
@@ -1007,15 +1024,7 @@ export class BatchProcessor {
    * Amount must be in USDC token units (6 decimals). Requires hyperliquidAddress to be set.
    */
   private async depositToHyperliquid(amount: bigint): Promise<void> {
-    // Check if hyperliquidAddress is set
-    let hlAddress: string;
-    try {
-      hlAddress = await this.kashYield.hyperliquidAddress();
-    } catch (error) {
-      console.log(`   ⚠️  Hyperliquid address not set on contract. Skipping HL deposit.`);
-      return;
-    }
-    
+    const hlAddress = await readHyperliquidAdapterAddress(this.kashYield);
     if (!hlAddress || hlAddress === ethers.ZeroAddress) {
       console.log(`   ⚠️  Hyperliquid address not set on contract. Skipping HL deposit.`);
       return;

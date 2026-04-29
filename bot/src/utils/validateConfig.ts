@@ -11,7 +11,9 @@ export function validateConfig(): void {
   // Check contract address
   if (!config.kashYieldAddress) {
     const productVar = config.product === 'btc' ? 'KASH_YIELD_BTC_ADDRESS' : 'KASH_YIELD_ETH_ADDRESS';
-    errors.push(`${productVar} (or KASH_YIELD_ADDRESS) is not set in environment variables`);
+    errors.push(
+      `${productVar} (or KASH_YIELD_ADDRESS) is not set. For BTC vaults set PRODUCT=btc and KASH_YIELD_BTC_ADDRESS=0x...`
+    );
   } else if (!ethers.isAddress(config.kashYieldAddress)) {
     errors.push(`Invalid contract address format: ${config.kashYieldAddress}`);
   }

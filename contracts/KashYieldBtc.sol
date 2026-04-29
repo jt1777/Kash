@@ -370,6 +370,10 @@ contract KashYieldBtc is ReentrancyGuard {
         emit AdapterProposed("HL", adapter, adapterReadyAt["HL"]);
     }
 
+    /// @notice Returns the HL adapter address (backwards-compat with bot / frontend).
+    function hyperliquidAddress() external view returns (address) {
+        return perpExchanges["HL"];
+    }
 
     // ── User-facing: mint / redeem ────────────────────────────────────────
 

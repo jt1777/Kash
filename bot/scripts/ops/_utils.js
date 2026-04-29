@@ -12,8 +12,9 @@ const {
   assertCanSyncHyperliquidAdapter,
 } = require("../../../scripts/opsAccessChecks");
 
-// ── Product config ────────────────────────────────────────────────────────────
-const PRODUCT  = (process.env.PRODUCT || "eth").toLowerCase();
+// ── Product config (same env key variants as bot/src/config.ts) ───────────────
+const productRaw = process.env.PRODUCT || process.env.product || process.env.Product || "eth";
+const PRODUCT = productRaw.toLowerCase() === "btc" ? "btc" : "eth";
 const IS_BTC   = PRODUCT === "btc";
 const DECIMALS = IS_BTC ? 8 : 18;
 const ASSET_SYMBOL = IS_BTC ? "wBTC" : "ETH";
@@ -32,6 +33,7 @@ const KASH_ABI = [
   "function hyperliquidAddress() view returns (address)",
   "function spotDexAddress() view returns (address)",
   "function activePerpExchange() view returns (string)",
+  "function perpExchanges(string) view returns (address)",
   "function getCurrentBatchCycle() view returns (uint256)",
   "function batchPhase(uint256) view returns (uint8)",
   "function batchTotalRedeemKash(uint256) view returns (uint256)",

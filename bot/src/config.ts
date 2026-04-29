@@ -49,29 +49,42 @@ const getRpcUrl = (): string => {
 
 export type Product = 'eth' | 'btc';
 
+/** Env keys are case-sensitive; accept common variants so `Product=btc` in .env still works. */
+function productFromEnv(): Product {
+  const raw =
+    process.env.PRODUCT ||
+    process.env.product ||
+    process.env.Product ||
+    '';
+  // Trim so `PRODUCT=btc ` or CRLF from Windows editors still selects btc
+  return raw.trim().toLowerCase() === 'btc' ? 'btc' : 'eth';
+}
+
 export const config = {
   // Blockchain
   rpcUrl: getRpcUrl(),
-  chainId: parseInt(process.env.CHAIN_ID || '421614'),
+  chainId: parseInt(process.env.CHAIN_ID || '421614', 10),
   privateKey: process.env.PRIVATE_KEY || '',
 
-  // Product: eth (KashYieldETH) or btc (KashYieldBtc)
-  product: ((process.env.PRODUCT || 'eth').toLowerCase() === 'btc' ? 'btc' : 'eth') as Product,
+  // Product: eth (KashYieldETH) or btc (KashYieldBtc). Set PRODUCT=btc in bot/.env.
+  product: productFromEnv(),
 
   // Contracts - resolved from product-specific vars (KASH_YIELD_ETH_ADDRESS / KASH_YIELD_BTC_ADDRESS) or legacy KASH_YIELD_ADDRESS
   get kashYieldAddress(): string {
     const product = this.product;
+    const pick = (v: string | undefined) => (v || '').trim();
     if (product === 'btc') {
-      return process.env.KASH_YIELD_BTC_ADDRESS || process.env.KASH_YIELD_ADDRESS || '';
+      return pick(process.env.KASH_YIELD_BTC_ADDRESS) || pick(process.env.KASH_YIELD_ADDRESS);
     }
-    return process.env.KASH_YIELD_ETH_ADDRESS || process.env.KASH_YIELD_ADDRESS || '';
+    return pick(process.env.KASH_YIELD_ETH_ADDRESS) || pick(process.env.KASH_YIELD_ADDRESS);
   },
   get kashTokenAddress(): string {
     const product = this.product;
+    const pick = (v: string | undefined) => (v || '').trim();
     if (product === 'btc') {
-      return process.env.KASH_TOKEN_BTC || process.env.KASH_TOKEN_ADDRESS || '';
+      return pick(process.env.KASH_TOKEN_BTC) || pick(process.env.KASH_TOKEN_ADDRESS);
     }
-    return process.env.KASH_TOKEN_ETH || process.env.KASH_TOKEN_ADDRESS || '';
+    return pick(process.env.KASH_TOKEN_ETH) || pick(process.env.KASH_TOKEN_ADDRESS);
   },
 
   // Token Addresses (Arbitrum Sepolia)

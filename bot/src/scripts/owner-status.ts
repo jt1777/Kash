@@ -6,15 +6,22 @@
  * - Aave: supplied ETH/wBTC, borrowed USDC
  * - Hyperliquid: USDC in spot, wBTC/ETH in spot, perp positions (ETH/BTC: size, collateral, active)
  *
- * Usage:
+ * Usage (same vault selection as `npm run start` — see bot/src/config.ts):
  *   PRODUCT=eth KASH_YIELD_ETH_ADDRESS=0x... npm run owner:status
- *   PRODUCT=btc KASH_YIELD_BTC_ADDRESS=0x... AAVE_POOL_ADDRESS=0x... npm run owner:status
+ *   PRODUCT=btc KASH_YIELD_BTC_ADDRESS=0x... npm run owner:status
+ *   PRODUCT=btc KASH_YIELD_ADDRESS=0x...     (BTC vault only in legacy var)
+ *
+ * If PRODUCT looks wrong, check for trailing spaces or CRLF on the PRODUCT line in .env.
  */
 
 import { ethers } from 'ethers';
 import { config } from '../config';
 import { kashYieldABI } from '../contracts/kashYieldABI';
-import { getAaveSuppliedAmountV3, getAaveBorrowedAmountV3 } from '../batch/opsContext';
+import {
+  getAaveSuppliedAmountV3,
+  getAaveBorrowedAmountV3,
+  readHyperliquidAdapterAddress,
+} from '../batch/opsContext';
 
 const ERC20_ABI = [
   {
@@ -28,26 +35,35 @@ const ERC20_ABI = [
 ] as const;
 
 async function main() {
-  if (!config.kashYieldAddress) {
-    throw new Error('KASH_YIELD_ADDRESS is required');
+  const isBtc = config.product === 'btc';
+  const vaultAddress = config.kashYieldAddress;
+
+  if (!vaultAddress || !ethers.isAddress(vaultAddress)) {
+    const btcSet = Boolean(
+      (process.env.KASH_YIELD_BTC_ADDRESS || '').trim() &&
+        ethers.isAddress((process.env.KASH_YIELD_BTC_ADDRESS || '').trim())
+    );
+    if (!isBtc && btcSet) {
+      throw new Error(
+        'KASH_YIELD_BTC_ADDRESS is set but PRODUCT is eth (default). Set PRODUCT=btc in bot/.env ' +
+          '(one line, no trailing spaces — e.g. not `PRODUCT=btc `). Then rerun npm run owner:status.'
+      );
+    }
+    const need = isBtc ? 'KASH_YIELD_BTC_ADDRESS or KASH_YIELD_ADDRESS' : 'KASH_YIELD_ETH_ADDRESS or KASH_YIELD_ADDRESS';
+    throw new Error(`Invalid or missing vault address for PRODUCT=${config.product}. Set ${need} in bot/.env.`);
   }
 
   const provider = new ethers.JsonRpcProvider(config.rpcUrl);
-  const kashYield = new ethers.Contract(
-    config.kashYieldAddress,
-    kashYieldABI,
-    provider
-  );
+  const kashYield = new ethers.Contract(vaultAddress, kashYieldABI, provider);
 
-  const isBtc = config.product === 'btc';
   const productName = isBtc ? 'KashYieldBtc (wBTC)' : 'KashYieldETH';
   let usdcBorrowed = 0n;
   let hlSpotBalance = 0n;
 
   console.log('\n📊 Owner Status –', productName);
   console.log('═'.repeat(55));
-  console.log(`Contract: ${config.kashYieldAddress}`);
-  console.log(`Product: ${config.product.toUpperCase()}`);
+  console.log(`Contract: ${vaultAddress}`);
+  console.log(`Product: ${isBtc ? 'BTC' : 'ETH'}`);
   console.log('');
 
   // ─── 1. Asset in Contract ───────────────────────────────────────────────
@@ -57,7 +73,7 @@ async function main() {
   if (isBtc) {
     const wbtcAddress = await kashYield.wbtcAddress();
     const wbtc = new ethers.Contract(wbtcAddress, ERC20_ABI, provider);
-    totalInContract = await wbtc.balanceOf(config.kashYieldAddress);
+    totalInContract = await wbtc.balanceOf(vaultAddress);
     reserved = await kashYield.getReservedBtc();
     const excess = totalInContract > reserved ? totalInContract - reserved : 0n;
     console.log('📦 Asset in Contract (wBTC)');
@@ -66,7 +82,7 @@ async function main() {
     console.log('  Excess (owner):  ', ethers.formatUnits(excess, 8), 'wBTC (withdrawable via ownerWithdrawWbtc)');
     console.log('  Note: Excess may be (1) wBTC for redeemers whose Phase 2 did not run or failed, (2) from mints not yet deployed, or (3) owner top-ups. See recent batches and RedeemRequested/TokensClaimed events to correlate.');
   } else {
-    totalInContract = await provider.getBalance(config.kashYieldAddress);
+    totalInContract = await provider.getBalance(vaultAddress);
     reserved = await kashYield.getReservedEth();
     const excess = totalInContract > reserved ? totalInContract - reserved : 0n;
     console.log('📦 Asset in Contract (ETH)');
@@ -81,7 +97,7 @@ async function main() {
   try {
     const usdcAddress: string = await kashYield.usdcAddress();
     const usdc = new ethers.Contract(usdcAddress, ERC20_ABI, provider);
-    const usdcRaw = await usdc.balanceOf(config.kashYieldAddress);
+    const usdcRaw = await usdc.balanceOf(vaultAddress);
     let ownerUsdcReserve = 0n;
     try {
       ownerUsdcReserve = BigInt((await kashYield.ownerUsdcReserve()).toString());
@@ -106,7 +122,7 @@ async function main() {
       ? await kashYield.kashTokenBtc()
       : await kashYield.kashTokenEth();
     const kashToken = new ethers.Contract(kashTokenAddr, ERC20_ABI, provider);
-    const kashInContract = await kashToken.balanceOf(config.kashYieldAddress);
+    const kashInContract = await kashToken.balanceOf(vaultAddress);
     const kashDecimals = await kashToken.decimals();
     const kashLabel = isBtc ? 'KASH-BTC' : 'KASH-ETH';
     console.log(`📌 KASH in Contract (${kashLabel})`);
@@ -131,8 +147,8 @@ async function main() {
 
     // Use the real Aave V3-compatible helpers (fall through mock → variable debt token → getUserAccountData)
     const assetAddr = isBtc ? (wbtcAddr ?? ethers.ZeroAddress) : (wethAddr ?? ethers.ZeroAddress);
-    const aaveSupplied = await getAaveSuppliedAmountV3(provider, aavePoolAddr, assetAddr, config.kashYieldAddress);
-    usdcBorrowed = await getAaveBorrowedAmountV3(provider, aavePoolAddr, usdcAddr, config.kashYieldAddress);
+    const aaveSupplied = await getAaveSuppliedAmountV3(provider, aavePoolAddr, assetAddr, vaultAddress);
+    usdcBorrowed = await getAaveBorrowedAmountV3(provider, aavePoolAddr, usdcAddr, vaultAddress);
 
     console.log('🏦 Aave');
     if (isBtc) {
@@ -145,12 +161,7 @@ async function main() {
   console.log('');
 
   // ─── 3. Hyperliquid ──────────────────────────────────────────────────────
-  let hlAddr: string | null = null;
-  try {
-    hlAddr = await kashYield.hyperliquidAddress();
-  } catch {
-    hlAddr = null;
-  }
+  const hlAddr = await readHyperliquidAdapterAddress(kashYield);
   if (!hlAddr || hlAddr === ethers.ZeroAddress) {
     console.log('🔄 Hyperliquid: Not configured');
   } else {
@@ -169,7 +180,7 @@ async function main() {
           },
         ];
         const hl = new ethers.Contract(hlAddr, hlAbi, provider);
-        hlSpotBalance = await hl.getSpotBalance(config.kashYieldAddress);
+        hlSpotBalance = await hl.getSpotBalance(vaultAddress);
       } catch {
         // On-chain HL balance not readable (mainnet: HL is off-chain)
         hlSpotBalance = 0n;
@@ -192,7 +203,7 @@ async function main() {
     console.log('🔄 Hyperliquid');
     console.log('  USDC in spot:    ', ethers.formatUnits(hlSpotBalance, 6), 'USDC');
     if (isBtc) {
-      console.log('  wBTC in spot:    ', ethers.formatEther(hlSpotWbtc), 'wBTC (adapter HL account)');
+      console.log('  wBTC in spot:    ', ethers.formatUnits(hlSpotWbtc, 8), 'wBTC (adapter HL account)');
     } else {
       console.log('  ETH in spot:     ', ethers.formatEther(hlSpotEth), 'ETH (adapter HL account)');
       console.log('  Note: Often ~0 after spot buy if ETH was posted as perp collateral (MockHyperliquid).');
@@ -243,7 +254,9 @@ async function main() {
       const redeemStr = ethers.formatUnits(totalRedeem, USD_DECIMALS);
       console.log(`  ${cycle}: phase=${phaseNum} processed=${processed} mint=${mintStr} redeem=${redeemStr}`);
     }
-    console.log('  Use these cycles with RedeemRequested/TokensClaimed events to see if excess wBTC matches pending or failed redemptions.');
+    console.log(
+      `  Use these cycles with RedeemRequested/TokensClaimed events to see if excess ${isBtc ? 'wBTC' : 'ETH'} matches pending or failed redemptions.`
+    );
   } catch (e: any) {
     console.log('📅 Recent batches: failed to fetch –', e?.message ?? e);
   }

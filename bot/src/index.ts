@@ -19,7 +19,9 @@ async function main() {
   // Initialize provider and signer (60s timeout; static network to avoid extra RPC on startup)
   const fetchRequest = new ethers.FetchRequest(config.rpcUrl);
   fetchRequest.timeout = 60000;
-  const network = { chainId: config.chainId, name: 'arbitrum-sepolia' };
+  const networkName =
+    config.chainId === 42161 ? 'arbitrum' : config.chainId === 421614 ? 'arbitrum-sepolia' : 'custom';
+  const network = { chainId: config.chainId, name: networkName };
   const provider = new ethers.JsonRpcProvider(fetchRequest, network);
   
   if (!config.privateKey) {

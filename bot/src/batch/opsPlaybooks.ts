@@ -1,6 +1,11 @@
 import { ethers } from 'ethers';
 import { config } from '../config';
-import { snapshotOpsContext, computeTotalRedeemAsset, type OpsContext } from './opsContext';
+import {
+  snapshotOpsContext,
+  computeTotalRedeemAsset,
+  readHyperliquidAdapterAddress,
+  type OpsContext,
+} from './opsContext';
 import { classifyRedeemTail, tailLabel, type RedeemTail } from './opsClassifier';
 
 // ---------------------------------------------------------------------------
@@ -200,38 +205,21 @@ function getHlWithdrawFeeToleranceUsdc6(): bigint {
   }
 }
 
-/**
- * USDC (6 dec) from env FALLING_11B_USDC_RESERVE (default 2). Used for:
- * - Idle reserve: spendable = contractUsdc − this (not swapped as fee / buffer).
- * - Min notional: skip 11b USDC→ETH when 0 < intended swap < this (avoids dust swaps).
- */
-function getFalling11bUsdcReserveUsdc6(): bigint {
-  const raw = process.env.FALLING_11B_USDC_RESERVE || '2';
-  try {
-    const parsed = ethers.parseUnits(raw, 6);
-    return parsed >= 0n ? parsed : 0n;
-  } catch {
-    return 2_000_000n;
-  }
-}
-
+/** All deployable USDC on KashYield (`ctx.contractUsdc`, already net of `ownerUsdcReserve`) may be swapped in 11b. */
 function falling11bSpendableUsdc(ctx: OpsContext): bigint {
-  const res = getFalling11bUsdcReserveUsdc6();
-  return ctx.contractUsdc > res ? ctx.contractUsdc - res : 0n;
+  return ctx.contractUsdc;
 }
 
-/** Intended 11b swap size in USDC (6 dec) before min-notional skip. */
+/** 11b swap USDC (6 dec): `usdcNeeded` to cover the wBTC/ETH gap vs `totalRedeemAsset`, capped by deployable USDC. If the vault already has enough asset, returns 0 so USDC is not swapped to asset. */
 function computeFalling11bUsdcToSwap(ctx: OpsContext): bigint {
   const spendable = falling11bSpendableUsdc(ctx);
   if (spendable === 0n) return 0n;
   const assetNeeded =
     ctx.totalRedeemAsset > ctx.contractAsset ? ctx.totalRedeemAsset - ctx.contractAsset : 0n;
-  if (assetNeeded > 0n) {
-    const usdcNeeded =
-      (assetNeeded * ctx.price) / (10n ** ctx.assetDecimals) / (10n ** 12n);
-    return usdcNeeded < spendable ? usdcNeeded : spendable;
-  }
-  return spendable;
+  if (assetNeeded === 0n) return 0n;
+  const usdcNeeded =
+    (assetNeeded * ctx.price) / (10n ** ctx.assetDecimals) / (10n ** 12n);
+  return usdcNeeded < spendable ? usdcNeeded : spendable;
 }
 
 /** Rising tail: skip 11a ETH→USDC swap when USDC shortfall is strictly below this (6-dec USDC). Default $2. */
@@ -249,7 +237,22 @@ function usdcShortfallVsContract(ctx: OpsContext): bigint {
   return ctx.aaveDebt > ctx.contractUsdc ? ctx.aaveDebt - ctx.contractUsdc : 0n;
 }
 
-/** Rising-tail cap (USDC 6-dec): env SMALL_SWAP_SKIP_MAX_USDC, default $2. Skip partial withdraw + 11a when 0 < shortfall < cap. */
+/**
+ * Rising tail: skip partial Aave withdraw + 11a only when shortfall is "dust" vs SMALL_SWAP_SKIP_MAX_USDC
+ * **and** owner USDC reserve can fully cover it after `coverUsdcShortfall`. If reserve is 0 (or < shortfall),
+ * we must run 11a — otherwise the playbook dead-ends with no USDC on the vault.
+ */
+async function canSkipSmallSwapViaOwnerReserve(ctx: OpsContext, sf: bigint): Promise<boolean> {
+  const cap = getSmallSwapSkipMaxUsdc6();
+  if (sf <= 0n || sf >= cap) return false;
+  let reserve = 0n;
+  try {
+    reserve = BigInt((await ctx.kashYield.ownerUsdcReserve()).toString());
+  } catch {
+    return false;
+  }
+  return reserve >= sf;
+}
 
 async function getAaveAvailableBorrowUsdc6(ctx: OpsContext): Promise<bigint> {
   if (!ctx.aavePoolAddress || ctx.aavePoolAddress === ethers.ZeroAddress) return 0n;
@@ -396,9 +399,11 @@ const hlDepositUsdc: OpStep = {
       console.log(`         ${fmtUsdc(amount)}`);
     }
 
-    // Guard: HL address must be set
-    let hlAddress = '';
-    try { hlAddress = await ctx.kashYield.hyperliquidAddress(); } catch { /* ignore */ }
+    // Guard: HL adapter must be resolvable (BTC vault had no hyperliquidAddress() view until upgraded)
+    let hlAddress = ctx.perpAdapterAddress;
+    if (!hlAddress || hlAddress === ethers.ZeroAddress) {
+      hlAddress = await readHyperliquidAdapterAddress(ctx.kashYield, ctx.activePerpExchange);
+    }
     if (!hlAddress || hlAddress === ethers.ZeroAddress) {
       console.log('         ⚠️  Hyperliquid address not set — skipping HL deposit');
       return;
@@ -566,7 +571,10 @@ async function executeAaveRepayRisingFinal(ctx: OpsContext): Promise<void> {
       sf > 0n && sf < cap
         ? ` USDC shortfall ${fmtUsdc(sf)} was below SMALL_SWAP_SKIP_MAX_USDC (${fmtUsdc(cap)}), so the 11a ETH→USDC swap was skipped — send that USDC to KashYield and re-run.`
         : ' Fund KashYield with USDC and/or fix 11a spot liquidity, then re-run.';
-    throw new Error(`Rising tail: cannot repay Aave (debt ${fmtUsdc(ctx.aaveDebt)}, 0 USDC on KashYield).${tinyHint}`);
+    throw new Error(
+      `Rising tail: cannot repay Aave (debt ${fmtUsdc(ctx.aaveDebt)}, 0 spendable USDC after owner reserve).${tinyHint}` +
+        ' If USDC is marked as owner reserve, ensure ownerUsdcReserve ≥ shortfall or send USDC and call markOwnerUsdcDeposit, then re-run.',
+    );
   }
   if (amount === 0n) return;
   console.log(`         ${fmtUsdc(amount)}`);
@@ -615,10 +623,9 @@ const aaveRepayContractFirst: OpStep = {
 /**
  * 11b — Swap USDC → asset (falling price tail) after Aave repay.
  *
- * Spendable USDC = contractUsdc − FALLING_11B_USDC_RESERVE (env, default 2 USDC).
- * Skips swap when intended swap amount is &gt; 0 but strictly below that same threshold (dust).
- * - If asset short for redeem sizing: swap min(usdcNeeded, spendable).
- * - If asset already enough: swap all spendable (HL proceeds + PnL), subject to min-notional skip.
+ * Only swaps **usdcNeeded** for the redeem asset shortfall (`min(usdcNeeded, contractUsdc)`), not all deployable USDC.
+ * If `contractAsset` already covers `totalRedeemAsset`, swap size is **0** and USDC from HL / repay stays on the vault.
+ * No min-notional skip: any positive `usdcNeeded` (after cap) is swapped.
  *
  * Phase 2 redeem math on-chain: see batchProcessor comment on `currentNAV` / `exactNAV` / oracle timing.
  */
@@ -627,9 +634,11 @@ const dexSwapFromUsdc = (_lockedNAV: bigint | undefined): OpStep => ({
   substep: 'aave',
   refreshCtx: true,
   describe: (ctx) => {
-    const spend = falling11bSpendableUsdc(ctx);
-    const res = getFalling11bUsdcReserveUsdc6();
-    return `swap up to ${fmtUsdc(spend)} USDC (reserve ${fmtUsdc(res)}) → ${ctx.assetSymbol} (11b, falling price)`;
+    const u = computeFalling11bUsdcToSwap(ctx);
+    if (u === 0n) {
+      return `no USDC→${ctx.assetSymbol} swap (11b — asset covers redeem need or no deployable USDC)`;
+    }
+    return `swap ${fmtUsdc(u)} USDC → ${ctx.assetSymbol} (11b, falling price, redeem gap)`;
   },
   canSkip: async (ctx) => {
     const spotDex = await ctx.kashYield.spotDexAddress().catch(() => null);
@@ -639,15 +648,7 @@ const dexSwapFromUsdc = (_lockedNAV: bigint | undefined): OpStep => ({
     }
     if (falling11bSpendableUsdc(ctx) === 0n) return true;
     const usdcToSwap = computeFalling11bUsdcToSwap(ctx);
-    const cap = getFalling11bUsdcReserveUsdc6();
-    if (usdcToSwap > 0n && usdcToSwap < cap) {
-      console.log(
-        `         ↪ skip 11b USDC→${ctx.assetSymbol} — swap amount ${fmtUsdc(usdcToSwap)} < ${fmtUsdc(cap)} ` +
-          '(FALLING_11B_USDC_RESERVE min notional; fund ETH another way or raise env)',
-      );
-      return true;
-    }
-    return false;
+    return usdcToSwap === 0n;
   },
   execute: async (ctx) => {
     const spendable = falling11bSpendableUsdc(ctx);
@@ -656,17 +657,8 @@ const dexSwapFromUsdc = (_lockedNAV: bigint | undefined): OpStep => ({
       ctx.totalRedeemAsset > ctx.contractAsset ? ctx.totalRedeemAsset - ctx.contractAsset : 0n;
     const usdcToSwap = computeFalling11bUsdcToSwap(ctx);
     if (usdcToSwap === 0n) return;
-    const cap = getFalling11bUsdcReserveUsdc6();
-    if (usdcToSwap < cap) {
-      console.log(
-        `         ↪ skip 11b swap — ${fmtUsdc(usdcToSwap)} < ${fmtUsdc(cap)} (FALLING_11B_USDC_RESERVE)`,
-      );
-      return;
-    }
-    const res = getFalling11bUsdcReserveUsdc6();
     console.log(
-      `         swap ${fmtUsdc(usdcToSwap)} USDC (spendable≤${fmtUsdc(spendable)}, reserve ${fmtUsdc(res)})` +
-        (assetNeeded > 0n ? ` → ~${fmtAsset(assetNeeded, ctx)} for redeem gap` : ' → ETH (full HL excess after reserve)'),
+      `         swap ${fmtUsdc(usdcToSwap)} USDC (deployable≤${fmtUsdc(spendable)}) → ~${fmtAsset(assetNeeded, ctx)} for redeem gap`,
     );
     await execTx(
       'swapFromUsdc',
@@ -739,11 +731,16 @@ const aaveWithdrawPartial: OpStep = {
     const sf = usdcShortfallVsContract(ctx);
     const cap = getSmallSwapSkipMaxUsdc6();
     if (sf > 0n && sf < cap) {
+      if (await canSkipSmallSwapViaOwnerReserve(ctx, sf)) {
+        console.log(
+          `         ↪ skip partial Aave withdraw — shortfall ${fmtUsdc(sf)} < ${fmtUsdc(cap)} ` +
+            '(SMALL_SWAP_SKIP_MAX_USDC) and ownerUsdcReserve ≥ shortfall (coverUsdcShortfall path)',
+        );
+        return true;
+      }
       console.log(
-        `         ↪ skip partial Aave withdraw — USDC shortfall ${fmtUsdc(sf)} < ${fmtUsdc(cap)} ` +
-          '(SMALL_SWAP_SKIP_MAX_USDC); 11a swap skipped — use USDC on KashYield to finish repay)',
+        `         ↪ shortfall ${fmtUsdc(sf)} < ${fmtUsdc(cap)} but owner reserve cannot fully cover — running partial withdraw + 11a`,
       );
-      return true;
     }
     const spotDex = await ctx.kashYield.spotDexAddress().catch(() => null);
     if (!spotDex || spotDex === ethers.ZeroAddress) {
@@ -782,10 +779,16 @@ const dexSwapForUsdc: OpStep = {
     const sf = usdcShortfallVsContract(ctx);
     const cap = getSmallSwapSkipMaxUsdc6();
     if (sf > 0n && sf < cap) {
+      if (await canSkipSmallSwapViaOwnerReserve(ctx, sf)) {
+        console.log(
+          `         ↪ skip 11a swap — shortfall ${fmtUsdc(sf)} < ${fmtUsdc(cap)} USDC ` +
+            '(SMALL_SWAP_SKIP_MAX_USDC) and ownerUsdcReserve ≥ shortfall',
+        );
+        return true;
+      }
       console.log(
-        `         ↪ skip 11a swap (ETH→USDC) — shortfall ${fmtUsdc(sf)} < ${fmtUsdc(cap)} USDC (SMALL_SWAP_SKIP_MAX_USDC)`,
+        `         ↪ shortfall ${fmtUsdc(sf)} < ${fmtUsdc(cap)} USDC — running 11a (owner reserve cannot fully cover)`,
       );
-      return true;
     }
     const spotDex = await ctx.kashYield.spotDexAddress().catch(() => null);
     if (!spotDex || spotDex === ethers.ZeroAddress) {
@@ -807,6 +810,43 @@ const dexSwapForUsdc: OpStep = {
       console.log(`         (OPS_SWAP_GAS_LIMIT set — swap tx uses explicit gasLimit, real Uniswap on-chain)`);
     }
     await execTx('swapForUsdc', ctx.kashYield.swapForUsdc(toSell, swapOpts));
+  },
+};
+
+/**
+ * After 11a / partial-withdraw may be skipped (e.g. SMALL_SWAP_SKIP), residual Aave debt can remain
+ * while USDC is already on the vault but counted only in ownerUsdcReserve. coverUsdcShortfall is
+ * accounting-only: it releases up to min(shortfall, reserve) into the bot's spendable contractUsdc.
+ */
+const risingTailCoverOwnerUsdc: OpStep = {
+  id: 'rising_tail_cover_owner_usdc',
+  substep: 'aave',
+  refreshCtx: true,
+  describe: (ctx) => {
+    const sf = usdcShortfallVsContract(ctx);
+    return `cover USDC shortfall from owner reserve up to ${fmtUsdc(sf)} (coverUsdcShortfall)`;
+  },
+  canSkip: async (ctx) => {
+    if (ctx.aaveDebt === 0n) return true;
+    if (usdcShortfallVsContract(ctx) === 0n) return true;
+    let reserve = 0n;
+    try {
+      reserve = BigInt((await ctx.kashYield.ownerUsdcReserve()).toString());
+    } catch {
+      return true;
+    }
+    return reserve === 0n;
+  },
+  execute: async (ctx) => {
+    const sf = usdcShortfallVsContract(ctx);
+    if (sf === 0n) return;
+    const reserve = BigInt((await ctx.kashYield.ownerUsdcReserve()).toString());
+    const amount = sf < reserve ? sf : reserve;
+    if (amount === 0n) return;
+    console.log(
+      `         coverUsdcShortfall ${fmtUsdc(amount)} (shortfall ${fmtUsdc(sf)}, ownerUsdcReserve ${fmtUsdc(reserve)})`,
+    );
+    await execTx('coverUsdcShortfall', ctx.kashYield.coverUsdcShortfall(amount));
   },
 };
 
@@ -1157,11 +1197,13 @@ export function buildRedeemTail(tail: RedeemTail, lockedNAV: bigint | undefined)
 
     case 'rising':
       // Repay with all contract USDC first (idle USDC + HL proceeds) to shrink HL-fee / bridge gaps,
-      // then partial Aave withdraw → swap asset to USDC (11a) → repay remainder → remaining Aave withdraw
+      // then partial Aave withdraw → swap asset to USDC (11a) → owner reserve cover if 11a skipped →
+      // repay remainder → remaining Aave withdraw
       return [
         aaveRepayContractFirst,
         aaveWithdrawPartial,
         dexSwapForUsdc,
+        risingTailCoverOwnerUsdc,
         aaveRepayRisingFinal,
         aaveWithdraw('remaining'),
       ];
@@ -1226,59 +1268,144 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** 100% of KASH supply redeemed this batch — drain HL spot USDC, not just “enough to repay Aave”. */
+function isFullRedeemForHlSweep(ctx: OpsContext): boolean {
+  return ctx.redeemFraction >= BigInt(1e18);
+}
+
+/**
+ * How much USDC to pull from HL during settlement retries. Partial redeems only pull up to the Aave
+ * debt gap so we do not strand strategy collateral on HL incorrectly. Full redeems always pull the
+ * full reported HL spot balance so pre-funded vault USDC cannot leave HL USDC behind.
+ */
+function hlSettlementWithdrawAmount(ctx: OpsContext, debtRemaining: bigint): bigint {
+  if (ctx.hlUsdcBalance === 0n) return 0n;
+  if (isFullRedeemForHlSweep(ctx)) return ctx.hlUsdcBalance;
+  if (debtRemaining <= 0n) return 0n;
+  return ctx.hlUsdcBalance < debtRemaining ? ctx.hlUsdcBalance : debtRemaining;
+}
+
+function getHlSweepDustUsdc6(): bigint {
+  try {
+    const u = process.env.HL_SWEEP_DUST_USDC || '0.01';
+    const p = ethers.parseUnits(u, 6);
+    return p > 0n ? p : 10_000n;
+  } catch {
+    return 10_000n;
+  }
+}
+
+/**
+ * After Aave debt is covered, USDC can still sit on HL if retries used min(hl, debtGap) or the vault
+ * was pre-funded. For full redeems, sweep remaining HL spot USDC to KashYield (with polling).
+ */
+async function sweepRemainingHlUsdcAfterFullRedeem(
+  ctx: OpsContext,
+  lockedNAV: bigint | undefined,
+): Promise<OpsContext> {
+  const defaultSweep = isFullRedeemForHlSweep(ctx);
+  const want = (process.env.HL_REDEEM_SWEEP_REMAINING_USDC || (defaultSweep ? 'true' : 'false')).toLowerCase() === 'true';
+  if (!want) return ctx;
+
+  const dust = getHlSweepDustUsdc6();
+  const maxRounds = Math.max(1, parseInt(process.env.HL_USDC_SWEEP_MAX_ROUNDS || '15', 10));
+  const pollMs = Math.max(1000, parseInt(process.env.HL_WITHDRAW_WAIT_POLL_MS || '20000', 10));
+  let fresh = ctx;
+  let rounds = 0;
+
+  while (rounds < maxRounds && fresh.hlUsdcBalance > dust) {
+    rounds++;
+    const amt = fresh.hlUsdcBalance;
+    console.log(`   ↪ HL USDC sweep #${rounds}: withdraw ${fmtUsdc(amt)} (full spot balance)`);
+    try {
+      await execHlWithdrawToKashYield(fresh, `withdrawFromHyperliquid(sweep#${rounds})`, amt);
+    } catch (e: any) {
+      console.warn(`      ⚠️  HL sweep #${rounds} failed: ${e?.message ?? e}`);
+    }
+    await sleep(pollMs);
+    fresh = await snapshotOpsContext(fresh.kashYield, fresh.provider, fresh.batchCycle, lockedNAV);
+    console.log(`      ↪ sweep status: contractUsdc=${fmtUsdc(fresh.contractUsdc)}, hlUsdc=${fmtUsdc(fresh.hlUsdcBalance)}`);
+  }
+
+  if (fresh.hlUsdcBalance > dust) {
+    console.warn(
+      `   ⚠️  HL still holds ${fmtUsdc(fresh.hlUsdcBalance)} USDC after ${maxRounds} sweep rounds — ` +
+        'bridge may be slow; re-run ops or withdraw manually.',
+    );
+  } else if (rounds > 0) {
+    console.log(`   ✅ HL USDC sweep complete (≤${fmtUsdc(dust)} dust)`);
+  }
+  return fresh;
+}
+
 async function waitForHlWithdrawSettlementIfNeeded(
   ctx: OpsContext,
   lockedNAV: bigint | undefined,
 ): Promise<OpsContext> {
   const enabled = (process.env.HL_WITHDRAW_WAIT_ENABLED || 'true').toLowerCase() !== 'false';
-  if (!enabled) return ctx;
-  if (ctx.aaveDebt === 0n || ctx.contractUsdc >= ctx.aaveDebt) return ctx;
   const feeTolerance = getHlWithdrawFeeToleranceUsdc6();
+
+  if (!enabled) {
+    return sweepRemainingHlUsdcAfterFullRedeem(ctx, lockedNAV);
+  }
+
+  let fresh = ctx;
+
+  if (fresh.aaveDebt === 0n) {
+    return sweepRemainingHlUsdcAfterFullRedeem(fresh, lockedNAV);
+  }
+
+  const debtGap0 = fresh.aaveDebt > fresh.contractUsdc ? fresh.aaveDebt - fresh.contractUsdc : 0n;
+  if (debtGap0 <= feeTolerance) {
+    // Debt already covered (e.g. pre-funded vault USDC) — still sweep HL so USDC is not stranded.
+    return sweepRemainingHlUsdcAfterFullRedeem(fresh, lockedNAV);
+  }
 
   const maxMs = Math.max(0, parseInt(process.env.HL_WITHDRAW_WAIT_MAX_MS || '360000', 10)); // default 6 min
   const pollMs = Math.max(1000, parseInt(process.env.HL_WITHDRAW_WAIT_POLL_MS || '20000', 10)); // default 20s
-  if (maxMs === 0) return ctx;
+  if (maxMs === 0) {
+    return sweepRemainingHlUsdcAfterFullRedeem(fresh, lockedNAV);
+  }
 
   console.log(
     `   ⏳ Waiting for HL withdrawal settlement (up to ${(maxMs / 1000).toFixed(0)}s, poll ${(pollMs / 1000).toFixed(0)}s)` +
-    ` — debt=${fmtUsdc(ctx.aaveDebt)}, contractUsdc=${fmtUsdc(ctx.contractUsdc)}`
+    ` — debt=${fmtUsdc(fresh.aaveDebt)}, contractUsdc=${fmtUsdc(fresh.contractUsdc)}`,
   );
 
   const started = Date.now();
   let attempts = 0;
   let withdrawInitiated = false;
-  let fresh = ctx;
+
   while (Date.now() - started < maxMs) {
     const debtRemaining = fresh.aaveDebt > fresh.contractUsdc ? fresh.aaveDebt - fresh.contractUsdc : 0n;
     if (debtRemaining <= feeTolerance) break;
 
-    if (!withdrawInitiated && fresh.hlUsdcBalance > 0n) {
+    const pullAmt = hlSettlementWithdrawAmount(fresh, debtRemaining);
+
+    if (!withdrawInitiated && pullAmt > 0n) {
       try {
-        const requestAmt = fresh.hlUsdcBalance < debtRemaining ? fresh.hlUsdcBalance : debtRemaining;
-        await maybeInitiateHlOffchainWithdraw(fresh, requestAmt);
+        await maybeInitiateHlOffchainWithdraw(fresh, pullAmt);
         withdrawInitiated = true;
       } catch (e: any) {
         console.warn(`      ⚠️  HL off-chain withdraw initiation failed: ${e?.message ?? e}`);
       }
     }
 
-    // Retry pull from adapter if HL-reported USDC is available.
-    if (fresh.hlUsdcBalance > 0n) {
-      const toPull = fresh.hlUsdcBalance < debtRemaining ? fresh.hlUsdcBalance : debtRemaining;
-      if (toPull > 0n) {
-        attempts++;
-        console.log(`      ↪ settlement retry #${attempts}: withdraw ${fmtUsdc(toPull)} from HL`);
-        try {
-          await execHlWithdrawToKashYield(fresh, `withdrawFromHyperliquid(retry#${attempts})`, toPull);
-        } catch (e: any) {
-          console.warn(`      ⚠️  settlement retry #${attempts} failed: ${e?.message ?? e}`);
-        }
+    if (fresh.hlUsdcBalance > 0n && pullAmt > 0n) {
+      attempts++;
+      console.log(`      ↪ settlement retry #${attempts}: withdraw ${fmtUsdc(pullAmt)} from HL`);
+      try {
+        await execHlWithdrawToKashYield(fresh, `withdrawFromHyperliquid(retry#${attempts})`, pullAmt);
+      } catch (e: any) {
+        console.warn(`      ⚠️  settlement retry #${attempts} failed: ${e?.message ?? e}`);
       }
     }
 
     await sleep(pollMs);
     fresh = await snapshotOpsContext(fresh.kashYield, fresh.provider, fresh.batchCycle, lockedNAV);
-    console.log(`      ↪ settlement status: contractUsdc=${fmtUsdc(fresh.contractUsdc)}, aaveDebt=${fmtUsdc(fresh.aaveDebt)}, hlUsdc=${fmtUsdc(fresh.hlUsdcBalance)}`);
+    console.log(
+      `      ↪ settlement status: contractUsdc=${fmtUsdc(fresh.contractUsdc)}, aaveDebt=${fmtUsdc(fresh.aaveDebt)}, hlUsdc=${fmtUsdc(fresh.hlUsdcBalance)}`,
+    );
     const shortfallNow = fresh.aaveDebt > fresh.contractUsdc ? fresh.aaveDebt - fresh.contractUsdc : 0n;
     if (shortfallNow <= feeTolerance) break;
   }
@@ -1288,17 +1415,16 @@ async function waitForHlWithdrawSettlementIfNeeded(
     const missing = fresh.aaveDebt - fresh.contractUsdc;
     throw new Error(
       `HL withdraw settlement incomplete: contract USDC ${fmtUsdc(fresh.contractUsdc)} < Aave debt ${fmtUsdc(fresh.aaveDebt)} ` +
-      `(shortfall ${fmtUsdc(missing)}). Stopping before tail classification; wait for HL USDC to arrive, then re-run ops.`
+        `(shortfall ${fmtUsdc(missing)}). Stopping before tail classification; wait for HL USDC to arrive, then re-run ops.`,
     );
+  }
+  if (finalShortfall > 0n) {
+    console.log(`   ✅ HL settlement wait complete within fee tolerance: shortfall=${fmtUsdc(finalShortfall)} (tolerance ${fmtUsdc(feeTolerance)})`);
   } else {
-    if (finalShortfall > 0n) {
-      console.log(`   ✅ HL settlement wait complete within fee tolerance: shortfall=${fmtUsdc(finalShortfall)} (tolerance ${fmtUsdc(feeTolerance)})`);
-    } else {
-      console.log('   ✅ HL settlement wait complete: contract USDC now covers Aave debt');
-    }
+    console.log('   ✅ HL settlement wait complete: contract USDC now covers Aave debt');
   }
 
-  return fresh;
+  return sweepRemainingHlUsdcAfterFullRedeem(fresh, lockedNAV);
 }
 
 // ---------------------------------------------------------------------------

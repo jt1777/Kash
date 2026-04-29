@@ -16,7 +16,7 @@
 import { ethers } from 'ethers';
 import { config } from '../config';
 import { kashYieldABI } from '../contracts/kashYieldABI';
-import { getAaveBorrowedAmountV3 } from '../batch/opsContext';
+import { getAaveBorrowedAmountV3, readHyperliquidAdapterAddress } from '../batch/opsContext';
 
 const USDC_DECIMALS = 6;
 
@@ -56,12 +56,7 @@ async function main() {
   }
   console.log('Confirmed as owner.\n');
 
-  let hlAddress: string;
-  try {
-    hlAddress = await kashYield.hyperliquidAddress();
-  } catch {
-    hlAddress = ethers.ZeroAddress;
-  }
+  const hlAddress = await readHyperliquidAdapterAddress(kashYield);
   if (!hlAddress || hlAddress === ethers.ZeroAddress) {
     throw new Error('Hyperliquid address not set on contract. Nothing to recover.');
   }

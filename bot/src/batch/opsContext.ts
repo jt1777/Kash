@@ -205,6 +205,48 @@ export async function computeTotalRedeemAsset(
 }
 
 // ---------------------------------------------------------------------------
+// Perp / Hyperliquid adapter address (ETH vault has hyperliquid(); BTC lacked it historically)
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the HL adapter address for bot checks and tooling. Prefer the active perp
+ * exchange; fall back to hyperliquidAddress() (KashYieldETH); then perpExchanges("HL").
+ */
+export async function readHyperliquidAdapterAddress(
+  kashYield: ethers.Contract,
+  cachedActivePerpExchange?: string,
+): Promise<string> {
+  const asAddr = (x: unknown): string => {
+    if (typeof x === 'string') return x;
+    if (x == null) return '';
+    return String(x);
+  };
+  let activeName = (cachedActivePerpExchange ?? '').trim();
+  if (!activeName) {
+    try {
+      activeName = asAddr(await kashYield.activePerpExchange()).trim();
+    } catch {
+      activeName = '';
+    }
+  }
+  if (activeName) {
+    try {
+      const a = asAddr(await kashYield.perpExchanges(activeName));
+      if (a && a !== ethers.ZeroAddress) return a;
+    } catch { /* */ }
+  }
+  try {
+    const a = asAddr(await kashYield.hyperliquidAddress());
+    if (a && a !== ethers.ZeroAddress) return a;
+  } catch { /* KashYieldBtc before hyperliquidAddress() was added */ }
+  try {
+    const a = asAddr(await kashYield.perpExchanges('HL'));
+    if (a && a !== ethers.ZeroAddress) return a;
+  } catch { /* */ }
+  return '';
+}
+
+// ---------------------------------------------------------------------------
 // Context snapshot
 // ---------------------------------------------------------------------------
 
@@ -309,9 +351,7 @@ export async function snapshotOpsContext(
     activePerpExchange = await kashYield.activePerpExchange();
   } catch { activePerpExchange = ''; }
   try {
-    perpAdapterAddress = activePerpExchange
-      ? await kashYield.perpExchanges(activePerpExchange)
-      : await kashYield.hyperliquidAddress?.().catch(() => '') ?? '';
+    perpAdapterAddress = await readHyperliquidAdapterAddress(kashYield, activePerpExchange);
   } catch { perpAdapterAddress = ''; }
   if (perpAdapterAddress && perpAdapterAddress !== ethers.ZeroAddress) {
     try {

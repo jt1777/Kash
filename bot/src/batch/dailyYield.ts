@@ -1,6 +1,7 @@
 import { ethers } from 'ethers';
 import type { DailyYield } from '../types';
 import { config } from '../config';
+import { readHyperliquidAdapterAddress } from './opsContext';
 
 // Mock Aave V3 views (optional – only present on MockAaveV3)
 const MOCK_AAVE_VIEWS_ABI = [
@@ -58,7 +59,7 @@ export async function getDailyYield(
   // ----- MockHyperliquid: accrued funding (USD 18, positive = we receive)
   if (kashYield) {
     try {
-      const hlAddress = await kashYield.hyperliquidAddress();
+      const hlAddress = await readHyperliquidAdapterAddress(kashYield);
       if (hlAddress && hlAddress !== ethers.ZeroAddress) {
         const hl = new ethers.Contract(hlAddress, MOCK_HL_VIEWS_ABI, provider);
         const kashYieldAddress = await kashYield.getAddress?.() ?? config.kashYieldAddress;

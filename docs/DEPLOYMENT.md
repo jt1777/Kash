@@ -80,9 +80,24 @@ On mainnet, Hyperliquid is separate from Arbitrum execution. The **HyperliquidAd
 |--------|----------------|
 | Deposit USDC | On-chain: USDC to bridge `0x2Df1c51E...` |
 | Spot / perp trades | Off-chain: HL API |
-| Withdraw USDC | HL withdrawal settles back to Arbitrum (~minutes) |
+| Withdraw USDC | HL withdrawal settles back to Arbitrum (~minutes); **destination address is operator-chosen** |
 
 Ops scripts `04`–`07` behave as API-driven steps on mainnet, not synchronous mock contract calls.
+
+### Hyperliquid USDC withdrawals and custody
+
+Hyperliquid bridges USDC to **whichever Arbitrum address you specify** (HL API `withdraw3` or the web app “withdraw”). KashYield then pulls USDC **from the HyperliquidAdapter** via `withdrawFromHyperliquid` → `withdrawCollateral`, so **on-chain float only moves if USDC actually sits on the adapter** after the bridge.
+
+**Operational rules**
+
+- **Always** set the HL withdrawal **destination** to your deployed **HyperliquidAdapter** address for protocol float—not the KashYield vault by default unless your runbook explicitly allows it, and **not** an operator EOA unless you intend temporary custody outside the adapter.
+- Prefer **automated** withdrawals: bot `withdraw3` with `destination =` adapter (same pattern as `maybeInitiateHlOffchainWithdraw` in `bot/src/batch/opsPlaybooks.ts`). If you use the **HL web app**, open the destination field and **paste the adapter address**; do **not** assume the default “linked wallet” is correct.
+- After USDC lands on Arbitrum, confirm **`USDC.balanceOf(adapter)`** (script `08-withdraw-usdc-from-perp.js` prints this) before expecting `08` to move meaningful balances.
+
+**`directDepositMode` and why the bot EOA is risky**
+
+- **`directDepositMode = true`:** Deposits forward USDC to `hlAccount` (typically the **bot EOA**); that EOA is also the **Hyperliquid master account** in the simpler setup. HL’s UI often defaults withdrawals to **that same EOA**, so **user NAV can bridge to the hot wallet** by mistake. Treat that as **mis-routed protocol custody**, not owner treasury—recover by forwarding USDC on Arbitrum **EOA → adapter**, then run ops `14` (optional) and `08` as usual. **Do not** call `markOwnerUsdcDeposit` for this unless you are intentionally recording **owner/treasury** reserves (see owner reserves section above).
+- **`directDepositMode = false` (production recommended):** The HL L1 account should be the **adapter contract’s Arbitrum address**; deposits go to the bridge as **adapter-as-account**. Custody lines up with on-chain bookkeeping and avoids “HL account == bot wallet” confusion. **Requires HL agent (and related) setup** so the bot key can sign HL API actions for that account—see `contracts/adapters/HyperliquidAdapter.sol` (file header), `bot/README.md` (“Mainnet Hyperliquid Setup”), and `docs/` / ops runbooks before going live.
 
 ---
 
@@ -151,6 +166,8 @@ Add **BTC product** lines when operating the BTC vault:
 # KASH_YIELD_BTC_ADDRESS=<KashYieldBtc>
 # KASH_TOKEN_BTC=<KashTokenBtc>
 ```
+
+**Batch bot (`bot/package.json` → `npm run start`):** With **`PRODUCT=btc`** (or `product` / `Product` — same as in code), **`CHAIN_ID=42161`**, and **`KASH_YIELD_BTC_ADDRESS`** set, `node dist/index.js` loads **`KashYieldBtc`**, uses wBTC / **`getBtcPrice`**, HL short symbol **BTC**, and the same ops playbooks with 8-decimal asset math. Run **`npm run build`** after pulling changes, then **`npm run start`** from **`bot/`**. Ops scripts under `bot/scripts/ops/` also read **`PRODUCT`** (same variants) from **`bot/.env`**.
 
 ### `frontend/.env.local`
 
@@ -246,9 +263,35 @@ Save to root `.env`:
 HL_ADAPTER_ADDRESS_ETH=<HyperliquidAdapter from output>
 ```
 
-### Step 4a — Set direct deposit mode (required)
+### Step 4a — Hyperliquid adapter custody mode (`directDepositMode`)
 
-Configure the adapter so the HL account is the bot EOA (`directDepositMode=true`, `hlAccount=<bot>`). From repo root:
+Pick **one** pattern and complete the matching HL setup **before** relying on mainnet ops.
+
+**Option A — Production-style (recommended): adapter as Hyperliquid account**
+
+- Set **`directDepositMode = false`** so USDC deposits use the **bridge → adapter-as-HL-account** path and HL ledger identity aligns with the adapter contract.
+- Complete **HL agent authorisation** (and any other HL prerequisites) so the bot can execute API trades and **`withdraw3` with `destination =`** the adapter. If this is incomplete, deposits/sync/withdraw flows will not match this guide’s expectations.
+- From repo root:
+
+```bash
+npx hardhat console --network arbitrumOne
+```
+
+```javascript
+const [signer] = await ethers.getSigners()
+const adapter = await ethers.getContractAt("HyperliquidAdapter", "<HL_ADAPTER_ADDRESS_ETH>", signer)
+const tx = await adapter.setDirectDepositMode(false, "0x0000000000000000000000000000000000000000")
+const receipt = await tx.wait()
+console.log("directDepositMode =", await adapter.directDepositMode())
+console.log("hlAccount =", await adapter.hlAccount())
+```
+
+**Readback:** `directDepositMode` is **`false`**.
+
+**Option B — Bootstrap / simplified: bot EOA as Hyperliquid account**
+
+- Set **`directDepositMode = true`** and **`hlAccount =`** bot EOA. This avoids adapter signing/agent work early on but **increases operational risk**: the HL web app often defaults withdrawals to the **bot wallet**, not the adapter (see **Hyperliquid USDC withdrawals and custody** above).
+- From repo root:
 
 ```bash
 npx hardhat console --network arbitrumOne
@@ -263,13 +306,14 @@ console.log("directDepositMode =", await adapter.directDepositMode())
 console.log("hlAccount =", await adapter.hlAccount())
 ```
 
-**How to confirm success**
+**Readback:** `directDepositMode` is **`true`** and **`hlAccount`** matches your bot EOA (may be checksummed).
+
+**How to confirm success (both options)**
 
 - **`receipt.status === 1`** — transaction succeeded (in Hardhat/ethers v6 this appears as `status: 1n` or `1` on the receipt object). **`status: 0`** means the call reverted.
 - **`receipt.contractAddress === null`** — normal for this step: you are calling an existing adapter, not deploying a new contract.
 - **`receipt.to`** — must match your **`HL_ADAPTER_ADDRESS_ETH`** (the adapter you configured).
 - **On-chain check:** paste **`receipt.hash`** into Arbiscan; the UI should show **Success**.
-- **Readback:** `directDepositMode` should print **`true`** and **`hlAccount`** should match your bot EOA (may be checksummed).
 
 ### Step 5 — Set Chainlink ETH oracle (recommended)
 
@@ -357,7 +401,7 @@ npx hardhat run scripts/diagnose-eth.js --network arbitrumOne
 
 - [ ] UniswapV3Adapter deployed; `UNISWAP_ADAPTER_ADDRESS` saved
 - [ ] KashYieldETH deployed; `KASH_YIELD_ETH_ADDRESS` / `KASH_TOKEN_ETH` saved
-- [ ] HyperliquidAdapter (ETH) deployed; `HL_ADAPTER_ADDRESS_ETH` saved; **direct deposit mode** set
+- [ ] HyperliquidAdapter (ETH) deployed; `HL_ADAPTER_ADDRESS_ETH` saved; **Hyperliquid custody mode** set per Step 4a (**`directDepositMode`** / HL agent alignment)
 - [ ] `setEthOracle.js` run (recommended)
 - [ ] _(Optional)_ `setExchangeSwitchDelay.js` for 48h future proposals
 - [ ] `setHyperliquid.js` + `setActivePerpExchange.js` — HL active
@@ -418,13 +462,26 @@ Save:
 HL_ADAPTER_ADDRESS_BTC=<HyperliquidAdapter from output>
 ```
 
-### Step B3 — Direct deposit mode (BTC adapter)
+### Step B3 — Hyperliquid adapter custody mode (BTC adapter)
 
-Same pattern as ETH, using `HL_ADAPTER_ADDRESS_BTC`:
+Same **Option A / Option B** choice as **Step 4a**, but target **`HL_ADAPTER_ADDRESS_BTC`**.
+
+**Option A — `directDepositMode = false`**
 
 ```bash
 npx hardhat console --network arbitrumOne
 ```
+
+```javascript
+const [signer] = await ethers.getSigners()
+const adapter = await ethers.getContractAt("HyperliquidAdapter", "<HL_ADAPTER_ADDRESS_BTC>", signer)
+const tx = await adapter.setDirectDepositMode(false, "0x0000000000000000000000000000000000000000")
+const receipt = await tx.wait()
+console.log("directDepositMode =", await adapter.directDepositMode())
+console.log("hlAccount =", await adapter.hlAccount())
+```
+
+**Option B — `directDepositMode = true`, `hlAccount =` bot EOA**
 
 ```javascript
 const [signer] = await ethers.getSigners()
@@ -435,7 +492,7 @@ console.log("directDepositMode =", await adapter.directDepositMode())
 console.log("hlAccount =", await adapter.hlAccount())
 ```
 
-**How to confirm success** — same as Step 4a: **`receipt.status === 1`**, **`receipt.to`** equals **`HL_ADAPTER_ADDRESS_BTC`**, **`contractAddress`** stays **`null`**, Arbiscan shows **Success** for **`receipt.hash`**, and readback shows **`directDepositMode === true`** and the expected **`hlAccount`**.
+**How to confirm success** — same receipt checks as Step 4a: **`receipt.status === 1`**, **`receipt.to`** equals **`HL_ADAPTER_ADDRESS_BTC`**, **`contractAddress`** stays **`null`**, Arbiscan shows **Success** for **`receipt.hash`**, and readback matches the option you chose (`false` vs `true` + `hlAccount`).
 
 ### Step B4 — BTC oracle
 
@@ -507,7 +564,7 @@ npx hardhat verify --network arbitrumOne <HL_ADAPTER_ADDRESS_BTC> \
 ### BTC deployment — summary checklist
 
 - [ ] `deploy-kashyieldbtc.js` — `KASH_YIELD_BTC_ADDRESS`, `KASH_TOKEN_BTC`, Chainlink BTC oracle wired
-- [ ] HyperliquidAdapter (BTC) deployed; `HL_ADAPTER_ADDRESS_BTC` saved; **direct deposit mode** set
+- [ ] HyperliquidAdapter (BTC) deployed; `HL_ADAPTER_ADDRESS_BTC` saved; **Hyperliquid custody mode** set per Step B3 (**`directDepositMode`** / HL agent alignment)
 - [ ] _(Optional)_ `setExchangeSwitchDelay.js` on BTC vault
 - [ ] `setHyperliquid.js` + `setActivePerpExchange.js` — HL active for BTC
 - [ ] `setAllowedSpotDexRouter.js` + `setSpotDex.js` with `PRODUCT=btc` — same UniswapV3Adapter as ETH
@@ -562,9 +619,9 @@ npx hardhat run scripts/checkBalance.js --network arbitrumOne
 
 ## Ops scripts on mainnet
 
-Use **`--network arbitrumOne`**.
+Use **`--network arbitrumOne`**. Set **`PRODUCT=btc`** (in the shell or **`bot/.env`**) when targeting **`KashYieldBtc`** so scripts resolve **`KASH_YIELD_BTC_ADDRESS`** and wBTC decimals.
 
-HL trading steps (`04`–`07`) use the **Hyperliquid API** on mainnet; deposit/withdraw and Aave steps remain on-chain on Arbitrum. See repository ops docs for details.
+HL trading steps (`04`–`07`) use the **Hyperliquid API** on mainnet; deposit/withdraw and Aave steps remain on-chain on Arbitrum. **HL → Arbitrum USDC withdrawals must target the HyperliquidAdapter** (see **Hyperliquid USDC withdrawals and custody** above); script `08-withdraw-usdc-from-perp.js` only forwards USDC that has **already** landed on the adapter. See `bot/scripts/ops/README.md` for per-script usage.
 
 ---
 
