@@ -144,11 +144,10 @@ export const config = {
   /** When true, allow running steps on an already-processed batch (e.g. --step=ops to fix HL/Aave state). Use --allow-processed or ALLOW_PROCESSED_BATCH=true. Only ops (and hl/aave) are allowed on processed batches. */
   allowProcessedBatch: process.argv.includes('--allow-processed') || process.env.ALLOW_PROCESSED_BATCH === 'true',
   /**
-   * Pre-computed NAV to use when running individual steps (--step=ops or --step=nav).
-   * Normally the full batch run computes this before ops and threads it through automatically.
-   * When stepping through manually, pass the value logged as "NAV locked for this batch" so
-   * the withdrawal sizing and updateNAV call use the pre-ops snapshot rather than a
-   * post-ops recalculation.  Use --locked-nav=<18-decimal bigint> or LOCKED_NAV=<value>.
+   * Optional NAV override when running single steps (`--locked-nav` / `LOCKED_NAV`).
+   * • `--step=ops`: Phase-1-era NAV for playbook sizing (defaults to on-chain `currentNAV`).
+   * • `--step=nav`: settlement `updateNAV` argument (defaults to `computeNewNAV()` at run time).
+   * • `--step=mark-done`: redeem-asset check sizing (defaults to on-chain `currentNAV` after nav).
    * Example: --locked-nav=1050000000000000000  (= $1.05 per KASH, 18 decimals)
    */
   lockedNav: (() => {

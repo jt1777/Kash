@@ -286,27 +286,26 @@ Shows:
 ### Five-step batch flow
 The batch is split into five steps so each can be run individually. If any step errors, fix the issue and re-run that step (or the next). Default remains a full run (all five in sequence).
 
+**Two `updateNAV` calls per full batch (starting from phase 0):** (1) **pre-Phase-1** MTM so on-chain Phase 1 sees fresh `currentNAV`; (2) **post-ops settlement** MTM so Phase 2 mint/redeem uses balances after fees and slippage.
+
 | Step | Name        | Action |
 |------|-------------|--------|
-| —    | *(pre-step)*| Compute NAV snapshot before any ops (see below) |
-| 1    | `phase1`    | Call `performUpkeep()` (Phase 1 indicative; batch moves to phase 1) |
-| 2    | `ops`       | Handle NET_MINT/NET_REDEEM (HL + Aave) |
-| 3    | `nav`       | Call `updateNAV(lockedNAV)` using the pre-ops snapshot |
-| 4    | `mark-done` | Call `markBatchOpsDone(batchCycle)` (batch moves to phase 2) |
-| 5    | `phase2`    | Run Phase 2 distribution (mint KASH, pay redeemers) |
+| —    | *(pre-Phase-1)* | `computeNewNAV` → **`updateNAV`** (Phase-1-era MTM on-chain) |
+| 1    | `phase1`    | `performUpkeep()` after the above (Phase 1; batch moves to phase 1) |
+| 2    | `ops`       | NET_MINT/NET_REDEEM; sizing uses **Phase-1-era** NAV (on-chain `currentNAV` after step 1) |
+| 3    | `nav`       | `computeNewNAV` post-ops → **`updateNAV` (settlement)** for Phase 2 |
+| 4    | `mark-done` | `markBatchOpsDone(batchCycle)` (batch moves to phase 2) |
+| 5    | `phase2`    | Phase 2 distribution at **settlement** `currentNAV` |
 
-#### Pre-ops NAV snapshot
+#### Pre-Phase-1 vs settlement NAV
 
-Before Phase 1 runs, the bot computes today's NAV from live Aave/Hyperliquid state and logs it:
+The bot computes NAV from live Aave/Hyperliquid state **before Phase 1** and calls **`updateNAV`** so `batchTotalRedeemValueUSD` / net signals use today’s MTM. **After ops**, it recomputes NAV and calls **`updateNAV` again** so Phase 2 aligns with post-trade balances. Phase 1 chain totals and Phase 2 payout can differ by the NAV and supply change over the ops window — not by a single “locked pre-ops” number that ignores realized costs.
 
-```
-📊 Computing NAV (pre-ops snapshot)...
-   NAV locked for this batch: $1.0523... per KASH
-```
+**Manual `--step=phase1`:** runs pre-Phase-1 `updateNAV` + `performUpkeep()` (two txs for that step).
 
-This value is used unchanged for `updateNAV()` in step 3 and therefore for Phase 2 settlement. It is **not** recomputed after the ops step, because the ops (Aave deposits/borrows, HL position changes) alter the live Aave yield figures and HL funding readings — recomputing after would produce a post-ops-tainted NAV that includes the cost and slippage of that day's capital deployment.
+**`--locked-nav`:** overrides **Phase-1-era** sizing on `--step=ops` if needed; overrides **settlement** `updateNAV` on `--step=nav`; on **`--step=mark-done`** overrides the redeem-asset check (default: on-chain `currentNAV` after `nav`).
 
-**Implication for full redemptions:** when 100% of KASH is redeemed, the Aave withdrawal step drains the entire remaining position (not a calculated amount) to sweep any accrued interest and cover any HL slippage gap, ensuring Phase 2 can pay redeemers in full at the locked NAV price.
+**Implication for full redemptions:** the playbook still targets enough asset on the vault for Phase 2 at **settlement** NAV; use `scripts/ops/16-phase2-redeem-shortfall.js` when borderline.
 
 **How the bot picks the target batch (no batch number needed)**  
 The bot does not detect "failure" directly; it detects **incomplete** batches from on-chain state. Each run it:
@@ -368,28 +367,27 @@ npm start -- --batch=20523 --step=aave --allow-processed
 | `--step=1` … `--step=5` | — | Numeric shorthand for steps 1–5 |
 | `--batch=N` | `BATCH_CYCLE=N` | Target a specific batch cycle number |
 | `--allow-processed` | `ALLOW_PROCESSED_BATCH=true` | Allow ops steps on an already-finalized batch |
-| `--locked-nav=<bigint>` | `LOCKED_NAV=<bigint>` | Supply the pre-ops NAV (18 decimals) when stepping through manually |
+| `--locked-nav=<bigint>` | `LOCKED_NAV=<bigint>` | Optional override (18‑dec): ops sizing, settlement `nav`, or `mark-done` check — see batch flow section |
 
 If the batch is in the wrong phase for the requested step, the bot exits with a clear message (e.g. `"Batch 20524 is in phase 0; run step phase1 first"`). Fix the prerequisite step, then re-run.
 
 #### Using `--locked-nav` for manual step-through
 
-When the full batch runs automatically, the pre-ops NAV is computed and threaded through all steps internally. When stepping through manually (e.g. for recovery or debugging), pass the same value via `--locked-nav` so `--step=ops` and `--step=nav` use the correct pre-ops price:
+When stepping through manually, `--locked-nav` is **optional** at each step:
+
+- **`--step=ops`**: defaults to on-chain `currentNAV` after pre-Phase-1 `updateNAV`; pass `--locked-nav` only if that on-chain value is wrong for recovery.
+- **`--step=nav`**: defaults to `computeNewNAV()` at run time (**settlement**); pass `--locked-nav` to force the `updateNAV` argument.
+- **`--step=mark-done`**: defaults to on-chain `currentNAV` after settlement `nav`.
 
 ```bash
-# Run a full batch first (or use --step=nav without --locked-nav) to see the current NAV:
-#   📊 Computing NAV (pre-ops snapshot)...
-#      NAV locked for this batch: $1.0523... per KASH
-
-# Then step through manually, passing that value to ops and nav:
 npm start -- --batch=20523 --step=phase1
-npm start -- --batch=20523 --step=ops       --locked-nav=1052300000000000000
-npm start -- --batch=20523 --step=nav       --locked-nav=1052300000000000000
+npm start -- --batch=20523 --step=ops
+npm start -- --batch=20523 --step=nav
 npm start -- --batch=20523 --step=mark-done
 npm start -- --batch=20523 --step=phase2
 ```
 
-The value is the NAV in 18-decimal fixed-point (e.g. `$1.0523` = `1052300000000000000`). If `--locked-nav` is omitted, `--step=ops` falls back to the Phase 1 indicative amounts and `--step=nav` recomputes on demand (post-ops), which is fine for testing but introduces the small yield gap described above for production partial redemptions.
+The value is NAV in 18-decimal fixed-point (e.g. `$1.0523` = `1052300000000000000`).
 
 ### Running only Hyperliquid or only Aave steps (Phase 1)
 Phase 1 NET_MINT and NET_REDEEM are split into **Hyperliquid** steps (deposit/withdraw HL, spot buy/sell, open/close short) and **Aave** steps (deposit/withdraw, borrow/repay). You can run one set at a time for testing or recovery:
@@ -415,7 +413,7 @@ These items are stubs or partially implemented — tracked here after the develo
 - **Aave borrow cost** — read variable debt growth or `variableBorrowIndex`.
 - **Hyperliquid funding** — pull from the HL HTTP API or on-chain events.
 
-The NAV computation (`computeNAVFromPortfolioAndYield`) and `updateNAV()` call are fully wired in and run as a pre-ops snapshot before Phase 1 (see above). When the yield readers above are implemented, the NAV will automatically reflect them with no further plumbing required.
+The NAV path runs **`computeNewNAV` / `estimatePortfolioValueUSD`** for **pre-Phase-1** and **post-ops settlement** `updateNAV` calls (see Five-step batch flow above). When the yield readers above are implemented, NAV inputs will reflect them automatically.
 
 ### USD → token conversion in Aave calls
 

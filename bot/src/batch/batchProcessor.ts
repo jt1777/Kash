@@ -31,8 +31,12 @@ function isSingleStepMode(): boolean {
 
 /**
  * Batch Processor - Two-phase daily batch for KashYieldETH or KashYieldBtc.
- * Phase 1: performUpkeep() → indicative; handle NET_MINT/NET_REDEEM, updateNAV, markBatchOpsDone.
- * Phase 2: performUpkeep() → distribute KASH to minters and ETH to redeemers.
+ *
+ * NAV (two on-chain updates per batch when starting from phase 0):
+ * 1. Pre-Phase-1: computeNewNAV (MTM) → updateNAV so Phase 1 on-chain signals use fresh NAV.
+ * 2. Ops: NET_MINT / NET_REDEEM (sizing uses Phase-1-era NAV, same as on-chain currentNAV after step 1).
+ * 3. Settlement: computeNewNAV after ops → updateNAV so Phase 2 mint/redeem uses post-fee / post-slippage MTM.
+ * Phase 2: performUpkeep() → distribute KASH and pay redeemers.
  */
 export class BatchProcessor {
   private provider: ethers.Provider;
@@ -169,7 +173,7 @@ export class BatchProcessor {
   }
 
   /**
-   * Two-phase flow: Phase 1 → ops + updateNAV + markBatchOpsDone → Phase 2.
+   * Two-phase flow: pre-Phase-1 updateNAV → Phase 1 → ops → settlement updateNAV → markBatchOpsDone → Phase 2.
    * When BATCH_STEP is phase1|ops|nav|mark-done|phase2, runs only that step and exits.
    */
   private async runBatch(
@@ -206,26 +210,40 @@ export class BatchProcessor {
           console.log(`📭 Batch ${batchCycle} has no mint/redeem requests, skipping.\n`);
           return;
         }
+        const preOpsNav = await this.computeNewNAV();
+        console.log(`   Pre-Phase-1 NAV (MTM): $${ethers.formatEther(preOpsNav)} per KASH\n`);
+        await this.runStepNav(batchCycle, preOpsNav, 'Step pre-Phase-1 nav');
         await this.runStepPhase1(batchCycle);
         return;
       }
       if (step === 'ops') {
         if (phaseNum !== 1 && !(batchInfo.processed && config.allowProcessedBatch)) throw new Error(`Batch ${batchCycle} is in phase ${phaseNum}; run step phase1 first.`);
-        const lockedNav = config.lockedNav ?? undefined;
-        if (lockedNav != null) console.log(`📊 Using --locked-nav: $${ethers.formatEther(lockedNav)} per KASH\n`);
-        await this.runStepOps(batchCycle, batchInfo, lockedNav);
+        const phase1EraNav =
+          config.lockedNav ?? BigInt((await this.kashYield.currentNAV()).toString());
+        if (config.lockedNav != null) {
+          console.log(`📊 Using --locked-nav for ops sizing: $${ethers.formatEther(config.lockedNav)} per KASH\n`);
+        } else {
+          console.log(
+            `📊 Ops sizing uses on-chain currentNAV (Phase-1 era): $${ethers.formatEther(phase1EraNav)} per KASH\n`,
+          );
+        }
+        await this.runStepOps(batchCycle, batchInfo, phase1EraNav);
         return;
       }
       if (step === 'nav') {
         if (phaseNum !== 1) throw new Error(`Batch ${batchCycle} is in phase ${phaseNum}; run step ops first.`);
-        const lockedNav = config.lockedNav ?? undefined;
-        if (lockedNav != null) console.log(`📊 Using --locked-nav: $${ethers.formatEther(lockedNav)} per KASH\n`);
-        await this.runStepNav(batchCycle, lockedNav);
+        const settlementOrOverride = config.lockedNav ?? undefined;
+        if (settlementOrOverride != null) {
+          console.log(`📊 Using --locked-nav for settlement updateNAV: $${ethers.formatEther(settlementOrOverride)} per KASH\n`);
+        }
+        await this.runStepNav(batchCycle, settlementOrOverride, 'Step settlement nav');
         return;
       }
       if (step === 'mark-done') {
         if (phaseNum !== 1) throw new Error(`Batch ${batchCycle} is in phase ${phaseNum}; run step nav first.`);
-        await this.runStepMarkDone(batchCycle);
+        const settlementNav =
+          config.lockedNav ?? BigInt((await this.kashYield.currentNAV()).toString());
+        await this.runStepMarkDone(batchCycle, settlementNav);
         return;
       }
       if (step === 'phase2') {
@@ -240,33 +258,43 @@ export class BatchProcessor {
         console.log(`📭 Batch ${batchCycle} has no mint/redeem requests, skipping.\n`);
         return;
       }
-      // Compute NAV once now, before any on-chain ops run. The ops (Aave deposit/borrow,
-      // HL trades) change live Aave balances and HL positions, which would alter the yield
-      // figures if we called computeNewNAV() after them. By computing here we lock in the
-      // pre-ops NAV; the same value is passed to updateNAV() so Phase 2 settles mints and
-      // redeems at this price — not at a post-ops-tainted recalculation.
-      console.log('📊 Computing NAV (pre-ops snapshot)...');
-      const newNAV = await this.computeNewNAV();
-      console.log(`   NAV locked for this batch: $${ethers.formatEther(newNAV)} per KASH\n`);
+      console.log('📊 Computing NAV (pre-Phase-1 MTM for on-chain Phase 1 signals)...');
+      const preOpsNav = await this.computeNewNAV();
+      console.log(`   Pre-Phase-1 NAV: $${ethers.formatEther(preOpsNav)} per KASH`);
+      console.log('   (Final settlement NAV is computed after ops.)\n');
+      await this.runStepNav(batchCycle, preOpsNav, 'Step pre-Phase-1 nav');
       await this.runStepPhase1(batchCycle);
       // Re-read batchInfo after Phase 1 so totalMintUSD/totalRedeemUSD are set (Phase 1 writes them on-chain).
       const batchInfoAfterPhase1 = await this.kashYield.getBatchInfo(batchCycle);
-      await this.runStepOps(batchCycle, batchInfoAfterPhase1, newNAV);
-      await this.runStepNav(batchCycle, newNAV);
-      await this.runStepMarkDone(batchCycle, newNAV);
+      await this.runStepOps(batchCycle, batchInfoAfterPhase1, preOpsNav);
+      console.log('📊 Computing NAV (post-ops settlement for Phase 2)...');
+      const settlementNav = await this.computeNewNAV();
+      console.log(`   Settlement NAV: $${ethers.formatEther(settlementNav)} per KASH\n`);
+      await this.runStepNav(batchCycle, settlementNav, 'Step settlement nav');
+      await this.runStepMarkDone(batchCycle, settlementNav);
       await this.runPhase2ForBatch(batchCycle);
       return;
     }
 
     if (phaseNum === 1) {
-      // Resuming from phase 1: compute NAV now, before ops, for the same reason as above —
-      // ops change Aave/HL state so computing after would give a post-ops-tainted value.
-      console.log('📊 Computing NAV (pre-ops snapshot)...');
-      const newNAV = await this.computeNewNAV();
-      console.log(`   NAV locked for this batch: $${ethers.formatEther(newNAV)} per KASH\n`);
-      await this.runStepOps(batchCycle, batchInfo, newNAV);
-      await this.runStepNav(batchCycle, newNAV);
-      await this.runStepMarkDone(batchCycle, newNAV);
+      // Resume: Phase 1 already ran; on-chain currentNAV should be the pre-Phase-1 MTM for this batch.
+      const phase1EraNav = BigInt((await this.kashYield.currentNAV()).toString());
+      console.log(
+        `📊 Resuming from phase 1 — ops sizing uses Phase-1-era NAV: $${ethers.formatEther(phase1EraNav)} per KASH`,
+      );
+      if (config.lockedNav != null) {
+        console.log(
+          `   (--locked-nav override: $${ethers.formatEther(config.lockedNav)} per KASH for ops sizing)\n`,
+        );
+      } else {
+        console.log('');
+      }
+      await this.runStepOps(batchCycle, batchInfo, config.lockedNav ?? phase1EraNav);
+      console.log('📊 Computing NAV (post-ops settlement for Phase 2)...');
+      const settlementNav = await this.computeNewNAV();
+      console.log(`   Settlement NAV: $${ethers.formatEther(settlementNav)} per KASH\n`);
+      await this.runStepNav(batchCycle, settlementNav, 'Step settlement nav');
+      await this.runStepMarkDone(batchCycle, settlementNav);
       await this.runPhase2ForBatch(batchCycle);
       return;
     }
@@ -294,12 +322,12 @@ export class BatchProcessor {
   }
 
   /** Step 2: Handle NET_MINT/NET_REDEEM (HL + Aave). Batch must be phase 1. Respects --step=hl|aave.
-   * @param lockedNAV Pre-ops NAV snapshot used for withdrawal sizing so redeemers receive
-   *   the full value at settlement price, including daily yield not yet reflected in currentNAV. */
+   * @param phase1EraNAV NAV aligned with Phase 1 (pre-Phase-1 `updateNAV` in the dual-NAV flow), used for
+   *   ops snapshots / withdrawal sizing vs on-chain `currentNAV` (e.g. daily yield scaling in `handleNetRedeemAave`). */
   private async runStepOps(
     batchCycle: bigint,
     batchInfo: { totalMintUSD: bigint; totalRedeemUSD: bigint },
-    lockedNAV?: bigint
+    phase1EraNAV?: bigint
   ): Promise<void> {
     const net = BigInt(batchInfo.totalMintUSD.toString()) - BigInt(batchInfo.totalRedeemUSD.toString());
 
@@ -313,38 +341,39 @@ export class BatchProcessor {
     }
 
     // Snapshot all on-chain state once before executing any steps
-    const ctx = await snapshotOpsContext(this.kashYield, this.provider, batchCycle, lockedNAV);
+    const ctx = await snapshotOpsContext(this.kashYield, this.provider, batchCycle, phase1EraNAV);
 
     if (scenario === 'net_mint_hl') {
       await runMintPlaybook(ctx, net);
     } else if (scenario === 'redeem_hl') {
       // Reactive tail classification happens inside runRedeemPlaybook
-      await runRedeemPlaybook(ctx, lockedNAV);
+      await runRedeemPlaybook(ctx, phase1EraNAV);
     } else if (scenario === 'test_aave_loop') {
       await runTestAaveLoopPlaybook(ctx);
     }
   }
 
   /**
-   * Step 3: Call updateNAV(newNAV, usdcBalance, assetBalance, perpPnL). Batch must be phase 1.
+   * Step 3: Call updateNAV(newNAV, usdcBalance, assetBalance, perpPnL). May run twice per batch:
+   * once pre-Phase-1 (MTM for Phase 1 on-chain signals) and once post-ops (settlement for Phase 2).
    *
-   * **NAV vs Phase 2 (KashYieldETH `_processBatchPhase2`):**
-   * - The bot passes `newNAV` from the pre-ops snapshot (`computeNewNAV` / locked pipeline).
-   * - `updateNAV` writes that value into on-chain **`currentNAV`** (plus event args for HL balances).
-   * - **Phase 2** reads **`exactNAV = currentNAV()` once** at execution (`_processBatchPhase2`) and uses it for every
-   *   redeemer: `usd = kash * exactNAV / 1e18`, fee, then `eth = usdAfterFee * 1e18 / getEthPrice()`.
-   * - So “locked” in product terms is “whatever `currentNAV` was when `updateNAV` ran for this batch,”
-   *   stored in `batchExactNAV[cycle]` inside the same Phase 2 tx — not a second NAV oracle read.
-   * - **Chainlink `getEthPrice()`** is read again at Phase 2; if ETH/USD moves between `markBatchOpsDone`
-   *   and Phase 2, wei owed can differ slightly from `computeTotalRedeemAsset`’s price snapshot → keep
-   *   extra ETH (e.g. falling-tail 11b converts spendable USDC) as buffer.
+   * **NAV vs Phase 2 (`_processBatchPhase2`):**
+   * - `updateNAV` writes `newNAV` into **`currentNAV`**.
+   * - **Phase 2** reads **`exactNAV = currentNAV()`** once and uses it for mint and redeem legs.
+   * - **Settlement** `updateNAV` (after ops) should run before `markBatchOpsDone` / Phase 2 so Phase 2 aligns
+   *   with post-fee / post-slippage MTM.
+   * - **Chainlink `getEthPrice()` / `getBtcPrice()`** are read again at Phase 2; small timing drift vs bot snapshots.
    *
-   * When running in single-step mode (--step=nav) no pre-computed value is available, so it
-   * falls back to computing on-demand at that point.
-   * usdcBalance/assetBalance are snapshotted from on-chain adapter views for transparency.
-   * perpPnL is passed as 0 because Hyperliquid perp PnL is off-chain and not accessible here.
+   * Single-step `--step=nav`: typically the **settlement** update after ops (`precomputed` or `computeNewNAV()` now).
+   * usdcBalance/assetBalance are snapshotted from adapter views for events.
+   * perpPnL is passed as 0.
    */
-  private async runStepNav(batchCycle: bigint, precomputedNAV?: bigint): Promise<void> {
+  private async runStepNav(
+    batchCycle: bigint,
+    precomputedNAV?: bigint,
+    logLabel = 'Step nav',
+  ): Promise<void> {
+    void batchCycle;
     const newNAV = precomputedNAV ?? await this.computeNewNAV();
 
     let usdcBalance = 0n;
@@ -356,7 +385,7 @@ export class BatchProcessor {
       // Non-critical — portfolio snapshot unavailable; NAV update still proceeds
     }
 
-    console.log(`📈 Step nav: Updating NAV to $${ethers.formatEther(newNAV)} per KASH  (usdcBal=${ethers.formatUnits(usdcBalance, 6)}, assetBal=${ethers.formatEther(assetBalance)})...`);
+    console.log(`📈 ${logLabel}: Updating NAV to $${ethers.formatEther(newNAV)} per KASH  (usdcBal=${ethers.formatUnits(usdcBalance, 6)}, assetBal=${ethers.formatEther(assetBalance)})...`);
     await (await this.kashYield.updateNAV(newNAV, usdcBalance, assetBalance, 0n)).wait();
     console.log('   ✅ updateNAV done\n');
   }

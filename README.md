@@ -36,7 +36,7 @@ A capital-efficient yield strategy protocol. Users deposit ETH or wBTC and recei
 |--------|-----------|
 | Batch cycle | Configurable via `setCycleDurationSeconds(uint256)` (default 86400 s = 24 h) |
 | Mint valuation | Phase 1 via Chainlink price feed |
-| NAV | Owner/bot calls `updateNAV()` after capital ops, before `markBatchOpsDone()`; Phase 2 uses `currentNAV` |
+| NAV | Bot calls `updateNAV()` **before** Phase 1 (pre-Phase-1 MTM) and **again after** capital ops (**settlement** MTM); then `markBatchOpsDone()`; Phase 2 uses latest `currentNAV` |
 | Distribution | Phase 2 mints KASH to minters, sends assets to redeemers; no user claim step |
 | Exchange registry | `perpExchanges[string] → address`; `activePerpExchange` routes all exchange calls |
 | Adapter registration | First adapter: immediate. Subsequent adapters: `setPerpExchange` starts 48h timelock; `confirmPerpExchange` registers |
@@ -49,7 +49,7 @@ A capital-efficient yield strategy protocol. Users deposit ETH or wBTC and recei
 ### Off-chain bot
 
 1. **Processing window** (last 10 minutes of each cycle by default): Call `processBatch()` (or use Chainlink Automation).
-2. **Between Phase 1 and Phase 2**: Run Aave/exchange ops, then `updateNAV(newNAV)`, then `markBatchOpsDone()`.
+2. **Batch window**: Pre-Phase-1 `updateNAV`, Phase 1, Aave/exchange ops, **settlement** `updateNAV`, then `markBatchOpsDone()`, then Phase 2. See [bot/README.md](bot/README.md).
 3. **After batch**: React to `ProtocolInteraction` events (`action` is a `uint8` code; `NET_MINT` = 3, `NET_REDEEM` = 4 — see `contracts/libraries/ProtocolActionCodes.sol` / `bot/src/contracts/protocolActionCodes.ts`) to deploy/withdraw capital. See [docs/OFFCHAIN_BOT_SPEC.md](docs/OFFCHAIN_BOT_SPEC.md) and [bot/README.md](bot/README.md).
 
 ## 🕐 Batch Cycle and Time Windows
