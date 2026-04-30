@@ -547,9 +547,7 @@ contract KashYieldBtc is ReentrancyGuard {
                 totalRedeemBtcNeeded += redeemWbtcAmounts[i];
             }
         }
-        if (IERC20(wbtcAddress).balanceOf(address(this)) < ownerWbtcReserve + totalRedeemBtcNeeded) {
-            revert InsufficientWbtcForRedeems();
-        }
+        if (IERC20(wbtcAddress).balanceOf(address(this)) < ownerWbtcReserve + totalRedeemBtcNeeded) revert InsufficientWbtcForRedeems();
 
         batchExactNAV[batchCycle] = exactNAV;
         batchProcessed[batchCycle] = true;
