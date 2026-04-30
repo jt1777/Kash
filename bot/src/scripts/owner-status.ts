@@ -2,7 +2,7 @@
  * Owner Status Script
  *
  * Shows protocol state for KashYieldETH or KashYieldBtc:
- * - Asset balance in contract (user deposits vs excess/withdrawable)
+ * - Asset in contract: total vs getReserved* (pending mints + redeem BTC/ETH estimate) vs owner-excess
  * - Aave: supplied ETH/wBTC, borrowed USDC
  * - Hyperliquid: USDC in spot, wBTC/ETH in spot, perp positions (ETH/BTC: size, collateral, active)
  *
@@ -33,6 +33,48 @@ const ERC20_ABI = [
   },
   { inputs: [], name: 'decimals', outputs: [{ name: '', type: 'uint8' }], stateMutability: 'view', type: 'function' },
 ] as const;
+
+const RESERVED_LOOKBACK = 10;
+
+/**
+ * Mirror KashYield `getReservedBtc` / `getReservedEth`: for unprocessed cycles in the same 11-cycle
+ * lookback, sum pending mint wBTC/ETH plus **estimated** wBTC/ETH owed on pending redeems
+ * (batchTotalRedeemKash × currentNAV × (1−fee) / oracle price). Not USDC-in-NAV directly;
+ * higher `currentNAV` increases the redeem leg and thus "reserved" vs raw mint only.
+ */
+async function reservedAssetBreakdown(
+  kashYield: ethers.Contract,
+  isBtc: boolean,
+): Promise<{ mintSum: bigint; redeemEst: bigint; total: bigint }> {
+  const currentCycle = BigInt((await kashYield.getCurrentBatchCycle()).toString());
+  const nav = BigInt((await kashYield.currentNAV()).toString());
+  const feeBps = BigInt((await kashYield.feeBps()).toString());
+  const price = BigInt(
+    (await (isBtc ? kashYield.getBtcPrice() : kashYield.getEthPrice())).toString(),
+  );
+  const assetDec = isBtc ? 8n : 18n;
+  let mintSum = 0n;
+  let redeemEst = 0n;
+  for (let i = 0; i <= RESERVED_LOOKBACK; i++) {
+    const bi = BigInt(i);
+    if (bi > currentCycle) break;
+    const cycle = currentCycle - bi;
+    const processed = (await kashYield.batchProcessed(cycle)) as boolean;
+    if (processed) continue;
+    const mintRaw = isBtc
+      ? await kashYield.batchTotalMintBtc(cycle)
+      : await kashYield.batchTotalMintEth(cycle);
+    mintSum += BigInt(mintRaw.toString());
+    const totalRedeemKash = BigInt((await kashYield.batchTotalRedeemKash(cycle)).toString());
+    if (totalRedeemKash > 0n) {
+      const redeemUsdEstimate = (totalRedeemKash * nav) / 10n ** 18n;
+      const redeemAssetEstimate =
+        (((redeemUsdEstimate * (10000n - feeBps)) / 10000n) * 10n ** assetDec) / price;
+      redeemEst += redeemAssetEstimate;
+    }
+  }
+  return { mintSum, redeemEst, total: mintSum + redeemEst };
+}
 
 async function main() {
   const isBtc = config.product === 'btc';
@@ -75,21 +117,53 @@ async function main() {
     const wbtc = new ethers.Contract(wbtcAddress, ERC20_ABI, provider);
     totalInContract = await wbtc.balanceOf(vaultAddress);
     reserved = await kashYield.getReservedBtc();
+    const br = await reservedAssetBreakdown(kashYield, true);
     const excess = totalInContract > reserved ? totalInContract - reserved : 0n;
     console.log('📦 Asset in Contract (wBTC)');
-    console.log('  Total:           ', ethers.formatUnits(totalInContract, 8), 'wBTC');
-    console.log('  User deposits:   ', ethers.formatUnits(reserved, 8), 'wBTC (reserved)');
-    console.log('  Excess (owner):  ', ethers.formatUnits(excess, 8), 'wBTC (withdrawable via ownerWithdrawWbtc)');
-    console.log('  Note: Excess may be (1) wBTC for redeemers whose Phase 2 did not run or failed, (2) from mints not yet deployed, or (3) owner top-ups. See recent batches and RedeemRequested/TokensClaimed events to correlate.');
+    console.log('  Total:            ', ethers.formatUnits(totalInContract, 8), 'wBTC');
+    console.log(
+      '  Reserved (total): ',
+      ethers.formatUnits(reserved, 8),
+      'wBTC  ← getReservedBtc()',
+    );
+    console.log(
+      '    · Pending mints: ',
+      ethers.formatUnits(br.mintSum, 8),
+      'wBTC (batchTotalMintBtc, unprocessed cycles)',
+    );
+    console.log(
+      '    · Redeem est.:   ',
+      ethers.formatUnits(br.redeemEst, 8),
+      'wBTC (KASH×currentNAV×(1−fee)/BTC price — not Phase 2 exactNAV)',
+    );
+    if (br.total !== reserved) {
+      console.log('    ⚠️  Breakdown sum ≠ on-chain reserved (unexpected); trust getReservedBtc.');
+    }
+    console.log('  Excess (owner):   ', ethers.formatUnits(excess, 8), 'wBTC (withdrawable via ownerWithdrawWbtc)');
+    console.log(
+      '  Note: "Reserved" is not "mint deposits only" if any batch has pending redeems. NAV affects the redeem estimate.',
+    );
   } else {
     totalInContract = await provider.getBalance(vaultAddress);
     reserved = await kashYield.getReservedEth();
+    const br = await reservedAssetBreakdown(kashYield, false);
     const excess = totalInContract > reserved ? totalInContract - reserved : 0n;
     console.log('📦 Asset in Contract (ETH)');
-    console.log('  Total:           ', ethers.formatEther(totalInContract), 'ETH');
-    console.log('  User deposits:   ', ethers.formatEther(reserved), 'ETH (reserved)');
-    console.log('  Excess (owner):  ', ethers.formatEther(excess), 'ETH (withdrawable via ownerWithdrawEth)');
-    console.log('  Note: Excess may be (1) ETH for redeemers whose Phase 2 did not run or failed, (2) from mints not yet deployed, or (3) owner top-ups. See recent batches and events to correlate.');
+    console.log('  Total:            ', ethers.formatEther(totalInContract), 'ETH');
+    console.log(
+      '  Reserved (total): ',
+      ethers.formatEther(reserved),
+      'ETH  ← getReservedEth()',
+    );
+    console.log('    · Pending mints: ', ethers.formatEther(br.mintSum), 'ETH');
+    console.log('    · Redeem est.:   ', ethers.formatEther(br.redeemEst), 'ETH');
+    if (br.total !== reserved) {
+      console.log('    ⚠️  Breakdown sum ≠ on-chain reserved (unexpected); trust getReservedEth.');
+    }
+    console.log('  Excess (owner):   ', ethers.formatEther(excess), 'ETH (withdrawable via ownerWithdrawEth)');
+    console.log(
+      '  Note: Same as wBTC — reserved includes redeem estimate from currentNAV, not mint-only.',
+    );
   }
   console.log('');
 
