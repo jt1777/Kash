@@ -158,6 +158,20 @@ export const config = {
   })(),
 
   /**
+   * Applied only when computing **post-ops settlement** NAV (`updateNAV` before Phase 2).
+   * NAV is multiplied by (10000 - bps) / 10000 so redeem BTC/ETH totals shrink slightly vs
+   * raw MTM, covering small oracle/rounding gaps vs on-vault asset. Example: `3` = 3 bps.
+   * `LOCKED_NAV` / `--locked-nav` overrides skip this (NAV is explicit). Default 0.
+   */
+  settlementNavBufferBps: (() => {
+    const raw = process.env.SETTLEMENT_NAV_BUFFER_BPS ?? '0';
+    const n = parseInt(raw, 10);
+    if (!Number.isFinite(n) || n < 0) return 0;
+    if (n > 10000) return 10000;
+    return n;
+  })(),
+
+  /**
    * Override the ops scenario classifier. Useful when the classifier mis-detects price regime
    * or for testing a specific path manually.
    * Values: net_zero | net_mint_hl | redeem_hl_falling | redeem_hl_rising | redeem_hl_balanced

@@ -822,10 +822,16 @@ contract KashYieldBtc is ReentrancyGuard {
         emit ProtocolInteraction(ProtocolActionCodes.MINT_BTC_DEPLOYED, wbtcAddress, amount);
     }
 
+    /// @notice Pull wBTC from the vault for the owner. User obligations (`getReservedBtc`) must remain covered.
+    ///         Withdraws first consume `ownerWbtcReserve` (reducing it), then any unreserved on-vault balance.
     function ownerWithdrawWbtc(uint256 amount) external onlyOwner {
         uint256 reserved = getReservedBtc();
         uint256 bal = IERC20(wbtcAddress).balanceOf(address(this));
-        if (amount + reserved + ownerWbtcReserve > bal) revert InsufficientExcessWbtc();
+        if (amount + reserved > bal) revert InsufficientExcessWbtc();
+        uint256 fromReserve = amount < ownerWbtcReserve ? amount : ownerWbtcReserve;
+        unchecked {
+            ownerWbtcReserve -= fromReserve;
+        }
         IERC20(wbtcAddress).safeTransfer(owner, amount);
         emit ProtocolInteraction(ProtocolActionCodes.OWNER_WITHDRAW_WBTC, wbtcAddress, amount);
     }

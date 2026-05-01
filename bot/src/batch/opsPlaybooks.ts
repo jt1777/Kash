@@ -515,15 +515,15 @@ const hlCloseShort: OpStep = {
   },
 };
 
-/** 08 — Withdraw all USDC from Hyperliquid to contract; refreshes ctx for tail classification */
+/** 08 — Withdraw USDC from HL / adapter to contract (pull budget = max(tracked HL spot, adapter ERC-20 on L2)). */
 const hlWithdrawUsdc: OpStep = {
   id: 'hl_withdraw_usdc',
   substep: 'hl',
   refreshCtx: true,
-  describe: (ctx) => `withdraw ${fmtUsdc(ctx.hlUsdcBalance)} USDC from Hyperliquid`,
-  canSkip: async (ctx) => ctx.hlUsdcBalance === 0n,
+  describe: (ctx) => `withdraw ${fmtUsdc(hlUsdcPullBudget(ctx))} USDC (HL spot + adapter ERC-20)`,
+  canSkip: async (ctx) => hlUsdcPullBudget(ctx) === 0n,
   execute: async (ctx) => {
-    const amount = ctx.hlUsdcBalance;
+    const amount = hlUsdcPullBudget(ctx);
     if (amount === 0n) return;
     console.log(`         ${fmtUsdc(amount)}`);
     const contractAddr = config.kashYieldAddress || await ctx.kashYield.getAddress();
@@ -547,6 +547,7 @@ const hlWithdrawUsdc: OpStep = {
       const impliedFee = amount - received;
       console.log(`         fee/slippage accounted: ${fmtUsdc(impliedFee)} (tolerance ${fmtUsdc(feeTolerance)})`);
     }
+    await syncHlAdapterFromHyperliquidApi(ctx, true);
   },
 };
 
@@ -723,11 +724,21 @@ const aaveWithdrawPartial: OpStep = {
   refreshCtx: true,
   describe: (ctx) => {
     const shortfall = ctx.aaveDebt > ctx.contractUsdc ? ctx.aaveDebt - ctx.contractUsdc : 0n;
-    const assetNeeded = (shortfall * (10n ** 12n) * (10n ** ctx.assetDecimals)) / ctx.price;
-    return `partial Aave withdraw ${fmtAsset(assetNeeded, ctx)} to cover USDC shortfall ${fmtUsdc(shortfall)} (11a)`;
+    const assetForSf =
+      shortfall > 0n ? (shortfall * (10n ** 12n) * (10n ** ctx.assetDecimals)) / ctx.price : 0n;
+    const redeemGap = ctx.totalRedeemAsset > ctx.contractAsset ? ctx.totalRedeemAsset - ctx.contractAsset : 0n;
+    const needMax = assetForSf > redeemGap ? assetForSf : redeemGap;
+    if (redeemGap > 0n && shortfall === 0n) {
+      return `partial Aave withdraw ${fmtAsset(needMax, ctx)} for redeem collateral (vault < total redeem asset)`;
+    }
+    return `partial Aave withdraw ${fmtAsset(needMax, ctx)} — USDC shortfall ${fmtUsdc(shortfall)}, redeem gap ${fmtAsset(redeemGap, ctx)} (11a path)`;
   },
   canSkip: async (ctx) => {
-    if (ctx.aaveDebt <= ctx.contractUsdc) return true; // no shortfall
+    if (ctx.aaveSupplied === 0n) return true;
+    const redeemGap = ctx.totalRedeemAsset > ctx.contractAsset ? ctx.totalRedeemAsset - ctx.contractAsset : 0n;
+    if (redeemGap > 0n) return false;
+
+    if (ctx.aaveDebt <= ctx.contractUsdc) return true; // no USDC shortfall
     const sf = usdcShortfallVsContract(ctx);
     const cap = getSmallSwapSkipMaxUsdc6();
     if (sf > 0n && sf < cap) {
@@ -750,13 +761,28 @@ const aaveWithdrawPartial: OpStep = {
     return false;
   },
   execute: async (ctx) => {
-    const shortfall = ctx.aaveDebt > ctx.contractUsdc ? ctx.aaveDebt - ctx.contractUsdc : 0n;
-    if (shortfall === 0n) return;
-    // Convert USDC shortfall to asset units: shortfall(6dec) → USD(18dec) → asset(assetDec)
-    const assetNeeded = (shortfall * (10n ** 12n) * (10n ** ctx.assetDecimals)) / ctx.price;
-    const toWithdraw = assetNeeded < ctx.aaveSupplied ? assetNeeded : ctx.aaveSupplied;
+    const sf = ctx.aaveDebt > ctx.contractUsdc ? ctx.aaveDebt - ctx.contractUsdc : 0n;
+    const cap = getSmallSwapSkipMaxUsdc6();
+    const smallSkipOwner =
+      sf > 0n && sf < cap && (await canSkipSmallSwapViaOwnerReserve(ctx, sf));
+
+    let assetForShortfall = 0n;
+    if (!smallSkipOwner && sf > 0n) {
+      assetForShortfall = (sf * (10n ** 12n) * (10n ** ctx.assetDecimals)) / ctx.price;
+    } else if (smallSkipOwner && sf > 0n) {
+      console.log(
+        `         ↪ USDC shortfall ${fmtUsdc(sf)} < ${fmtUsdc(cap)} with owner reserve — no Aave pull for swap; ` +
+          'withdrawing max(redeem gap, 0) only',
+      );
+    }
+
+    const redeemGap = ctx.totalRedeemAsset > ctx.contractAsset ? ctx.totalRedeemAsset - ctx.contractAsset : 0n;
+    let toWithdraw = assetForShortfall > redeemGap ? assetForShortfall : redeemGap;
     if (toWithdraw === 0n) return;
-    console.log(`         ${fmtAsset(toWithdraw, ctx)} (shortfall=${fmtUsdc(shortfall)})`);
+    if (toWithdraw > ctx.aaveSupplied) toWithdraw = ctx.aaveSupplied;
+    console.log(
+      `         ${fmtAsset(toWithdraw, ctx)} (for swap≤${fmtAsset(assetForShortfall, ctx)}, redeem gap ${fmtAsset(redeemGap, ctx)})`,
+    );
     await execTx('withdrawFromAave(partial)', ctx.kashYield.withdrawFromAave(toWithdraw));
   },
 };
@@ -980,6 +1006,68 @@ function selectUsdcForSync(spotUsdcStr: string, withdrawableStr: string): string
   return wd6 > spot6 ? withdrawableStr : spotUsdcStr;
 }
 
+/**
+ * Push HL API spot / perp state into the on-chain adapter so `getHyperliquidSpotBalance()` matches reality.
+ * HL withdraws can deduct ~1 USDC fee off-chain; without this, stale adapter USDC triggers pointless sweep retries.
+ *
+ * @param respectWithdrawSyncEnv — when true, honors `HL_SYNC_AFTER_WITHDRAW` (default on). Relay path passes false.
+ */
+async function syncHlAdapterFromHyperliquidApi(
+  ctx: OpsContext,
+  respectWithdrawSyncEnv: boolean,
+): Promise<void> {
+  if (!ctx.perpAdapterAddress || ctx.perpAdapterAddress === ethers.ZeroAddress) return;
+  if (respectWithdrawSyncEnv) {
+    const enabled = (process.env.HL_SYNC_AFTER_WITHDRAW ?? 'true').toLowerCase() !== 'false';
+    if (!enabled) return;
+  }
+
+  const signerPk = process.env.HYPERLIQUID_API_PRIVATE_KEY || config.privateKey;
+  if (!signerPk) {
+    console.warn(
+      '      ⚠️  HL adapter sync skipped: set PRIVATE_KEY or HYPERLIQUID_API_PRIVATE_KEY for adapter txs',
+    );
+    return;
+  }
+  const hlUser = hlUserAddress(ctx);
+  if (!hlUser || hlUser === ethers.ZeroAddress) {
+    console.warn('      ⚠️  HL adapter sync skipped: could not resolve HL user');
+    return;
+  }
+
+  const { InfoClient, HttpTransport } = await import('@nktkas/hyperliquid');
+  const hlApiUrl = (process.env.HYPERLIQUID_API_URL || 'https://api.hyperliquid.xyz').replace(/\/+$/, '');
+  const info = new InfoClient({ transport: new HttpTransport({ apiUrl: hlApiUrl }) });
+
+  const ch: any = await info.clearinghouseState({ user: hlUser });
+  const spot = await info.spotClearinghouseState({ user: hlUser }).catch(() => ({ balances: [] }));
+  const usdcSpotStr = findSpotBalance(spot, 'USDC');
+  const withdrawableStr = String(ch?.withdrawable || '0');
+  const usdcStr = selectUsdcForSync(usdcSpotStr, withdrawableStr);
+  const assetStr = findSpotBalance(spot, ctx.assetSymbol);
+  const pos = findPosition(ch, ctx.assetSymbol);
+
+  const usdc6 = decimalToBigInt(usdcStr, 6);
+  const asset18 = decimalToBigInt(assetStr || '0', 18);
+  const size18 = decimalToBigInt(absDecimal(pos?.position?.szi || '0'), 18);
+  const entry18 = decimalToBigInt(pos?.position?.entryPx || '0', 18);
+  const isActive = size18 > 0n;
+
+  const signer = new ethers.Wallet(config.privateKey || signerPk, ctx.provider);
+  const adapter = new ethers.Contract(
+    ctx.perpAdapterAddress,
+    [
+      'function syncBalances(uint256 newUsdcBalance, uint256 newAssetBalance) external',
+      'function syncPosition(string symbol, uint256 size, uint256 entryPrice, bool isActive) external',
+    ],
+    signer,
+  );
+
+  await (await adapter.syncBalances(usdc6, asset18)).wait();
+  await (await adapter.syncPosition(ctx.assetSymbol, size18, entry18, isActive)).wait();
+  console.log('      → HL adapter syncBalances + syncPosition confirmed');
+}
+
 async function maybeRunHlEventRelay(ctx: OpsContext, txHash: string, expected: HlIntent): Promise<void> {
   if (!isRelayEnabled(ctx)) return;
   const signerPk = process.env.HYPERLIQUID_API_PRIVATE_KEY || config.privateKey;
@@ -1093,35 +1181,7 @@ async function maybeRunHlEventRelay(ctx: OpsContext, txHash: string, expected: H
     }, orderOpts as any);
   }
 
-  if (ctx.perpAdapterAddress && ctx.perpAdapterAddress !== ethers.ZeroAddress) {
-    const signer = new ethers.Wallet(config.privateKey || signerPk, ctx.provider);
-    const adapter = new ethers.Contract(
-      ctx.perpAdapterAddress,
-      [
-        'function syncBalances(uint256 newUsdcBalance, uint256 newAssetBalance) external',
-        'function syncPosition(string symbol, uint256 size, uint256 entryPrice, bool isActive) external',
-      ],
-      signer,
-    );
-
-    const ch = await info.clearinghouseState({ user: hlUser });
-    const spot = await info.spotClearinghouseState({ user: hlUser }).catch(() => ({ balances: [] }));
-    const usdcSpotStr = findSpotBalance(spot, 'USDC');
-    const withdrawableStr = String(ch?.withdrawable || '0');
-    const usdcStr = selectUsdcForSync(usdcSpotStr, withdrawableStr);
-    const assetStr = findSpotBalance(spot, ctx.assetSymbol);
-    const pos = findPosition(ch, ctx.assetSymbol);
-
-    const usdc6 = decimalToBigInt(usdcStr, 6);
-    const asset18 = decimalToBigInt(assetStr || '0', 18);
-    const size18 = decimalToBigInt(absDecimal(pos?.position?.szi || '0'), 18);
-    const entry18 = decimalToBigInt(pos?.position?.entryPx || '0', 18);
-    const isActive = size18 > 0n;
-
-    await (await adapter.syncBalances(usdc6, asset18)).wait();
-    await (await adapter.syncPosition(ctx.assetSymbol, size18, entry18, isActive)).wait();
-    console.log('      → HL adapter syncBalances + syncPosition confirmed');
-  }
+  await syncHlAdapterFromHyperliquidApi(ctx, false);
 }
 
 async function maybeInitiateHlOffchainWithdraw(ctx: OpsContext, amountUsdc6: bigint): Promise<void> {
@@ -1273,16 +1333,22 @@ function isFullRedeemForHlSweep(ctx: OpsContext): boolean {
   return ctx.redeemFraction >= BigInt(1e18);
 }
 
+/** Upper bound for moving USDC adapter → KashYield: max(HL-tracked spot, adapter ERC-20 on L2). */
+function hlUsdcPullBudget(ctx: OpsContext): bigint {
+  return ctx.hlUsdcBalance > ctx.adapterUsdcErc20 ? ctx.hlUsdcBalance : ctx.adapterUsdcErc20;
+}
+
 /**
  * How much USDC to pull from HL during settlement retries. Partial redeems only pull up to the Aave
  * debt gap so we do not strand strategy collateral on HL incorrectly. Full redeems always pull the
  * full reported HL spot balance so pre-funded vault USDC cannot leave HL USDC behind.
  */
 function hlSettlementWithdrawAmount(ctx: OpsContext, debtRemaining: bigint): bigint {
-  if (ctx.hlUsdcBalance === 0n) return 0n;
-  if (isFullRedeemForHlSweep(ctx)) return ctx.hlUsdcBalance;
+  const pullBudget = hlUsdcPullBudget(ctx);
+  if (pullBudget === 0n) return 0n;
+  if (isFullRedeemForHlSweep(ctx)) return pullBudget;
   if (debtRemaining <= 0n) return 0n;
-  return ctx.hlUsdcBalance < debtRemaining ? ctx.hlUsdcBalance : debtRemaining;
+  return pullBudget < debtRemaining ? pullBudget : debtRemaining;
 }
 
 function getHlSweepDustUsdc6(): bigint {
@@ -1313,23 +1379,24 @@ async function sweepRemainingHlUsdcAfterFullRedeem(
   let fresh = ctx;
   let rounds = 0;
 
-  while (rounds < maxRounds && fresh.hlUsdcBalance > dust) {
+  while (rounds < maxRounds && hlUsdcPullBudget(fresh) > dust) {
     rounds++;
-    const amt = fresh.hlUsdcBalance;
+    const amt = hlUsdcPullBudget(fresh);
     console.log(`   ↪ HL USDC sweep #${rounds}: withdraw ${fmtUsdc(amt)} (full spot balance)`);
     try {
       await execHlWithdrawToKashYield(fresh, `withdrawFromHyperliquid(sweep#${rounds})`, amt);
+      await syncHlAdapterFromHyperliquidApi(fresh, true);
     } catch (e: any) {
       console.warn(`      ⚠️  HL sweep #${rounds} failed: ${e?.message ?? e}`);
     }
     await sleep(pollMs);
     fresh = await snapshotOpsContext(fresh.kashYield, fresh.provider, fresh.batchCycle, lockedNAV);
-    console.log(`      ↪ sweep status: contractUsdc=${fmtUsdc(fresh.contractUsdc)}, hlUsdc=${fmtUsdc(fresh.hlUsdcBalance)}`);
+    console.log(`      ↪ sweep status: contractUsdc=${fmtUsdc(fresh.contractUsdc)}, hlUsdc=${fmtUsdc(fresh.hlUsdcBalance)}, adapterUsdc=${fmtUsdc(fresh.adapterUsdcErc20)}`);
   }
 
-  if (fresh.hlUsdcBalance > dust) {
+  if (hlUsdcPullBudget(fresh) > dust) {
     console.warn(
-      `   ⚠️  HL still holds ${fmtUsdc(fresh.hlUsdcBalance)} USDC after ${maxRounds} sweep rounds — ` +
+      `   ⚠️  HL / adapter still holds ~${fmtUsdc(hlUsdcPullBudget(fresh))} USDC (tracked HL + adapter ERC-20) after ${maxRounds} sweep rounds — ` +
         'bridge may be slow; re-run ops or withdraw manually.',
     );
   } else if (rounds > 0) {
@@ -1369,7 +1436,8 @@ async function waitForHlWithdrawSettlementIfNeeded(
 
   console.log(
     `   ⏳ Waiting for HL withdrawal settlement (up to ${(maxMs / 1000).toFixed(0)}s, poll ${(pollMs / 1000).toFixed(0)}s)` +
-    ` — debt=${fmtUsdc(fresh.aaveDebt)}, contractUsdc=${fmtUsdc(fresh.contractUsdc)}`,
+    ` — debt=${fmtUsdc(fresh.aaveDebt)}, contractUsdc=${fmtUsdc(fresh.contractUsdc)}, ` +
+    `adapterUsdc=${fmtUsdc(fresh.adapterUsdcErc20)}, hlUsdc=${fmtUsdc(fresh.hlUsdcBalance)}`,
   );
 
   const started = Date.now();
@@ -1382,7 +1450,7 @@ async function waitForHlWithdrawSettlementIfNeeded(
 
     const pullAmt = hlSettlementWithdrawAmount(fresh, debtRemaining);
 
-    if (!withdrawInitiated && pullAmt > 0n) {
+    if (!withdrawInitiated && pullAmt > 0n && fresh.hlUsdcBalance > 0n) {
       try {
         await maybeInitiateHlOffchainWithdraw(fresh, pullAmt);
         withdrawInitiated = true;
@@ -1391,11 +1459,12 @@ async function waitForHlWithdrawSettlementIfNeeded(
       }
     }
 
-    if (fresh.hlUsdcBalance > 0n && pullAmt > 0n) {
+    if (pullAmt > 0n) {
       attempts++;
       console.log(`      ↪ settlement retry #${attempts}: withdraw ${fmtUsdc(pullAmt)} from HL`);
       try {
         await execHlWithdrawToKashYield(fresh, `withdrawFromHyperliquid(retry#${attempts})`, pullAmt);
+        await syncHlAdapterFromHyperliquidApi(fresh, true);
       } catch (e: any) {
         console.warn(`      ⚠️  settlement retry #${attempts} failed: ${e?.message ?? e}`);
       }
@@ -1404,7 +1473,8 @@ async function waitForHlWithdrawSettlementIfNeeded(
     await sleep(pollMs);
     fresh = await snapshotOpsContext(fresh.kashYield, fresh.provider, fresh.batchCycle, lockedNAV);
     console.log(
-      `      ↪ settlement status: contractUsdc=${fmtUsdc(fresh.contractUsdc)}, aaveDebt=${fmtUsdc(fresh.aaveDebt)}, hlUsdc=${fmtUsdc(fresh.hlUsdcBalance)}`,
+      `      ↪ settlement status: contractUsdc=${fmtUsdc(fresh.contractUsdc)}, aaveDebt=${fmtUsdc(fresh.aaveDebt)}, ` +
+        `hlUsdc=${fmtUsdc(fresh.hlUsdcBalance)}, adapterUsdc=${fmtUsdc(fresh.adapterUsdcErc20)}`,
     );
     const shortfallNow = fresh.aaveDebt > fresh.contractUsdc ? fresh.aaveDebt - fresh.contractUsdc : 0n;
     if (shortfallNow <= feeTolerance) break;

@@ -841,9 +841,16 @@ contract KashYieldETH is ReentrancyGuard {
         emit ProtocolInteraction(ProtocolActionCodes.MINT_ETH_DEPLOYED, ETH_ADDRESS, amount);
     }
 
+    /// @notice Pull ETH from the vault for the owner. User obligations (`getReservedEth`) must remain covered.
+    ///         Withdraws first consume `ownerEthReserve` (reducing it), then any unreserved on-vault balance.
     function ownerWithdrawEth(uint256 amount) external onlyOwner {
         uint256 reserved = getReservedEth();
-        if (amount + reserved + ownerEthReserve > address(this).balance) revert InsufficientExcessEth();
+        uint256 bal = address(this).balance;
+        if (amount + reserved > bal) revert InsufficientExcessEth();
+        uint256 fromReserve = amount < ownerEthReserve ? amount : ownerEthReserve;
+        unchecked {
+            ownerEthReserve -= fromReserve;
+        }
         payable(owner).transfer(amount);
         emit ProtocolInteraction(ProtocolActionCodes.OWNER_WITHDRAW_ETH, ETH_ADDRESS, amount);
     }

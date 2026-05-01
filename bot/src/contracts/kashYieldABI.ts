@@ -149,6 +149,7 @@ export const kashYieldABI = [
   { inputs: [], name: "unpause", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "batchCycle", type: "uint256" }, { name: "amount", type: "uint256" }], name: "markMintEthDeployed", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "amount", type: "uint256" }], name: "ownerWithdrawEth", outputs: [], stateMutability: "nonpayable", type: "function" },
+  { inputs: [{ name: "amount", type: "uint256" }], name: "ownerWithdrawWbtc", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "batchCycle", type: "uint256" }], name: "emergencyWithdrawMint", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "batchCycle", type: "uint256" }], name: "emergencyWithdrawRedeem", outputs: [], stateMutability: "nonpayable", type: "function" },
   // Events

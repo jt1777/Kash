@@ -236,7 +236,7 @@ export class BatchProcessor {
         if (settlementOrOverride != null) {
           console.log(`📊 Using --locked-nav for settlement updateNAV: $${ethers.formatEther(settlementOrOverride)} per KASH\n`);
         }
-        await this.runStepNav(batchCycle, settlementOrOverride, 'Step settlement nav');
+        await this.runStepNav(batchCycle, settlementOrOverride, 'Step settlement nav', { computeForSettlement: true });
         return;
       }
       if (step === 'mark-done') {
@@ -268,7 +268,7 @@ export class BatchProcessor {
       const batchInfoAfterPhase1 = await this.kashYield.getBatchInfo(batchCycle);
       await this.runStepOps(batchCycle, batchInfoAfterPhase1, preOpsNav);
       console.log('📊 Computing NAV (post-ops settlement for Phase 2)...');
-      const settlementNav = await this.computeNewNAV();
+      const settlementNav = await this.computeNewNAV({ applySettlementBuffer: true });
       console.log(`   Settlement NAV: $${ethers.formatEther(settlementNav)} per KASH\n`);
       await this.runStepNav(batchCycle, settlementNav, 'Step settlement nav');
       await this.runStepMarkDone(batchCycle, settlementNav);
@@ -291,7 +291,7 @@ export class BatchProcessor {
       }
       await this.runStepOps(batchCycle, batchInfo, config.lockedNav ?? phase1EraNav);
       console.log('📊 Computing NAV (post-ops settlement for Phase 2)...');
-      const settlementNav = await this.computeNewNAV();
+      const settlementNav = await this.computeNewNAV({ applySettlementBuffer: true });
       console.log(`   Settlement NAV: $${ethers.formatEther(settlementNav)} per KASH\n`);
       await this.runStepNav(batchCycle, settlementNav, 'Step settlement nav');
       await this.runStepMarkDone(batchCycle, settlementNav);
@@ -372,9 +372,12 @@ export class BatchProcessor {
     batchCycle: bigint,
     precomputedNAV?: bigint,
     logLabel = 'Step nav',
+    options?: { computeForSettlement?: boolean },
   ): Promise<void> {
     void batchCycle;
-    const newNAV = precomputedNAV ?? await this.computeNewNAV();
+    const newNAV =
+      precomputedNAV ??
+      (await this.computeNewNAV({ applySettlementBuffer: options?.computeForSettlement === true }));
 
     let usdcBalance = 0n;
     let assetBalance = 0n;
@@ -448,7 +451,7 @@ export class BatchProcessor {
   }
 
   /** Compute new NAV (18 decimals) from portfolio and yield; clamp to MIN_NAV. */
-  private async computeNewNAV(): Promise<bigint> {
+  private async computeNewNAV(options?: { applySettlementBuffer?: boolean }): Promise<bigint> {
     const tokenAddr = await (isBtc ? this.kashYield.kashTokenBtc() : this.kashYield.kashTokenEth()).catch(() => null);
     const kashSupply = tokenAddr
       ? await new ethers.Contract(tokenAddr, ['function totalSupply() view returns (uint256)'], this.provider).totalSupply()
@@ -471,6 +474,17 @@ export class BatchProcessor {
     if (newNAV > 0n && newNAV < MIN_NAV) {
       newNAV = MIN_NAV;
       console.log(`   📈 NAV clamped to minimum $1 (was dust from small supply)`);
+    }
+    const bps = options?.applySettlementBuffer ? BigInt(config.settlementNavBufferBps) : 0n;
+    if (bps > 0n && newNAV > 0n) {
+      const before = newNAV;
+      newNAV = (newNAV * (10000n - bps)) / 10000n;
+      if (newNAV > 0n && newNAV < MIN_NAV) {
+        newNAV = MIN_NAV;
+      }
+      console.log(
+        `   📈 Settlement NAV buffer −${bps} bps: $${ethers.formatEther(before)} → $${ethers.formatEther(newNAV)} per KASH`,
+      );
     }
     return newNAV;
   }

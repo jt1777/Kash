@@ -24,6 +24,8 @@ export interface OpsContext {
 
   /** Hyperliquid balances */
   hlUsdcBalance: bigint;   // USDC 6 dec (spot wallet)
+  /** USDC ERC-20 physically held by the HL adapter on L2. May be nonzero while `hlUsdcBalance` is 0 after sync (bridge delivered, HL API spot is 0). */
+  adapterUsdcErc20: bigint;
   hlAssetBalance: bigint;  // ETH (18 dec) or wBTC (8 dec) — spot position (0 in USDC-collateral model)
   shortSize: bigint;       // asset units
   shortIsActive: boolean;
@@ -370,6 +372,20 @@ export async function snapshotOpsContext(
     } catch { /* leave defaults */ }
   }
 
+  let adapterUsdcErc20 = 0n;
+  if (perpAdapterAddress && perpAdapterAddress !== ethers.ZeroAddress && usdcAddress) {
+    try {
+      const usdcErc = new ethers.Contract(
+        usdcAddress,
+        ['function balanceOf(address) view returns (uint256)'],
+        provider,
+      );
+      adapterUsdcErc20 = BigInt((await usdcErc.balanceOf(perpAdapterAddress)).toString());
+    } catch {
+      adapterUsdcErc20 = 0n;
+    }
+  }
+
   // -- Redemption accounting --
   const redeemFraction = await computeRedeemFraction(kashYield, provider, batchCycle, isBtc);
   const totalRedeemAsset = await computeTotalRedeemAsset(kashYield, batchCycle, lockedNAV, price, assetDecimals);
@@ -382,6 +398,7 @@ export async function snapshotOpsContext(
     aaveSupplied,
     aaveDebt,
     hlUsdcBalance,
+    adapterUsdcErc20,
     hlAssetBalance,
     shortSize,
     shortIsActive,
