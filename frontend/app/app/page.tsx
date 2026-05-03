@@ -138,7 +138,7 @@ function CustomWalletButton() {
 }
 
 function AppContent() {
-  const { isConnected } = useAccount();
+  const { isConnected, address } = useAccount();
   const [product, setProduct] = useState<'eth' | 'btc'>(() =>
     CONTRACTS.kashYieldBtc ? 'btc' : 'eth'
   );
@@ -393,7 +393,7 @@ function AppContent() {
                 </div>
               </div>
 
-              <RecentActivity />
+              <RecentActivity key={address ?? 'disconnected'} />
             </>
           ) : (
             <div className="rounded-2xl p-12 text-center border bg-white shadow-xl" style={{ borderColor: 'rgba(0, 255, 255, 0.2)' }}>

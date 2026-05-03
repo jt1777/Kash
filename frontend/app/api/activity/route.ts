@@ -65,18 +65,19 @@ type ArbiscanTx = {
 
 export async function GET(request: NextRequest) {
   const address = request.nextUrl.searchParams.get('address');
+  const skip = Math.max(0, Math.floor(Number(request.nextUrl.searchParams.get('skip')) || 0));
   const limit = Math.min(Number(request.nextUrl.searchParams.get('limit')) || 20, 50);
   // Accept cycle duration from frontend (reads it from the contract); falls back to 86400
   const cycleDuration = Math.max(60, Number(request.nextUrl.searchParams.get('cycleDuration') || '86400'));
 
   if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) {
-    return NextResponse.json({ error: 'Invalid address' }, { status: 400 });
+    return NextResponse.json({ error: 'Invalid address', activities: [], hasMore: false }, { status: 400 });
   }
 
   const apiKey = getEtherscanApiKey();
   if (!apiKey) {
     console.error('Activity API: ETHERSCAN_API_KEY (or ARBISCAN_API_KEY) required for Etherscan API V2');
-    return NextResponse.json({ error: 'Activity API not configured', activities: [] }, { status: 503 });
+    return NextResponse.json({ error: 'Activity API not configured', activities: [], hasMore: false }, { status: 503 });
   }
   const url = `${ETHERSCAN_V2_API}?chainid=${ARBITRUM_ONE_CHAIN_ID}&module=account&action=txlist&address=${address}&startblock=0&endblock=99999999&page=1&offset=100&sort=desc&apikey=${apiKey}`;
 
@@ -85,48 +86,53 @@ export async function GET(request: NextRequest) {
     const data = await res.json();
 
     if (data.status !== '1' || !Array.isArray(data.result)) {
-      return NextResponse.json({ activities: [] });
+      return NextResponse.json({ activities: [], hasMore: false });
     }
 
     const txs = data.result as ArbiscanTx[];
     const activities: ActivityItem[] = [];
+    let matchIndex = 0;
+    /** True if scanning stopped because we collected `limit` items but more matching txs may remain. */
+    let hitLimit = false;
 
     for (const tx of txs) {
-      if (activities.length >= limit) break;
       const to = (tx.to || '').toLowerCase();
       if (!KASH_YIELD_ADDRESSES.has(to)) continue;
 
       const input = (tx.input || '').toLowerCase();
       const selector = input.slice(0, 10);
 
+      if (selector !== SELECTOR_REQUEST_MINT && selector !== SELECTOR_REQUEST_REDEEM) continue;
+
       const ts = parseInt(tx.timeStamp, 10);
       const batchCycle = Math.floor(ts / cycleDuration);
       const contractAddress = tx.to || '';
 
-      if (selector === SELECTOR_REQUEST_MINT) {
-        activities.push({
-          type: 'mint',
-          hash: tx.hash,
-          timestamp: ts,
-          blockNumber: tx.blockNumber,
-          batchCycle,
-          contractAddress,
-        });
-      } else if (selector === SELECTOR_REQUEST_REDEEM) {
-        activities.push({
-          type: 'redeem',
-          hash: tx.hash,
-          timestamp: ts,
-          blockNumber: tx.blockNumber,
-          batchCycle,
-          contractAddress,
-        });
+      if (matchIndex < skip) {
+        matchIndex++;
+        continue;
       }
+      if (activities.length >= limit) {
+        hitLimit = true;
+        break;
+      }
+
+      activities.push({
+        type: selector === SELECTOR_REQUEST_MINT ? 'mint' : 'redeem',
+        hash: tx.hash,
+        timestamp: ts,
+        blockNumber: tx.blockNumber,
+        batchCycle,
+        contractAddress,
+      });
+      matchIndex++;
     }
 
-    return NextResponse.json({ activities });
+    const hasMore = hitLimit;
+
+    return NextResponse.json({ activities, hasMore });
   } catch (e) {
     console.error('Activity API error:', e);
-    return NextResponse.json({ error: 'Failed to fetch activity', activities: [] }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to fetch activity', activities: [], hasMore: false }, { status: 500 });
   }
 }

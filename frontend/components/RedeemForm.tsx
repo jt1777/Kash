@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadContract, useEstimateFeesPerGas } from 'wagmi';
 import { CONTRACTS, ARBITRUM_ONE_BLOCK_EXPLORER, HARDHAT_CHAIN_ID } from '@/lib/contracts/addresses';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
@@ -13,6 +13,8 @@ const GWEI = 10n ** 9n;
 const FEE_BUFFER_PERCENT = 120n;
 
 type Product = 'eth' | 'btc';
+
+const ACTIVITY_REFRESH_EVENT = 'kash-activity-refresh';
 
 export function RedeemForm({ product = 'eth' }: { product?: Product }) {
   const { address } = useAccount();
@@ -142,6 +144,12 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
       refetchPendingRedeem();
     }
   }, [isRedeemSuccess, refetchPendingRedeem]);
+
+  useEffect(() => {
+    if (isRedeemSuccess && redeemHash && amount) {
+      window.dispatchEvent(new Event(ACTIVITY_REFRESH_EVENT));
+    }
+  }, [isRedeemSuccess, redeemHash, amount]);
 
   const handleApprove = async () => {
     if (!parsedAmount) return;

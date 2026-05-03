@@ -3,8 +3,46 @@
 import { useAccount, useReadContracts, useWriteContract, useWaitForTransactionReceipt, useEstimateFeesPerGas, useReadContract } from 'wagmi';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { ARBITRUM_ONE_CHAIN_ID, ARBITRUM_ONE_BLOCK_EXPLORER, CONTRACTS } from '@/lib/contracts/addresses';
+import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 
 const ACTIVITY_REFRESH_EVENT = 'kash-activity-refresh';
+
+const COMPACT_ACTIVITY_LIMIT = 5;
+const PAGE_ACTIVITY_SIZE = 10;
+
+type ActivityItem = {
+  type: 'mint' | 'redeem';
+  hash: string;
+  timestamp: number;
+  blockNumber: string;
+  batchCycle?: number;
+  contractAddress?: string;
+};
+
+async function fetchActivity(
+  address: string,
+  cycleDuration: number,
+  skip: number,
+  limit: number,
+): Promise<{ list: ActivityItem[]; error?: string; hasMore: boolean }> {
+  const res = await fetch(
+    `/api/activity?address=${encodeURIComponent(address)}&skip=${skip}&limit=${limit}&cycleDuration=${cycleDuration}&_=${Date.now()}`,
+    { cache: 'no-store' }
+  );
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    return {
+      list: [],
+      error: data.error || 'Failed to load activity',
+      hasMore: false,
+    };
+  }
+  return {
+    list: data.activities ?? [],
+    error: data.error,
+    hasMore: Boolean(data.hasMore),
+  };
+}
 
 function cancelSuccessMessage(
   type: 'mint' | 'redeem',
@@ -20,33 +58,9 @@ function cancelSuccessMessage(
   if (isBtc) return 'Cancel confirmed. Your KASH-BTC has been returned to your wallet.';
   return 'Cancel confirmed. Your KASH-ETH has been returned to your wallet.';
 }
-import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 
 // Fallback max fee when estimate is missing (e.g. 25 gwei on L2)
 const FALLBACK_MAX_FEE_WEI = 25n * (10n ** 9n);
-
-const ACTIVITY_LIMIT = 10;
-
-type ActivityItem = {
-  type: 'mint' | 'redeem';
-  hash: string;
-  timestamp: number;
-  blockNumber: string;
-  batchCycle?: number;
-  contractAddress?: string;
-};
-
-async function fetchActivity(address: string, cycleDuration = 86400): Promise<{ list: ActivityItem[]; error?: string }> {
-  const res = await fetch(
-    `/api/activity?address=${encodeURIComponent(address)}&limit=${ACTIVITY_LIMIT}&cycleDuration=${cycleDuration}&_=${Date.now()}`,
-    { cache: 'no-store' }
-  );
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    return { list: [], error: data.error || 'Failed to load activity' };
-  }
-  return { list: data.activities ?? [] };
-}
 
 function formatTimeAgo(ts: number): string {
   const sec = Math.floor(Date.now() / 1000 - ts);
@@ -65,6 +79,9 @@ export function RecentActivity() {
   const [activities, setActivities] = useState<ActivityItem[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [compactActivityView, setCompactActivityView] = useState(true);
+  const [activityPage, setActivityPage] = useState(1);
+  const [hasMoreActivities, setHasMoreActivities] = useState(false);
   const [cancelTarget, setCancelTarget] = useState<{ contractAddress: string; batchCycle: number; type: 'mint' | 'redeem' } | null>(null);
   /** Set when user submits a cancel tx; used on receipt so message is correct even if cancelTarget is cleared before the effect runs again. */
   const cancelFeedbackContextRef = useRef<{ type: 'mint' | 'redeem'; contractAddress: string } | null>(null);
@@ -100,19 +117,25 @@ export function RecentActivity() {
     setIsLoading(true);
     setLoadError(null);
     try {
-      const { list, error } = await fetchActivity(address, cycleDuration);
+      const skip = compactActivityView ? 0 : (activityPage - 1) * PAGE_ACTIVITY_SIZE;
+      const limit = compactActivityView ? COMPACT_ACTIVITY_LIMIT : PAGE_ACTIVITY_SIZE;
+      const { list, error, hasMore } = await fetchActivity(address, cycleDuration, skip, limit);
       setActivities(list);
+      setHasMoreActivities(hasMore);
       setLoadError(error ?? null);
     } finally {
       setIsLoading(false);
     }
-  }, [address, cycleDuration]);
+  }, [address, cycleDuration, compactActivityView, activityPage]);
 
   useEffect(() => {
     if (address && isArbitrumOne) load();
     else {
       setActivities([]);
       setLoadError(null);
+      setHasMoreActivities(false);
+      setCompactActivityView(true);
+      setActivityPage(1);
     }
   }, [address, isArbitrumOne, load]);
 
@@ -373,75 +396,121 @@ export function RecentActivity() {
           No KASH mint or redeem transactions yet. Submit a request above.
         </p>
       ) : (
-        <ul className="space-y-2">
-          {activities.map((item, i) => {
-            const canCancel = canCancelByIndex.get(i) ?? false;
-            const cancelled = cancelledByIndex.get(i) ?? false;
-            const processed = processedByIndex.get(i) ?? false;
-            const isCancellingThis = cancelTarget?.contractAddress === item.contractAddress &&
-              cancelTarget?.batchCycle === item.batchCycle &&
-              cancelTarget?.type === item.type;
-            const isBtcContract = item.contractAddress?.toLowerCase() === (CONTRACTS.kashYieldBtc as string).toLowerCase();
-            const hasReq = hasRequestByIndex.get(i) ?? false;
-            // Only show settled label when: batch ran AND request existed before batch ran
-            // (cancelEligibleHashes tracks hashes we observed as cancellable, i.e. pre-batch)
-            const settledLabel = processed && hasReq && cancelEligibleHashes.has(item.hash)
-              ? item.type === 'mint'
-                ? (isBtcContract ? 'Kash-BTC minted' : 'Kash-ETH minted')
-                : (isBtcContract ? 'wBTC redeemed' : 'ETH redeemed')
-              : null;
-            // Request exists on-chain and is waiting for the batch to run
-            const isPending = !processed && hasReq;
+        <>
+          <ul className="space-y-2">
+            {activities.map((item, i) => {
+              const canCancel = canCancelByIndex.get(i) ?? false;
+              const cancelled = cancelledByIndex.get(i) ?? false;
+              const processed = processedByIndex.get(i) ?? false;
+              const isCancellingThis = cancelTarget?.contractAddress === item.contractAddress &&
+                cancelTarget?.batchCycle === item.batchCycle &&
+                cancelTarget?.type === item.type;
+              const isBtcContract = item.contractAddress?.toLowerCase() === (CONTRACTS.kashYieldBtc as string).toLowerCase();
+              const hasReq = hasRequestByIndex.get(i) ?? false;
+              // Only show settled label when: batch ran AND request existed before batch ran
+              // (cancelEligibleHashes tracks hashes we observed as cancellable, i.e. pre-batch)
+              const settledLabel = processed && hasReq && cancelEligibleHashes.has(item.hash)
+                ? item.type === 'mint'
+                  ? (isBtcContract ? 'Kash-BTC minted' : 'Kash-ETH minted')
+                  : (isBtcContract ? 'wBTC redeemed' : 'ETH redeemed')
+                : null;
+              // Request exists on-chain and is waiting for the batch to run
+              const isPending = !processed && hasReq;
 
-            return (
-              <li
-                key={item.hash}
-                className="flex items-center justify-between gap-2 py-2 px-3 rounded-lg border border-gray-100 hover:bg-gray-50/50 transition flex-wrap"
-              >
-                <span
-                  className={`text-sm font-medium shrink-0 w-16 ${
-                    item.type === 'mint' ? 'text-indigo-600' : 'text-purple-600'
-                  }`}
+              return (
+                <li
+                  key={item.hash}
+                  className="flex items-center justify-between gap-2 py-2 px-3 rounded-lg border border-gray-100 hover:bg-gray-50/50 transition flex-wrap"
                 >
-                  {item.type === 'mint' ? 'Mint' : 'Redeem'}
-                </span>
-                <a
-                  href={`${ARBITRUM_ONE_BLOCK_EXPLORER}/tx/${item.hash}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="font-mono text-xs text-gray-600 hover:text-indigo-600 truncate flex-1 min-w-0"
-                  title={item.hash}
-                >
-                  {item.hash.slice(0, 10)}…{item.hash.slice(-8)}
-                </a>
-                {settledLabel && (
-                  <span className="text-xs font-medium text-green-600 shrink-0">
-                    {settledLabel}
-                  </span>
-                )}
-                {canCancel && (
-                  <button
-                    type="button"
-                    onClick={() => item.type === 'mint' ? handleCancelMint(item, item.batchCycle ?? 0) : handleCancelRedeem(item, item.batchCycle ?? 0)}
-                    disabled={isCancelPending || isCancellingThis}
-                    className="text-xs font-medium text-amber-700 hover:text-amber-800 border border-amber-300 hover:border-amber-400 rounded px-2 py-1 shrink-0 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                  <span
+                    className={`text-sm font-medium shrink-0 w-16 ${
+                      item.type === 'mint' ? 'text-indigo-600' : 'text-purple-600'
+                    }`}
                   >
-                    {isCancellingThis ? 'Cancelling…' : item.type === 'mint' ? 'Cancel mint' : 'Cancel redeem'}
-                  </button>
-                )}
-                {isPending && !canCancel && (
-                  <span className="text-xs font-medium text-amber-600 shrink-0">Pending</span>
-                )}
-                {cancelled && (
-                  <span className="text-xs font-medium text-gray-600 shrink-0">
-                    Transaction cancelled
+                    {item.type === 'mint' ? 'Mint' : 'Redeem'}
                   </span>
-                )}
-                <span className="text-xs text-gray-500 shrink-0">{formatTimeAgo(item.timestamp)}</span>
-              </li>
-            );
-          })}
-        </ul>
+                  <a
+                    href={`${ARBITRUM_ONE_BLOCK_EXPLORER}/tx/${item.hash}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-mono text-xs text-gray-600 hover:text-indigo-600 truncate flex-1 min-w-0"
+                    title={item.hash}
+                  >
+                    {item.hash.slice(0, 10)}…{item.hash.slice(-8)}
+                  </a>
+                  {settledLabel && (
+                    <span className="text-xs font-medium text-green-600 shrink-0">
+                      {settledLabel}
+                    </span>
+                  )}
+                  {canCancel && (
+                    <button
+                      type="button"
+                      onClick={() => item.type === 'mint' ? handleCancelMint(item, item.batchCycle ?? 0) : handleCancelRedeem(item, item.batchCycle ?? 0)}
+                      disabled={isCancelPending || isCancellingThis}
+                      className="text-xs font-medium text-amber-700 hover:text-amber-800 border border-amber-300 hover:border-amber-400 rounded px-2 py-1 shrink-0 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                    >
+                      {isCancellingThis ? 'Cancelling…' : item.type === 'mint' ? 'Cancel mint' : 'Cancel redeem'}
+                    </button>
+                  )}
+                  {isPending && !canCancel && (
+                    <span className="text-xs font-medium text-amber-600 shrink-0">Pending</span>
+                  )}
+                  {cancelled && (
+                    <span className="text-xs font-medium text-gray-600 shrink-0">
+                      Transaction cancelled
+                    </span>
+                  )}
+                  <span className="text-xs text-gray-500 shrink-0">{formatTimeAgo(item.timestamp)}</span>
+                </li>
+              );
+            })}
+          </ul>
+
+          {compactActivityView && hasMoreActivities && (
+            <div className="mt-4 flex justify-center">
+              <button
+                type="button"
+                onClick={() => {
+                  setCompactActivityView(false);
+                  setActivityPage(1);
+                }}
+                className="text-sm font-medium text-indigo-600 hover:text-indigo-700 transition cursor-pointer"
+              >
+                Show more
+              </button>
+            </div>
+          )}
+
+          {!compactActivityView && (
+            <div className="mt-4 flex flex-col sm:flex-row items-center justify-between gap-3 border-t border-gray-100 pt-4">
+              <span className="text-xs text-gray-500">
+                Page {activityPage}
+                {activities.length > 0
+                  ? ` · ${(activityPage - 1) * PAGE_ACTIVITY_SIZE + 1}–${(activityPage - 1) * PAGE_ACTIVITY_SIZE + activities.length}`
+                  : ''}
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setActivityPage((p) => Math.max(1, p - 1))}
+                  disabled={activityPage <= 1 || isLoading}
+                  className="px-3 py-1.5 text-sm rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition"
+                >
+                  Previous
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActivityPage((p) => p + 1)}
+                  disabled={!hasMoreActivities || isLoading}
+                  className="px-3 py-1.5 text-sm rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
