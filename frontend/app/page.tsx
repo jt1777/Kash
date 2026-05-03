@@ -3,7 +3,7 @@ import { SiteFooter } from '@/components/SiteFooter';
 
 export const metadata = {
   title: 'KASH - The Yield Token for AI Agents',
-  description: 'The first yield-bearing token designed for AI agents. Deposit ETH, earn automated yield from decentralized funding rates.',
+  description: 'The first yield-bearing token designed for AI agents. Deposit ETH or wBTC to earn automated yield from decentralized funding rates.',
 };
 
 export default function Home() {
