@@ -78,7 +78,9 @@ export async function runPlaybook(
     console.log(`   ✅ ${step.id} done`);
 
     if (step.refreshCtx) {
-      ctx = await snapshotOpsContext(ctx.kashYield, ctx.provider, ctx.batchCycle, ctx.lockedNAV);
+      const nextCtx = await snapshotOpsContext(ctx.kashYield, ctx.provider, ctx.batchCycle, ctx.lockedNAV);
+      nextCtx.aaveDebtFloor = ctx.aaveDebtFloor;
+      ctx = nextCtx;
     }
   }
 }
@@ -202,6 +204,7 @@ function fmtAsset(v: bigint, ctx: OpsContext): string {
   return ethers.formatUnits(v, Number(ctx.assetDecimals)) + ' ' + ctx.assetSymbol;
 }
 function fmtUsd(v: bigint): string { return '$' + ethers.formatEther(v); }
+const WAD = 10n ** 18n;
 
 function getHlWithdrawFeeToleranceUsdc6(): bigint {
   const raw = process.env.HL_WITHDRAW_FEE_TOLERANCE_USDC || '1';
@@ -241,8 +244,23 @@ function getSmallSwapSkipMaxUsdc6(): bigint {
   }
 }
 
+function strategyAaveDebtToRepay(ctx: OpsContext): bigint {
+  if (ctx.aaveDebtFloor != null) {
+    return ctx.aaveDebt > ctx.aaveDebtFloor ? ctx.aaveDebt - ctx.aaveDebtFloor : 0n;
+  }
+  if (ctx.strategyRedeemFraction >= WAD) return ctx.aaveDebt;
+  if (ctx.strategyRedeemFraction === 0n || ctx.aaveDebt === 0n) return 0n;
+  return (ctx.aaveDebt * ctx.strategyRedeemFraction + WAD - 1n) / WAD;
+}
+
+function strategyAaveDebtFloor(ctx: OpsContext): bigint {
+  const repay = strategyAaveDebtToRepay(ctx);
+  return ctx.aaveDebt > repay ? ctx.aaveDebt - repay : 0n;
+}
+
 function usdcShortfallVsContract(ctx: OpsContext): bigint {
-  return ctx.aaveDebt > ctx.contractUsdc ? ctx.aaveDebt - ctx.contractUsdc : 0n;
+  const debtToRepay = strategyAaveDebtToRepay(ctx);
+  return debtToRepay > ctx.contractUsdc ? debtToRepay - ctx.contractUsdc : 0n;
 }
 
 /**
@@ -529,9 +547,9 @@ const hlCloseShort: OpStep = {
   substep: 'hl',
   refreshCtx: true,
   describe: (ctx) => {
-    const pct = (Number(ctx.redeemFraction) / 1e16).toFixed(2);
-    const closeSize = (ctx.shortSize * ctx.redeemFraction) / BigInt(1e18);
-    return `close ${pct}% of ${ctx.assetSymbol} short (${fmtAsset(closeSize, ctx)} of ${fmtAsset(ctx.shortSize, ctx)})`;
+    const pct = (Number(ctx.strategyRedeemFraction) / 1e16).toFixed(2);
+    const closeSize = (ctx.shortSize * ctx.strategyRedeemFraction) / BigInt(1e18);
+    return `close ${pct}% strategy unwind of ${ctx.assetSymbol} short (${fmtAsset(closeSize, ctx)} of ${fmtAsset(ctx.shortSize, ctx)}; gross redeem ${(Number(ctx.redeemFraction) / 1e16).toFixed(2)}%)`;
   },
   canSkip: async (ctx) => {
     if (!ctx.shortIsActive) {
@@ -556,29 +574,23 @@ const hlCloseShort: OpStep = {
   execute: async (ctx) => {
     const symbol = ctx.assetSymbol;
     const fullSize = ctx.shortSize;
-    const closeSize = (fullSize * ctx.redeemFraction) / BigInt(1e18);
+    const closeSize = (fullSize * ctx.strategyRedeemFraction) / BigInt(1e18);
+    if (closeSize === 0n) {
+      console.log(`         strategy unwind is 0; no ${symbol} short close needed`);
+      return;
+    }
     if (closeSize >= fullSize) {
       console.log(`         closing full ${symbol} short`);
       const tx = await ctx.kashYield['closeShort(string)'](symbol);
       await tx.wait();
       console.log('      → closeShort(full) confirmed');
-      try {
-        await maybeRunHlEventRelay(ctx, tx.hash, 'EXCHANGE_CLOSE_SHORT');
-      } catch (e: any) {
-        if (relayStrictMode()) throw e;
-        console.warn(`      ⚠️  HL relay closeShort failed: ${e?.message ?? e}`);
-      }
+      await maybeRunHlEventRelay(ctx, tx.hash, 'EXCHANGE_CLOSE_SHORT', { required: true });
     } else {
       console.log(`         closing ${fmtAsset(closeSize, ctx)} of ${fmtAsset(fullSize, ctx)}`);
       const tx = await ctx.kashYield['closeShort(string,uint256)'](symbol, closeSize);
       await tx.wait();
       console.log('      → closeShort(partial) confirmed');
-      try {
-        await maybeRunHlEventRelay(ctx, tx.hash, 'EXCHANGE_CLOSE_SHORT');
-      } catch (e: any) {
-        if (relayStrictMode()) throw e;
-        console.warn(`      ⚠️  HL relay closeShort failed: ${e?.message ?? e}`);
-      }
+      await maybeRunHlEventRelay(ctx, tx.hash, 'EXCHANGE_CLOSE_SHORT', { required: true });
     }
   },
 };
@@ -624,7 +636,8 @@ const hlWithdrawUsdc: OpStep = {
 // ---------------------------------------------------------------------------
 
 async function executeAaveRepay(ctx: OpsContext): Promise<void> {
-  const amount = ctx.contractUsdc < ctx.aaveDebt ? ctx.contractUsdc : ctx.aaveDebt;
+  const debtToRepay = strategyAaveDebtToRepay(ctx);
+  const amount = ctx.contractUsdc < debtToRepay ? ctx.contractUsdc : debtToRepay;
   if (amount === 0n) return;
   console.log(`         ${fmtUsdc(amount)}`);
   await execTx('repayToAave', ctx.kashYield.repayToAave(ctx.aaveUsdcAddress, amount));
@@ -632,8 +645,9 @@ async function executeAaveRepay(ctx: OpsContext): Promise<void> {
 
 /** Final repay in rising tail after optional tiny-shortfall swap skip — fails loud if USDC still missing. */
 async function executeAaveRepayRisingFinal(ctx: OpsContext): Promise<void> {
-  const amount = ctx.contractUsdc < ctx.aaveDebt ? ctx.contractUsdc : ctx.aaveDebt;
-  if (amount === 0n && ctx.aaveDebt > 0n) {
+  const debtToRepay = strategyAaveDebtToRepay(ctx);
+  const amount = ctx.contractUsdc < debtToRepay ? ctx.contractUsdc : debtToRepay;
+  if (amount === 0n && debtToRepay > 0n) {
     const cap = getSmallSwapSkipMaxUsdc6();
     const sf = usdcShortfallVsContract(ctx);
     const tinyHint =
@@ -651,8 +665,9 @@ async function executeAaveRepayRisingFinal(ctx: OpsContext): Promise<void> {
 }
 
 function describeAaveRepay(ctx: OpsContext): string {
-  const amount = ctx.contractUsdc < ctx.aaveDebt ? ctx.contractUsdc : ctx.aaveDebt;
-  return `repay ${fmtUsdc(amount)} to Aave (debt=${fmtUsdc(ctx.aaveDebt)})`;
+  const debtToRepay = strategyAaveDebtToRepay(ctx);
+  const amount = ctx.contractUsdc < debtToRepay ? ctx.contractUsdc : debtToRepay;
+  return `repay ${fmtUsdc(amount)} to Aave (strategy debt target=${fmtUsdc(debtToRepay)}, total debt=${fmtUsdc(ctx.aaveDebt)})`;
 }
 
 /** 09 — Repay Aave borrow with all available contract USDC */
@@ -661,7 +676,7 @@ const aaveRepay: OpStep = {
   substep: 'aave',
   refreshCtx: true,
   describe: describeAaveRepay,
-  canSkip: async (ctx) => ctx.aaveDebt === 0n,
+  canSkip: async (ctx) => strategyAaveDebtToRepay(ctx) === 0n,
   execute: executeAaveRepay,
 };
 
@@ -671,7 +686,7 @@ const aaveRepayRisingFinal: OpStep = {
   substep: 'aave',
   refreshCtx: true,
   describe: describeAaveRepay,
-  canSkip: async (ctx) => ctx.aaveDebt === 0n,
+  canSkip: async (ctx) => strategyAaveDebtToRepay(ctx) === 0n,
   execute: executeAaveRepayRisingFinal,
 };
 
@@ -686,8 +701,10 @@ const aaveRepayResidualDebtFromOwnerReserve: OpStep = {
   refreshCtx: true,
   describe: (ctx) => `cover and repay residual Aave debt ${fmtUsdc(usdcShortfallVsContract(ctx))} from owner USDC reserve`,
   canSkip: async (ctx) => {
-    if (ctx.aaveDebt === 0n) return true;
-    if (ctx.contractUsdc >= ctx.aaveDebt) return false;
+    if (ctx.strategyRedeemFraction < WAD) return true;
+    const debtToRepay = strategyAaveDebtToRepay(ctx);
+    if (debtToRepay === 0n) return true;
+    if (ctx.contractUsdc >= debtToRepay) return false;
     let reserve = 0n;
     try {
       reserve = BigInt((await ctx.kashYield.ownerUsdcReserve()).toString());
@@ -697,11 +714,13 @@ const aaveRepayResidualDebtFromOwnerReserve: OpStep = {
     return reserve === 0n;
   },
   execute: async (ctx) => {
-    if (ctx.aaveDebt === 0n) return;
+    if (ctx.strategyRedeemFraction < WAD) return;
+    const debtToRepay = strategyAaveDebtToRepay(ctx);
+    if (debtToRepay === 0n) return;
     let spendable = ctx.contractUsdc;
-    if (spendable < ctx.aaveDebt) {
+    if (spendable < debtToRepay) {
       const reserve = BigInt((await ctx.kashYield.ownerUsdcReserve()).toString());
-      const shortfall = ctx.aaveDebt - spendable;
+      const shortfall = debtToRepay - spendable;
       const cover = shortfall < reserve ? shortfall : reserve;
       if (cover > 0n) {
         console.log(`         coverUsdcShortfall ${fmtUsdc(cover)} for residual Aave debt dust`);
@@ -709,7 +728,7 @@ const aaveRepayResidualDebtFromOwnerReserve: OpStep = {
         spendable += cover;
       }
     }
-    const amount = spendable < ctx.aaveDebt ? spendable : ctx.aaveDebt;
+    const amount = spendable < debtToRepay ? spendable : debtToRepay;
     if (amount === 0n) return;
     console.log(`         repay residual ${fmtUsdc(amount)} to Aave (debt=${fmtUsdc(ctx.aaveDebt)})`);
     await execTx('repayToAave(residual)', ctx.kashYield.repayToAave(ctx.aaveUsdcAddress, amount));
@@ -726,7 +745,7 @@ const aaveRepayContractFirst: OpStep = {
   substep: 'aave',
   refreshCtx: true,
   describe: describeAaveRepay,
-  canSkip: async (ctx) => ctx.aaveDebt === 0n || ctx.contractUsdc === 0n,
+  canSkip: async (ctx) => strategyAaveDebtToRepay(ctx) === 0n || ctx.contractUsdc === 0n,
   execute: executeAaveRepay,
 };
 
@@ -791,8 +810,8 @@ const aaveWithdraw = (mode: 'proportional' | 'remaining'): OpStep => ({
   describe: (ctx) => {
     if (ctx.aaveSupplied === 0n) return 'withdraw from Aave (nothing supplied)';
     if (mode === 'proportional') {
-      const isFullRedemption = ctx.redeemFraction >= BigInt(1e18);
-      if (isFullRedemption) return `withdraw ALL ${fmtAsset(ctx.aaveSupplied, ctx)} from Aave`;
+      const isFullStrategyRedeem = ctx.strategyRedeemFraction >= BigInt(1e18);
+      if (isFullStrategyRedeem) return `withdraw ALL ${fmtAsset(ctx.aaveSupplied, ctx)} from Aave`;
       const amount = _proportionalWithdrawAmount(ctx);
       return `withdraw ${fmtAsset(amount, ctx)} from Aave (proportional)`;
     }
@@ -808,8 +827,8 @@ const aaveWithdraw = (mode: 'proportional' | 'remaining'): OpStep => ({
     if (ctx.aaveSupplied === 0n) return;
     let amount: bigint;
     if (mode === 'proportional') {
-      const isFullRedemption = ctx.redeemFraction >= BigInt(1e18);
-      amount = isFullRedemption ? ctx.aaveSupplied : _proportionalWithdrawAmount(ctx);
+      const isFullStrategyRedeem = ctx.strategyRedeemFraction >= BigInt(1e18);
+      amount = isFullStrategyRedeem ? ctx.aaveSupplied : _proportionalWithdrawAmount(ctx);
     } else {
       const needed = ctx.totalRedeemAsset > ctx.contractAsset
         ? ctx.totalRedeemAsset - ctx.contractAsset
@@ -825,14 +844,14 @@ const aaveWithdraw = (mode: 'proportional' | 'remaining'): OpStep => ({
 /**
  * 10-partial — Withdraw a small amount of Aave collateral to cover USDC shortfall (rising price).
  * Runs BEFORE aave_repay in the rising-price path.
- * Size: (aaveDebt - contractUsdc) converted to asset units at current price.
+ * Size: (strategy debt target - contractUsdc) converted to asset units at current price.
  */
 const aaveWithdrawPartial: OpStep = {
   id: 'aave_withdraw_partial',
   substep: 'aave',
   refreshCtx: true,
   describe: (ctx) => {
-    const shortfall = ctx.aaveDebt > ctx.contractUsdc ? ctx.aaveDebt - ctx.contractUsdc : 0n;
+    const shortfall = usdcShortfallVsContract(ctx);
     const assetForSf =
       shortfall > 0n ? (shortfall * (10n ** 12n) * (10n ** ctx.assetDecimals)) / ctx.price : 0n;
     const redeemGap = ctx.totalRedeemAsset > ctx.contractAsset ? ctx.totalRedeemAsset - ctx.contractAsset : 0n;
@@ -841,8 +860,8 @@ const aaveWithdrawPartial: OpStep = {
   canSkip: async (ctx) => {
     if (ctx.aaveSupplied === 0n) return true;
 
-    if (ctx.aaveDebt <= ctx.contractUsdc) return true; // no USDC shortfall
     const sf = usdcShortfallVsContract(ctx);
+    if (sf === 0n) return true; // no USDC shortfall for the debt slice being unwound
     const cap = getSmallSwapSkipMaxUsdc6();
     if (sf > 0n && sf < cap) {
       if (await canSkipSmallSwapViaOwnerReserve(ctx, sf)) {
@@ -864,7 +883,7 @@ const aaveWithdrawPartial: OpStep = {
     return false;
   },
   execute: async (ctx) => {
-    const sf = ctx.aaveDebt > ctx.contractUsdc ? ctx.aaveDebt - ctx.contractUsdc : 0n;
+    const sf = usdcShortfallVsContract(ctx);
     const cap = getSmallSwapSkipMaxUsdc6();
     const smallSkipOwner =
       sf > 0n && sf < cap && (await canSkipSmallSwapViaOwnerReserve(ctx, sf));
@@ -899,13 +918,13 @@ const dexSwapForUsdc: OpStep = {
   substep: 'aave',
   refreshCtx: true,
   describe: (ctx) => {
-    const shortfall = ctx.aaveDebt > ctx.contractUsdc ? ctx.aaveDebt - ctx.contractUsdc : 0n;
+    const shortfall = usdcShortfallVsContract(ctx);
     const assetToSell = (shortfall * (10n ** 12n) * (10n ** ctx.assetDecimals)) / ctx.price;
     return `swap ${fmtAsset(assetToSell, ctx)} → USDC to cover ${fmtUsdc(shortfall)} shortfall (11a)`;
   },
   canSkip: async (ctx) => {
-    if (ctx.aaveDebt <= ctx.contractUsdc) return true; // gap already closed
     const sf = usdcShortfallVsContract(ctx);
+    if (sf === 0n) return true; // gap already closed for the debt slice being unwound
     const cap = getSmallSwapSkipMaxUsdc6();
     if (sf > 0n && sf < cap) {
       if (await canSkipSmallSwapViaOwnerReserve(ctx, sf)) {
@@ -927,7 +946,7 @@ const dexSwapForUsdc: OpStep = {
     return false;
   },
   execute: async (ctx) => {
-    const shortfall = ctx.aaveDebt > ctx.contractUsdc ? ctx.aaveDebt - ctx.contractUsdc : 0n;
+    const shortfall = usdcShortfallVsContract(ctx);
     if (shortfall === 0n) return;
     const assetToSell = (shortfall * (10n ** 12n) * (10n ** ctx.assetDecimals)) / ctx.price;
     // Cap to what contract actually holds
@@ -1158,6 +1177,52 @@ async function waitForHlPositionAtLeast(
   }
 }
 
+/** Confirm HL short size dropped after closeShort relay (reduce-only IOC fill). */
+async function waitForHlShortCloseConfirmed(
+  info: any,
+  hlUser: string,
+  symbol: string,
+  assetAliases: string,
+  assetDecimals: number,
+  sizeBefore: bigint,
+  placedSize: bigint,
+  fullClose: boolean,
+): Promise<void> {
+  const maxMs = hlOpenShortWaitMaxMs();
+  const pollMs = hlOpenShortWaitPollMs();
+  const start = Date.now();
+  const needReduction = fullClose ? sizeBefore : placedSize < sizeBefore ? placedSize : sizeBefore;
+
+  while (true) {
+    const after = await readHlPositionSize(info, hlUser, symbol, assetDecimals);
+    const reduced = sizeBefore > after ? sizeBefore - after : 0n;
+    if (fullClose && after === 0n) {
+      console.log(`      → HL short fully closed (0 ${assetAliases})`);
+      return;
+    }
+    if (!fullClose && (reduced >= needReduction || after === 0n)) {
+      console.log(
+        `      → HL short reduced by ${ethers.formatUnits(reduced, assetDecimals)} ${assetAliases} ` +
+          `(before ${ethers.formatUnits(sizeBefore, assetDecimals)})`,
+      );
+      return;
+    }
+
+    if (Date.now() - start >= maxMs) {
+      throw new Error(
+        `HL closeShort not confirmed: ${symbol} before=${ethers.formatUnits(sizeBefore, assetDecimals)} ` +
+          `after=${ethers.formatUnits(after, assetDecimals)} needReduction≈${ethers.formatUnits(needReduction, assetDecimals)}`,
+      );
+    }
+
+    console.log(
+      `      ↪ waiting for HL close: size ${ethers.formatUnits(after, assetDecimals)} ${assetAliases} ` +
+        `(reduced ${ethers.formatUnits(reduced, assetDecimals)})`,
+    );
+    await sleep(pollMs);
+  }
+}
+
 /**
  * Push HL API spot / perp state into the on-chain adapter so `getHyperliquidSpotBalance()` matches reality.
  * HL withdraws can deduct ~1 USDC fee off-chain; without this, stale adapter USDC triggers pointless sweep retries.
@@ -1306,31 +1371,51 @@ async function maybeRunHlEventRelay(
     await waitForHlPositionAtLeast(info, hlUser, symbol, assetDecimals, expectedSize);
   } else if (expected === 'EXCHANGE_CLOSE_SHORT') {
     const symbol = String(parsed.args[0]).toUpperCase();
+    const assetDecimals = Number(ctx.assetDecimals);
+    const beforeSize = await readHlPositionSize(info, hlUser, symbol, assetDecimals);
+    if (beforeSize === 0n) {
+      console.log(`      ↪ HL relay: no open ${symbol} short on HL — close relay skipped`);
+      return;
+    }
+
     let closeSize18 = 0n;
     if (parsed.name === 'closeShort' && parsed.args.length > 1) {
       closeSize18 = BigInt(parsed.args[1].toString());
     } else {
-      const chState: any = await info.clearinghouseState({ user: hlUser });
-      const pos = (chState?.assetPositions || []).find((p: any) =>
-        String(p?.position?.coin || '').toUpperCase() === symbol
-      );
-      if (pos) closeSize18 = ethers.parseUnits(String(pos.position.szi).replace('-', ''), Number(ctx.assetDecimals));
+      closeSize18 = beforeSize;
     }
+
     if (closeSize18 > 0n) {
       const assetId = findPerpAssetId(perpMeta, symbol);
       const szDecimals = Number(perpMeta?.universe?.[assetId]?.szDecimals ?? 0);
-      const rawSize = ethers.formatUnits(closeSize18, Number(ctx.assetDecimals));
+      const rawSize = ethers.formatUnits(closeSize18, assetDecimals);
       const size = formatHlSize(rawSize, szDecimals);
       if (!size || size === '0') {
-        console.log(`      ↪ HL relay: close size rounds to 0 at szDecimals=${szDecimals}; skipping close order`);
+        const msg = `HL relay: close size rounds to 0 at szDecimals=${szDecimals}`;
+        if (required) throw new Error(msg);
+        console.log(`      ↪ ${msg}; skipping close order`);
         return;
       }
+      const placedSize = decimalToBigInt(size, assetDecimals);
       const px = formatHlLimitPx(mids[symbol], true, szDecimals);
+      const fullClose = parsed.name === 'closeShort' && parsed.args.length === 1;
       console.log(`      ↪ HL relay: BUY ${size} ${symbol} reduce-only @ IOC ${px}`);
       await exchange.order({
         orders: [{ a: assetId, b: true, p: px, s: size, r: true, t: { limit: { tif: 'Ioc' } } }],
         grouping: 'na',
       }, orderOpts as any);
+      if (required) {
+        await waitForHlShortCloseConfirmed(
+          info,
+          hlUser,
+          symbol,
+          ctx.assetSymbol,
+          assetDecimals,
+          beforeSize,
+          placedSize,
+          fullClose,
+        );
+      }
     }
   } else if (expected === 'EXCHANGE_SPOT_BUY') {
     const symbol = ctx.assetSymbol.toUpperCase();
@@ -1490,7 +1575,10 @@ export async function runRedeemPlaybook(
   ctx: OpsContext,
   lockedNAV: bigint | undefined,
 ): Promise<void> {
-  console.log(`\n💸 NET_REDEEM (${ctx.assetSymbol}) — redeem fraction ${(Number(ctx.redeemFraction) / 1e16).toFixed(2)}%\n`);
+  console.log(
+    `\n💸 NET_REDEEM (${ctx.assetSymbol}) — gross redeem ${(Number(ctx.redeemFraction) / 1e16).toFixed(2)}%, ` +
+      `strategy unwind ${(Number(ctx.strategyRedeemFraction) / 1e16).toFixed(2)}%\n`,
+  );
 
   // Step 1: Run core steps (close short + withdraw USDC from HL).
   // Each step has refreshCtx=true so ctx is up-to-date for canSkip checks.
@@ -1499,12 +1587,16 @@ export async function runRedeemPlaybook(
 
   // Step 2: Refresh context to read the actual USDC balance now in the contract.
   let freshCtx = await snapshotOpsContext(ctx.kashYield, ctx.provider, ctx.batchCycle, lockedNAV);
+  freshCtx.aaveDebtFloor = strategyAaveDebtFloor(freshCtx);
   freshCtx = await waitForHlWithdrawSettlementIfNeeded(freshCtx, lockedNAV);
 
-  // Step 3: Classify tail from freshCtx (contractUsdc vs aaveDebt) and run tail steps.
+  // Step 3: Classify tail from freshCtx (contractUsdc vs strategy debt target) and run tail steps.
   const tail: RedeemTail = classifyRedeemTail(freshCtx);
   console.log(`   📊 Redeem tail: ${tailLabel(tail)}`);
-  console.log(`      contractUsdc=${fmtUsdc(freshCtx.contractUsdc)}, aaveDebt=${fmtUsdc(freshCtx.aaveDebt)}\n`);
+  console.log(
+    `      contractUsdc=${fmtUsdc(freshCtx.contractUsdc)}, ` +
+      `strategyDebt=${fmtUsdc(strategyAaveDebtToRepay(freshCtx))}, totalDebt=${fmtUsdc(freshCtx.aaveDebt)}\n`,
+  );
 
   const tailSteps = buildRedeemTail(tail, lockedNAV);
   await runPlaybook(tailSteps, freshCtx);
@@ -1576,7 +1668,9 @@ async function sweepRemainingHlUsdcAfterFullRedeem(
       console.warn(`      ⚠️  HL sweep #${rounds} failed: ${e?.message ?? e}`);
     }
     await sleep(pollMs);
-    fresh = await snapshotOpsContext(fresh.kashYield, fresh.provider, fresh.batchCycle, lockedNAV);
+    const nextFresh = await snapshotOpsContext(fresh.kashYield, fresh.provider, fresh.batchCycle, lockedNAV);
+    nextFresh.aaveDebtFloor = fresh.aaveDebtFloor;
+    fresh = nextFresh;
     console.log(`      ↪ sweep status: contractUsdc=${fmtUsdc(fresh.contractUsdc)}, hlUsdc=${fmtUsdc(fresh.hlUsdcBalance)}, adapterUsdc=${fmtUsdc(fresh.adapterUsdcErc20)}`);
   }
 
@@ -1608,7 +1702,7 @@ async function waitForHlWithdrawSettlementIfNeeded(
     return sweepRemainingHlUsdcAfterFullRedeem(fresh, lockedNAV);
   }
 
-  const debtGap0 = fresh.aaveDebt > fresh.contractUsdc ? fresh.aaveDebt - fresh.contractUsdc : 0n;
+  const debtGap0 = usdcShortfallVsContract(fresh);
   if (debtGap0 <= feeTolerance) {
     // Debt already covered (e.g. pre-funded vault USDC) — still sweep HL so USDC is not stranded.
     return sweepRemainingHlUsdcAfterFullRedeem(fresh, lockedNAV);
@@ -1622,7 +1716,7 @@ async function waitForHlWithdrawSettlementIfNeeded(
 
   console.log(
     `   ⏳ Waiting for HL withdrawal settlement (up to ${(maxMs / 1000).toFixed(0)}s, poll ${(pollMs / 1000).toFixed(0)}s)` +
-    ` — debt=${fmtUsdc(fresh.aaveDebt)}, contractUsdc=${fmtUsdc(fresh.contractUsdc)}, ` +
+    ` — strategyDebt=${fmtUsdc(strategyAaveDebtToRepay(fresh))}, totalDebt=${fmtUsdc(fresh.aaveDebt)}, contractUsdc=${fmtUsdc(fresh.contractUsdc)}, ` +
     `adapterUsdc=${fmtUsdc(fresh.adapterUsdcErc20)}, hlUsdc=${fmtUsdc(fresh.hlUsdcBalance)}`,
   );
 
@@ -1631,7 +1725,7 @@ async function waitForHlWithdrawSettlementIfNeeded(
   let withdrawInitiated = false;
 
   while (Date.now() - started < maxMs) {
-    const debtRemaining = fresh.aaveDebt > fresh.contractUsdc ? fresh.aaveDebt - fresh.contractUsdc : 0n;
+    const debtRemaining = usdcShortfallVsContract(fresh);
     if (debtRemaining <= feeTolerance) break;
 
     const pullAmt = hlSettlementWithdrawAmount(fresh, debtRemaining);
@@ -1657,27 +1751,32 @@ async function waitForHlWithdrawSettlementIfNeeded(
     }
 
     await sleep(pollMs);
-    fresh = await snapshotOpsContext(fresh.kashYield, fresh.provider, fresh.batchCycle, lockedNAV);
+    const nextFresh = await snapshotOpsContext(fresh.kashYield, fresh.provider, fresh.batchCycle, lockedNAV);
+    nextFresh.aaveDebtFloor = fresh.aaveDebtFloor;
+    fresh = nextFresh;
     console.log(
-      `      ↪ settlement status: contractUsdc=${fmtUsdc(fresh.contractUsdc)}, aaveDebt=${fmtUsdc(fresh.aaveDebt)}, ` +
+      `      ↪ settlement status: contractUsdc=${fmtUsdc(fresh.contractUsdc)}, strategyDebt=${fmtUsdc(strategyAaveDebtToRepay(fresh))}, totalDebt=${fmtUsdc(fresh.aaveDebt)}, ` +
         `hlUsdc=${fmtUsdc(fresh.hlUsdcBalance)}, adapterUsdc=${fmtUsdc(fresh.adapterUsdcErc20)}`,
     );
-    const shortfallNow = fresh.aaveDebt > fresh.contractUsdc ? fresh.aaveDebt - fresh.contractUsdc : 0n;
+    const shortfallNow = usdcShortfallVsContract(fresh);
     if (shortfallNow <= feeTolerance) break;
   }
 
-  const finalShortfall = fresh.aaveDebt > fresh.contractUsdc ? fresh.aaveDebt - fresh.contractUsdc : 0n;
-  if (finalShortfall > feeTolerance) {
-    const missing = fresh.aaveDebt - fresh.contractUsdc;
+  const finalShortfall = usdcShortfallVsContract(fresh);
+  if (finalShortfall > feeTolerance && hlUsdcPullBudget(fresh) > feeTolerance) {
     throw new Error(
-      `HL withdraw settlement incomplete: contract USDC ${fmtUsdc(fresh.contractUsdc)} < Aave debt ${fmtUsdc(fresh.aaveDebt)} ` +
-        `(shortfall ${fmtUsdc(missing)}). Stopping before tail classification; wait for HL USDC to arrive, then re-run ops.`,
+      `HL withdraw settlement incomplete: contract USDC ${fmtUsdc(fresh.contractUsdc)} < strategy Aave debt target ${fmtUsdc(strategyAaveDebtToRepay(fresh))} ` +
+        `(shortfall ${fmtUsdc(finalShortfall)}, total Aave debt ${fmtUsdc(fresh.aaveDebt)}). Stopping before tail classification; wait for HL USDC to arrive, then re-run ops.`,
     );
   }
-  if (finalShortfall > 0n) {
+  if (finalShortfall > feeTolerance) {
+    console.log(
+      `   ↪ HL settlement has no remaining pull budget; proceeding to rising tail with strategy debt shortfall=${fmtUsdc(finalShortfall)}`,
+    );
+  } else if (finalShortfall > 0n) {
     console.log(`   ✅ HL settlement wait complete within fee tolerance: shortfall=${fmtUsdc(finalShortfall)} (tolerance ${fmtUsdc(feeTolerance)})`);
   } else {
-    console.log('   ✅ HL settlement wait complete: contract USDC now covers Aave debt');
+    console.log('   ✅ HL settlement wait complete: contract USDC now covers strategy Aave debt target');
   }
 
   return sweepRemainingHlUsdcAfterFullRedeem(fresh, lockedNAV);
@@ -1791,16 +1890,14 @@ export async function runTestAaveLoopPlaybook(ctx: OpsContext): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /**
- * Proportional Aave withdrawal amount for partial redemption.
- * Uses lockedNAV-scaled USD amount when available (more precise than fraction × aaveSupplied
- * because it accounts for daily yield accrued in Aave that isn't yet in currentNAV).
- * Falls back to fraction × aaveSupplied when lockedNAV is unavailable.
+ * Proportional Aave withdrawal for partial strategy unwind: release at most
+ * strategyRedeemFraction × supplied, capped by post-mint redeem asset gap on the vault.
  */
 function _proportionalWithdrawAmount(ctx: OpsContext): bigint {
-  // lockedNAV-based sizing mirrors how Phase 2 will pay out redeemers
-  if (ctx.totalRedeemAsset > 0n && ctx.redeemFraction < BigInt(1e18)) {
-    return ctx.totalRedeemAsset;
-  }
-  // Fraction-based fallback
-  return (ctx.aaveSupplied * ctx.redeemFraction) / BigInt(1e18);
+  const stratFrac = ctx.strategyRedeemFraction;
+  const redeemGap =
+    ctx.totalRedeemAsset > ctx.contractAsset ? ctx.totalRedeemAsset - ctx.contractAsset : 0n;
+  const capFromStrategy = (ctx.aaveSupplied * stratFrac) / BigInt(1e18);
+  if (redeemGap === 0n) return 0n;
+  return redeemGap < capFromStrategy ? redeemGap : capFromStrategy;
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadContract, useBalance, useEstimateFeesPerGas } from 'wagmi';
 import { CONTRACTS, ARBITRUM_ONE_BLOCK_EXPLORER, HARDHAT_CHAIN_ID } from '@/lib/contracts/addresses';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
@@ -15,6 +15,17 @@ const GAS_RESERVE_ETH = parseEther('0.0005');
 const ARB_L2_FALLBACK_MAX_FEE_WEI = 10n ** 9n;
 
 type Product = 'eth' | 'btc';
+
+const ACTIVITY_REFRESH_EVENT = 'kash-activity-refresh';
+
+function isUserRejectedWalletError(error: Error | null | undefined): boolean {
+  if (!error) return false;
+  const msg = `${error.name} ${error.message} ${error.cause instanceof Error ? error.cause.message : ''}`.toLowerCase();
+  return (
+    /user rejected|user denied|rejected the request|denied transaction signature|reject this request/i.test(msg) ||
+    error.name === 'UserRejectedRequestError'
+  );
+}
 
 const MINT_TOKEN_ETH = { symbol: 'ETH', address: zeroAddress, decimals: 18 };
 const MINT_TOKEN_BTC = { symbol: 'wBTC', address: CONTRACTS.mockWbtc, decimals: 8 };
@@ -163,6 +174,12 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
       refetchPendingMint();
     }
   }, [isMintSuccess, refetchPendingMint]);
+
+  useEffect(() => {
+    if (isMintSuccess && mintHash && amount) {
+      window.dispatchEvent(new Event(ACTIVITY_REFRESH_EVENT));
+    }
+  }, [isMintSuccess, mintHash, amount]);
 
   // Helper to safely render error cause
   const renderErrorCause = (error: typeof mintError) => {
@@ -421,11 +438,22 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
       )}
 
       {(approveError || isApproveError) && (
-        <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
-          <p className="text-sm text-red-800 font-medium">Approval Failed</p>
-          <p className="text-xs text-red-600 mt-1">
-            {approveError?.message || 'Approval transaction failed. Please try again.'}
-          </p>
+        <div className="p-3 rounded-lg border border-red-200 bg-red-50 text-left">
+          {isUserRejectedWalletError(approveError) ? (
+            <>
+              <p className="text-sm font-medium text-red-800">Approval request cancelled</p>
+              <p className="text-xs text-red-600/90 mt-1.5 leading-relaxed">
+                You closed the wallet prompt or declined the transaction. No funds were spent. Approve again when you are ready to continue.
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="text-sm font-medium text-red-800">Approval failed</p>
+              <p className="text-xs text-red-600 mt-1.5 leading-relaxed">
+                The approval transaction could not be completed. Try again, or check your wallet for details.
+              </p>
+            </>
+          )}
         </div>
       )}
 

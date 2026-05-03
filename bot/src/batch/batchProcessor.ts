@@ -5,6 +5,7 @@ import { config } from '../config';
 import {
   snapshotOpsContext,
   computeTotalRedeemAsset,
+  computeStrategyRedeemFraction,
   getAaveBorrowedAmountV3,
   getAaveSuppliedAmountV3,
   readHyperliquidAdapterAddress,
@@ -509,24 +510,16 @@ export class BatchProcessor {
 
       // 1) Contract-held asset
       let contractAsset = 0n;
-      let reservedAsset = 0n;
       if (isBtc) {
         const wbtcAddr: string = await this.kashYield.wbtcAddress();
         const wbtc = new ethers.Contract(wbtcAddr, ['function balanceOf(address) view returns (uint256)'], this.provider);
         contractAsset = BigInt((await wbtc.balanceOf(kashAddr)).toString());
-        try { reservedAsset = BigInt((await this.kashYield.getReservedBtc()).toString()); } catch { reservedAsset = 0n; }
       } else {
         contractAsset = BigInt((await this.provider.getBalance(kashAddr)).toString());
-        try { reservedAsset = BigInt((await this.kashYield.getReservedEth()).toString()); } catch { reservedAsset = 0n; }
       }
-      // Exclude user pending mint deposits from NAV backing; they are not minted KASH yet.
-      if (reservedAsset > 0n && contractAsset >= reservedAsset) {
-        contractAsset -= reservedAsset;
-      }
-
       const ownerAssetReserve = await this.getOwnerAssetReserve();
-      if (ownerAssetReserve > 0n && contractAsset >= ownerAssetReserve) {
-        contractAsset -= ownerAssetReserve;
+      if (ownerAssetReserve > 0n) {
+        contractAsset = contractAsset > ownerAssetReserve ? contractAsset - ownerAssetReserve : 0n;
       }
 
       // 2) Aave supplied collateral (real Aave V3)
@@ -552,12 +545,17 @@ export class BatchProcessor {
       const assetUsd18 = (totalAsset * price) / (10n ** assetDecimals);
       const netUsdc6 = contractUsdc + hlUsdc - aaveDebtUsdc;
       const netUsdcUsd18 = netUsdc6 * (10n ** 12n);
-      const portfolioUsd18 = assetUsd18 + netUsdcUsd18;
+      const pendingMintUsdAfterFee = await this.getUnprocessedPendingMintUsdAfterFee(price, assetDecimals);
+      let portfolioUsd18 = assetUsd18 + netUsdcUsd18;
+      portfolioUsd18 = portfolioUsd18 > pendingMintUsdAfterFee
+        ? portfolioUsd18 - pendingMintUsdAfterFee
+        : 0n;
 
       console.log(
         `   📈 Live portfolio: asset=${ethers.formatUnits(totalAsset, Number(assetDecimals))} ${isBtc ? 'BTC' : 'ETH'} ` +
         `(${ethers.formatEther(assetUsd18)} USD), netUSDC=${ethers.formatUnits(netUsdc6, 6)} ` +
-        `(${ethers.formatEther(netUsdcUsd18)} USD), reservedExcluded=${ethers.formatUnits(reservedAsset, Number(assetDecimals))} ${isBtc ? 'BTC' : 'ETH'}`
+        `(${ethers.formatEther(netUsdcUsd18)} USD), pendingMintExcluded=${ethers.formatEther(pendingMintUsdAfterFee)} USD ` +
+        `(after fee; redeem payout on vault is not excluded)`
       );
 
       return portfolioUsd18 > 0n ? portfolioUsd18 : 0n;
@@ -834,23 +832,37 @@ export class BatchProcessor {
    * Handle NET_REDEEM - Withdraw capital (reverse of NET_MINT).
    * Can run as one step (full) or split: --step=hl (HL only) then --step=aave (Aave only).
    *
-   * Uses the fraction of total KASH supply being redeemed to determine exactly how much
-   * of each position (HL short, HL spot BTC, Aave wBTC) to unwind.  This is correct
-   * regardless of price movement — a USD/leverage-based close size drifts wrong when
-   * price has moved since the position was opened.
+   * Uses gross redeem share (batchTotalRedeemKash / supply) for Phase-2-style accounting context,
+   * and **strategy** unwind share (mint-offset) for HL short close and Aave withdrawal sizing so
+   * same-batch minters do not force a full strategy exit.
    */
   private async handleNetRedeem(amountUSD: bigint, _asset: string, batchCycle: bigint, lockedNAV?: bigint): Promise<void> {
     const step = config.batchStep;
     console.log(`💸 Handling NET_REDEEM (${isBtc ? 'BTC' : 'ETH'}) - Withdrawing capital...`);
     console.log(`   Net amount: ${ethers.formatEther(amountUSD)} USD${step !== 'full' ? ` [step=${step} only]` : ''}\n`);
 
-    const redeemFraction = await this.getRedeemFraction(batchCycle);
-    const pct = (Number(redeemFraction) / 1e16).toFixed(2);
-    console.log(`   Redeem fraction: ${pct}% of KASH supply\n`);
+    const redeemFractionGross = await this.getRedeemFraction(batchCycle);
+    const strategyRedeemFraction = await computeStrategyRedeemFraction(
+      this.kashYield,
+      this.provider,
+      batchCycle,
+      isBtc,
+      lockedNAV,
+    );
+    const pctGross = (Number(redeemFractionGross) / 1e16).toFixed(2);
+    const pctStrat = (Number(strategyRedeemFraction) / 1e16).toFixed(2);
+    console.log(
+      `   Redeem fraction (gross user redemptions): ${pctGross}% of KASH supply; ` +
+        `strategy unwind (after same-batch mint offset): ${pctStrat}%\n`,
+    );
 
     try {
-      if (step === 'full' || step === 'ops' || step === 'hl') await this.handleNetRedeemHyperliquid(redeemFraction);
-      if (step === 'full' || step === 'ops' || step === 'aave') await this.handleNetRedeemAave(amountUSD, redeemFraction, lockedNAV);
+      if (step === 'full' || step === 'ops' || step === 'hl') {
+        await this.handleNetRedeemHyperliquid(strategyRedeemFraction, redeemFractionGross);
+      }
+      if (step === 'full' || step === 'ops' || step === 'aave') {
+        await this.handleNetRedeemAave(amountUSD, strategyRedeemFraction, lockedNAV);
+      }
       console.log('   ✅ NET_REDEEM complete!\n');
     } catch (error: any) {
       console.error('❌ Failed to handle NET_REDEEM:', error.message);
@@ -873,7 +885,7 @@ export class BatchProcessor {
       const totalSupply = BigInt((await kashToken.totalSupply()).toString());
       if (totalSupply === 0n) return BigInt(1e18);
       const redeemKash = BigInt((await this.kashYield.batchTotalRedeemKash(batchCycle)).toString());
-      if (redeemKash === 0n) return BigInt(1e18);
+      if (redeemKash === 0n) return 0n;
       const fraction = (redeemKash * BigInt(1e18)) / totalSupply;
       return fraction > BigInt(1e18) ? BigInt(1e18) : fraction;
     } catch (err: any) {
@@ -885,20 +897,31 @@ export class BatchProcessor {
 
   /**
    * NET_REDEEM Hyperliquid (unified for ETH and BTC products):
-   *   1. Close the proportional share of the short (redeemFraction of position size)
+   *   1. Close the proportional share of the short (strategyRedeemFraction of position size;
+   *      same-batch mints reduce this vs. gross redeem fraction).
    *   2. Sell ALL spot asset back to USDC — the redeemer's collateral (ETH or wBTC) always
    *      comes from Aave, never from HL spot.  HL is only ever a USDC in / USDC out venue.
    *   3. Withdraw all USDC from HL to the contract
    *
    * handleNetRedeemAave then uses that USDC to repay the proportional Aave borrow and
-   * withdraws the proportional share of Aave collateral to fund Phase 2 payouts.
+   * withdraws proportional Aave collateral to fund Phase 2 payouts.
+   *
+   * @param strategyRedeemFraction — fraction of the HL short to close.
+   * @param redeemFractionGross — gross KASH redemption share (logging / sweep heuristics).
    */
-  private async handleNetRedeemHyperliquid(redeemFraction: bigint): Promise<void> {
+  private async handleNetRedeemHyperliquid(
+    strategyRedeemFraction: bigint,
+    redeemFractionGross: bigint,
+  ): Promise<void> {
     const shortSymbol = isBtc ? 'BTC' : 'ETH';
 
     // ── Step 1: Close proportional share of the HL short ──────────────────
-    const pct = (Number(redeemFraction) / 1e16).toFixed(2);
-    console.log(`   [HL] Step 1: Close ${pct}% of ${shortSymbol} short on Hyperliquid`);
+    const pct = (Number(strategyRedeemFraction) / 1e16).toFixed(2);
+    const pctGross = (Number(redeemFractionGross) / 1e16).toFixed(2);
+    console.log(
+      `   [HL] Step 1: Close ${pct}% (strategy) of ${shortSymbol} short on Hyperliquid ` +
+        `(gross redeem ${pctGross}% of supply)`,
+    );
     const [posSize, , , , isActive] = await this.kashYield.getHyperliquidPosition(shortSymbol);
     if (!isActive) {
       const tokenAddr = await (isBtc ? this.kashYield.kashTokenBtc() : this.kashYield.kashTokenEth()).catch(() => null);
@@ -915,7 +938,7 @@ export class BatchProcessor {
       }
     } else {
       const fullSize = BigInt(posSize.toString());
-      const closeSize = (fullSize * redeemFraction) / BigInt(1e18);
+      const closeSize = (fullSize * strategyRedeemFraction) / BigInt(1e18);
       if (closeSize >= fullSize) {
         await (await this.kashYield['closeShort(string)'](shortSymbol)).wait();
         console.log(`   ✅ Closed full ${shortSymbol} short`);
@@ -962,7 +985,7 @@ export class BatchProcessor {
    * On a full (100%) redemption the residual aToken balance after repaying debt is
    * withdrawn entirely, sweeping any accrued interest and absorbing HL slippage gaps.
    */
-  private async handleNetRedeemAave(amountUSD: bigint, redeemFraction: bigint, lockedNAV?: bigint): Promise<void> {
+  private async handleNetRedeemAave(amountUSD: bigint, strategyRedeemFraction: bigint, lockedNAV?: bigint): Promise<void> {
     const price = isBtc ? await this.kashYield.getBtcPrice() : await this.kashYield.getEthPrice();
     console.log(`   [Aave] Step 1: Repay Aave borrow with USDC (contract balance)`);
     const contractUsdc = await this.getContractUsdcBalance();
@@ -1001,7 +1024,7 @@ export class BatchProcessor {
     // On a full redemption, withdraw the entire remaining Aave position rather than a
     // calculated amount. This sweeps accrued yield (aTokens above the base balance) and
     // any gap left by HL slippage so Phase 2 has enough collateral to pay redeemers in full.
-    const isFullRedemption = redeemFraction >= BigInt(1e18);
+    const isFullRedemption = strategyRedeemFraction >= BigInt(1e18);
     if (isFullRedemption) {
       const aaveSupplied = await this.getAaveSuppliedAmount();
       if (aaveSupplied > 0n) {
@@ -1203,6 +1226,39 @@ export class BatchProcessor {
     const userAddr = config.aaveUserAddress || config.kashYieldAddress!;
     const usdcAddr = config.aaveUsdcAddress;
     return getAaveBorrowedAmountV3(this.provider, poolAddr, usdcAddr, userAddr).catch(() => 0n);
+  }
+
+  /**
+   * Pending mint capital is not backing existing KASH yet, even if the bot already deployed it
+   * into Aave/HL during ops. Subtract the after-fee USD value from NAV; the fee remains in NAV
+   * as protocol/holder value, matching Phase 2 mint math.
+   */
+  private async getUnprocessedPendingMintUsdAfterFee(price: bigint, assetDecimals: bigint): Promise<bigint> {
+    const currentCycle = BigInt((await this.kashYield.getCurrentBatchCycle()).toString());
+    const feeBps = BigInt((await this.kashYield.feeBps()).toString());
+    let sum = 0n;
+    const lookback = 10n;
+    for (let i = 0n; i <= lookback; i++) {
+      if (i > currentCycle) break;
+      const cycle = currentCycle - i;
+      const processed = await this.kashYield.batchProcessed(cycle);
+      if (processed) continue;
+
+      const info = await this.kashYield.getBatchInfo(cycle);
+      let totalMintUsd = BigInt(info.totalMintUSD.toString());
+      if (totalMintUsd === 0n) {
+        let totalMintAsset: bigint;
+        if (isBtc) {
+          totalMintAsset = BigInt((await this.kashYield.batchTotalMintBtc(cycle)).toString());
+        } else {
+          totalMintAsset = BigInt((await this.kashYield.batchTotalMintEth(cycle)).toString());
+        }
+        totalMintUsd = (totalMintAsset * price) / (10n ** assetDecimals);
+      }
+      if (totalMintUsd === 0n) continue;
+      sum += (totalMintUsd * (10000n - feeBps)) / 10000n;
+    }
+    return sum;
   }
 
   private async getOwnerUsdcReserve(): Promise<bigint> {

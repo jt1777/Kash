@@ -3,6 +3,23 @@
 import { useAccount, useReadContracts, useWriteContract, useWaitForTransactionReceipt, useEstimateFeesPerGas, useReadContract } from 'wagmi';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { ARBITRUM_ONE_CHAIN_ID, ARBITRUM_ONE_BLOCK_EXPLORER, CONTRACTS } from '@/lib/contracts/addresses';
+
+const ACTIVITY_REFRESH_EVENT = 'kash-activity-refresh';
+
+function cancelSuccessMessage(
+  type: 'mint' | 'redeem',
+  contractAddress: string | undefined,
+): string {
+  const addr = contractAddress?.toLowerCase();
+  const btcAddr = CONTRACTS.kashYieldBtc?.toLowerCase();
+  const isBtc = !!(btcAddr && addr === btcAddr);
+  if (type === 'mint') {
+    if (isBtc) return 'Cancel confirmed. Your wBTC has been returned to your wallet.';
+    return 'Cancel confirmed. Your eth has been returned to your wallet.';
+  }
+  if (isBtc) return 'Cancel confirmed. Your KASH-BTC has been returned to your wallet.';
+  return 'Cancel confirmed. Your KASH-ETH has been returned to your wallet.';
+}
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 
 // Fallback max fee when estimate is missing (e.g. 25 gwei on L2)
@@ -49,6 +66,8 @@ export function RecentActivity() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [cancelTarget, setCancelTarget] = useState<{ contractAddress: string; batchCycle: number; type: 'mint' | 'redeem' } | null>(null);
+  /** Set when user submits a cancel tx; used on receipt so message is correct even if cancelTarget is cleared before the effect runs again. */
+  const cancelFeedbackContextRef = useRef<{ type: 'mint' | 'redeem'; contractAddress: string } | null>(null);
 
   // Tracks which tx hashes were ever cancel-eligible (submitted before their batch ran).
   // Persisted in localStorage so it survives page refreshes.
@@ -199,6 +218,14 @@ export function RecentActivity() {
     refetchOnChain();
   }, [load, refetchOnChain]);
 
+  useEffect(() => {
+    const onExternalRefresh = () => {
+      void handleRefresh();
+    };
+    window.addEventListener(ACTIVITY_REFRESH_EVENT, onExternalRefresh);
+    return () => window.removeEventListener(ACTIVITY_REFRESH_EVENT, onExternalRefresh);
+  }, [handleRefresh]);
+
   const writeContractResult = useWriteContract();
   const { writeContract: writeCancel, data: cancelTxHash, isPending: isCancelPending, error: cancelError } = writeContractResult;
   const resetWrite = 'reset' in writeContractResult ? (writeContractResult as { reset: () => void }).reset : () => {};
@@ -227,6 +254,7 @@ export function RecentActivity() {
   useEffect(() => {
     if (!cancelTxHash || isCancelConfirming) return;
     if (isCancelReceiptError || cancelReceipt?.status === 'reverted') {
+      cancelFeedbackContextRef.current = null;
       setCancelTarget(null);
       setCancelFeedback({
         type: 'error',
@@ -236,12 +264,17 @@ export function RecentActivity() {
       return;
     }
     if (isCancelSuccess && cancelReceipt?.status === 'success') {
+      const ctx = cancelFeedbackContextRef.current;
+      cancelFeedbackContextRef.current = null;
+      const message = ctx
+        ? cancelSuccessMessage(ctx.type, ctx.contractAddress)
+        : 'Cancel confirmed.';
       setCancelTarget(null);
-      setCancelFeedback({ type: 'success', message: 'Cancel confirmed. Your wBTC has been returned to your wallet.' });
+      setCancelFeedback({ type: 'success', message });
       load();
       resetWrite();
     }
-  }, [cancelTxHash, isCancelConfirming, isCancelSuccess, isCancelReceiptError, cancelReceipt?.status, load]);
+  }, [cancelTxHash, isCancelConfirming, isCancelSuccess, isCancelReceiptError, cancelReceipt?.status, load, resetWrite]);
 
   // When user rejects tx in wallet, clear target and show message
   useEffect(() => {
@@ -253,6 +286,7 @@ export function RecentActivity() {
   const handleCancelMint = (item: ActivityItem, resolvedCycle: number) => {
     if (item.contractAddress == null) return;
     setCancelFeedback(null);
+    cancelFeedbackContextRef.current = { type: 'mint', contractAddress: item.contractAddress };
     setCancelTarget({ contractAddress: item.contractAddress, batchCycle: resolvedCycle, type: 'mint' });
     writeCancel({
       address: item.contractAddress as `0x${string}`,
@@ -266,6 +300,7 @@ export function RecentActivity() {
   const handleCancelRedeem = (item: ActivityItem, resolvedCycle: number) => {
     if (item.contractAddress == null) return;
     setCancelFeedback(null);
+    cancelFeedbackContextRef.current = { type: 'redeem', contractAddress: item.contractAddress };
     setCancelTarget({ contractAddress: item.contractAddress, batchCycle: resolvedCycle, type: 'redeem' });
     writeCancel({
       address: item.contractAddress as `0x${string}`,

@@ -33,6 +33,16 @@ export type RedeemTail =
  * Default: 10 bps = 0.1%.
  */
 const BALANCED_TOLERANCE_BPS = 10n;
+const WAD = 10n ** 18n;
+
+function strategyAaveDebtToRepay(ctx: OpsContext): bigint {
+  if (ctx.aaveDebtFloor != null) {
+    return ctx.aaveDebt > ctx.aaveDebtFloor ? ctx.aaveDebt - ctx.aaveDebtFloor : 0n;
+  }
+  if (ctx.strategyRedeemFraction >= WAD) return ctx.aaveDebt;
+  if (ctx.strategyRedeemFraction === 0n || ctx.aaveDebt === 0n) return 0n;
+  return (ctx.aaveDebt * ctx.strategyRedeemFraction + WAD - 1n) / WAD;
+}
 
 // ---------------------------------------------------------------------------
 // Top-level classifier
@@ -98,6 +108,7 @@ export async function classifyScenario(
 /**
  * Classify the redeem tail AFTER step 06 (close short) and step 08 (withdraw USDC from HL).
  * At this point ctx.contractUsdc reflects the actual USDC proceeds.
+ * Compare against the Aave debt slice being unwound, not total vault debt.
  *
  * The OPS_SCENARIO override can force a specific tail:
  *   OPS_SCENARIO=redeem_hl_falling  → 'falling'
@@ -110,7 +121,8 @@ export function classifyRedeemTail(ctx: OpsContext): RedeemTail {
   if (override === 'redeem_hl_rising') return 'rising';
   if (override === 'redeem_hl_balanced') return 'balanced';
 
-  const { contractUsdc, aaveDebt } = ctx;
+  const { contractUsdc } = ctx;
+  const aaveDebt = strategyAaveDebtToRepay(ctx);
 
   if (aaveDebt === 0n) {
     // No debt to repay — treat as balanced (just withdraw Aave collateral)

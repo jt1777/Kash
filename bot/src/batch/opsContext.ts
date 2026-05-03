@@ -1,5 +1,6 @@
 import { ethers } from 'ethers';
 import { config } from '../config';
+import { strategyRedeemFractionPure } from './strategyRedeemFraction';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -21,6 +22,8 @@ export interface OpsContext {
   /** Aave position (principal + accrued interest, from getUserAccountData or variable debt token) */
   aaveSupplied: bigint;    // ETH (18 dec) or wBTC (8 dec)
   aaveDebt: bigint;        // USDC 6 dec
+  /** Optional debt floor to preserve for partial strategy unwinds; repay only debt above this. */
+  aaveDebtFloor?: bigint;  // USDC 6 dec
 
   /** Hyperliquid balances */
   hlUsdcBalance: bigint;   // USDC 6 dec (spot wallet)
@@ -38,7 +41,13 @@ export interface OpsContext {
 
   /** Redemption accounting */
   batchCycle: bigint;
-  redeemFraction: bigint;    // 18 dec; 1e18 = 100%
+  /** Gross: batchTotalRedeemKash / totalSupply — share of all KASH being redeemed (for HL USDC sweep, logging). */
+  redeemFraction: bigint; // 18 dec; 1e18 = 100%
+  /**
+   * Strategy unwind: max(0, redeemKash − estMintKash) / totalSupply when batch has minters;
+   * else equals redeemFraction. Used for HL partial close and proportional Aave release.
+   */
+  strategyRedeemFraction: bigint;
   totalRedeemAsset: bigint;  // ETH/wBTC owed to all redeemers (at lockedNAV)
 
   /** Prices / product */
@@ -389,6 +398,13 @@ export async function snapshotOpsContext(
 
   // -- Redemption accounting --
   const redeemFraction = await computeRedeemFraction(kashYield, provider, batchCycle, isBtc);
+  const strategyRedeemFraction = await computeStrategyRedeemFraction(
+    kashYield,
+    provider,
+    batchCycle,
+    isBtc,
+    lockedNAV,
+  );
   const totalRedeemAsset = await computeTotalRedeemAsset(kashYield, batchCycle, lockedNAV, price, assetDecimals);
 
   return {
@@ -411,6 +427,7 @@ export async function snapshotOpsContext(
     hlEventRelayEnabled,
     batchCycle,
     redeemFraction,
+    strategyRedeemFraction,
     totalRedeemAsset,
     price,
     isBtc,
@@ -427,7 +444,7 @@ export async function snapshotOpsContext(
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-async function computeRedeemFraction(
+export async function computeRedeemFraction(
   kashYield: ethers.Contract,
   provider: ethers.Provider,
   batchCycle: bigint,
@@ -443,10 +460,53 @@ async function computeRedeemFraction(
     const totalSupply = BigInt((await kashToken.totalSupply()).toString());
     if (totalSupply === 0n) return BigInt(1e18);
     const redeemKash = BigInt((await kashYield.batchTotalRedeemKash(batchCycle)).toString());
-    if (redeemKash === 0n) return BigInt(1e18);
+    if (redeemKash === 0n) return 0n;
     const fraction = (redeemKash * BigInt(1e18)) / totalSupply;
     return fraction > BigInt(1e18) ? BigInt(1e18) : fraction;
   } catch {
     return BigInt(1e18);
+  }
+}
+
+/**
+ * Fraction of HL short / Aave collateral to unwind for this batch's **net** redemption
+ * after offsetting incoming mints (same batch). Uses Phase-1 NAV (`lockedNAV` or on-chain `currentNAV`)
+ * to estimate mint KASH like Phase 2.
+ */
+export async function computeStrategyRedeemFraction(
+  kashYield: ethers.Contract,
+  provider: ethers.Provider,
+  batchCycle: bigint,
+  isBtc: boolean,
+  phase1Nav: bigint | undefined,
+): Promise<bigint> {
+  try {
+    const tokenAddr: string | null = await (isBtc
+      ? kashYield.kashTokenBtc()
+      : kashYield.kashTokenEth()
+    ).catch(() => null);
+    if (!tokenAddr) return BigInt(1e18);
+    const kashToken = new ethers.Contract(tokenAddr, ['function totalSupply() view returns (uint256)'], provider);
+    const totalSupply = BigInt((await kashToken.totalSupply()).toString());
+    const redeemKash = BigInt((await kashYield.batchTotalRedeemKash(batchCycle)).toString());
+    const gross = await computeRedeemFraction(kashYield, provider, batchCycle, isBtc);
+    if (totalSupply === 0n || redeemKash === 0n) return gross;
+
+    const info = await kashYield.getBatchInfo(batchCycle);
+    const mintUsersCount = BigInt(info.mintUsersCount.toString());
+    const totalMintUSD = BigInt(info.totalMintUSD.toString());
+    const feeBps = BigInt((await kashYield.feeBps()).toString());
+    const nav = phase1Nav ?? BigInt((await kashYield.currentNAV()).toString());
+
+    return strategyRedeemFractionPure({
+      totalSupply,
+      redeemKash,
+      mintUsersCount,
+      totalMintUSD,
+      feeBps,
+      nav: nav === 0n ? 1n : nav,
+    });
+  } catch {
+    return computeRedeemFraction(kashYield, provider, batchCycle, isBtc);
   }
 }

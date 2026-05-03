@@ -22,7 +22,7 @@ export function StatsCard({ product = 'eth' }: { product?: Product }) {
     functionName: 'currentNAV',
   });
 
-  const { data: kashBalance } = useReadContract({
+  const { data: kashBalance, refetch: refetchKashBalance, isFetching: isKashBalanceFetching } = useReadContract({
     address: kashToken,
     abi: kashTokenABI,
     functionName: 'balanceOf',
@@ -90,11 +90,29 @@ export function StatsCard({ product = 'eth' }: { product?: Product }) {
       <div className="bg-white rounded-xl shadow-md p-6 border border-gray-100">
         <div className="flex items-center justify-between mb-2">
           <span className="text-sm text-gray-500 font-medium">Your KASH Balance</span>
-          <div className="w-8 h-8 bg-purple-100 rounded-lg flex items-center justify-center">
-            <svg className="w-4 h-4 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+          <button
+            type="button"
+            onClick={() => refetchKashBalance()}
+            disabled={!address || isKashBalanceFetching}
+            className="text-xs font-medium text-indigo-600 hover:text-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition flex items-center gap-1"
+            title="Refresh balance"
+          >
+            <svg
+              className={`w-4 h-4 shrink-0 ${isKashBalanceFetching ? 'animate-spin' : ''}`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              aria-hidden
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+              />
             </svg>
-          </div>
+            Refresh
+          </button>
         </div>
         <p className="text-3xl font-bold text-gray-900">
           {address && kashBalance ? Number(formatEther(kashBalance)).toFixed(2) : '0.00'}

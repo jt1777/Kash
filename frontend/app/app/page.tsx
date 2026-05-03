@@ -139,7 +139,9 @@ function CustomWalletButton() {
 
 function AppContent() {
   const { isConnected } = useAccount();
-  const [product, setProduct] = useState<'eth' | 'btc'>('eth');
+  const [product, setProduct] = useState<'eth' | 'btc'>(() =>
+    CONTRACTS.kashYieldBtc ? 'btc' : 'eth'
+  );
   const showBtcTab = !!CONTRACTS.kashYieldBtc;
 
   return (
@@ -329,17 +331,6 @@ function AppContent() {
             <div className="flex gap-2 mb-6">
               <button
                 type="button"
-                onClick={() => setProduct('eth')}
-                className={`px-4 py-2 rounded-lg font-medium transition ${
-                  product === 'eth'
-                    ? 'bg-indigo-600 text-white'
-                    : 'bg-white/10 text-gray-400 hover:text-white border border-white/20'
-                }`}
-              >
-                KASH-ETH
-              </button>
-              <button
-                type="button"
                 onClick={() => setProduct('btc')}
                 className={`px-4 py-2 rounded-lg font-medium transition ${
                   product === 'btc'
@@ -348,6 +339,17 @@ function AppContent() {
                 }`}
               >
                 KASH-BTC
+              </button>
+              <button
+                type="button"
+                onClick={() => setProduct('eth')}
+                className={`px-4 py-2 rounded-lg font-medium transition ${
+                  product === 'eth'
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-white/10 text-gray-400 hover:text-white border border-white/20'
+                }`}
+              >
+                KASH-ETH
               </button>
             </div>
           )}
