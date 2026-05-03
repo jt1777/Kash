@@ -1,22 +1,22 @@
 // scripts/deploy-hyperliquid-adapter.js
-// Deploys a HyperliquidAdapter contract that wraps MockHyperliquid (testnet)
-// or the real Hyperliquid bridge (mainnet) and exposes the IPerpExchange interface.
+// Deploys a HyperliquidAdapter contract that wraps the real Hyperliquid bridge
+// and exposes the IPerpExchange interface.
 //
-// This adapter is the address you pass to setHyperliquid.js (not MockHL directly).
+// This adapter is the address you pass to setHyperliquid.js.
 // The main KashYield contract talks to this adapter; the adapter talks to the underlying HL.
 //
 // Usage (BTC product):
-//   MOCK_HL_ADDRESS=0x...  USDC_ADDRESS=0x...  WBTC_ADDRESS=0x...  KASH_YIELD_ADDRESS=0x...  \
-//   npx hardhat run scripts/deploy-hyperliquid-adapter.js --network arbitrumSepolia
+//   HYPERLIQUID_ADDRESS=0x...  USDC_ADDRESS=0x...  WBTC_ADDRESS=0x...  KASH_YIELD_ADDRESS=0x...  \
+//   npx hardhat run scripts/deploy-hyperliquid-adapter.js --network arbitrumOne
 //
 // Usage (ETH product):
-//   MOCK_HL_ADDRESS=0x...  USDC_ADDRESS=0x...  IS_ETH_ASSET=true  KASH_YIELD_ADDRESS=0x...  \
-//   npx hardhat run scripts/deploy-hyperliquid-adapter.js --network arbitrumSepolia
+//   HYPERLIQUID_ADDRESS=0x...  USDC_ADDRESS=0x...  IS_ETH_ASSET=true  KASH_YIELD_ADDRESS=0x...  \
+//   npx hardhat run scripts/deploy-hyperliquid-adapter.js --network arbitrumOne
 //
 // Required env vars:
-//   MOCK_HL_ADDRESS      — deployed MockHyperliquid (testnet) or real HL bridge (mainnet)
-//   USDC_ADDRESS         — USDC / MockUSDC address
-//   WBTC_ADDRESS         — wBTC / MockWBTC address (BTC product only; ignored when IS_ETH_ASSET=true)
+//   HYPERLIQUID_ADDRESS  — real HL bridge address
+//   USDC_ADDRESS         — USDC address
+//   WBTC_ADDRESS         — wBTC address (BTC product only; ignored when IS_ETH_ASSET=true)
 //   KASH_YIELD_ADDRESS   — KashYieldETH or KashYieldBtc address (authorised to call capital-movement functions)
 //
 // Optional:
@@ -36,9 +36,9 @@ async function main() {
   console.log("Deploying HyperliquidAdapter to", network);
   console.log("Deployer:", deployer.address);
 
-  const hlAddress        = process.env.MOCK_HL_ADDRESS || process.env.HYPERLIQUID_MOCK_ADDRESS || process.env.HYPERLIQUID_ADDRESS;
-  const usdcAddress      = process.env.USDC_ADDRESS   || process.env.MOCK_USDC_ADDRESS;
-  const wbtcAddress      = process.env.WBTC_ADDRESS   || process.env.MOCK_WBTC_ADDRESS || process.env.MOCK_WBTC;
+  const hlAddress        = process.env.HYPERLIQUID_ADDRESS;
+  const usdcAddress      = process.env.USDC_ADDRESS;
+  const wbtcAddress      = process.env.WBTC_ADDRESS;
   const isEth            = (process.env.IS_ETH_ASSET || "").toLowerCase() === "true";
   // Prefer the vault that matches the product — root .env often has both KASH_YIELD_ETH_ADDRESS and
   // KASH_YIELD_BTC_ADDRESS; a naive A || B || C would always pick ETH and break BTC adapter deploys.
@@ -49,12 +49,11 @@ async function main() {
 
   if (!hlAddress || !hre.ethers.isAddress(hlAddress)) {
     throw new Error(
-      "Set MOCK_HL_ADDRESS in .env — the address of your deployed MockHyperliquid (testnet) " +
-      "or the real Hyperliquid bridge (mainnet)."
+      "Set HYPERLIQUID_ADDRESS in .env — the real Hyperliquid bridge address."
     );
   }
   if (!usdcAddress || !hre.ethers.isAddress(usdcAddress)) {
-    throw new Error("Set USDC_ADDRESS (or MOCK_USDC_ADDRESS) in .env.");
+    throw new Error("Set USDC_ADDRESS in .env.");
   }
   if (!kashYieldAddress || !hre.ethers.isAddress(kashYieldAddress)) {
     const hint = isEth
@@ -68,7 +67,7 @@ async function main() {
   const assetAddress = isEth ? hre.ethers.ZeroAddress : wbtcAddress;
   if (!isEth && (!wbtcAddress || !hre.ethers.isAddress(wbtcAddress))) {
     throw new Error(
-      "Set WBTC_ADDRESS (or MOCK_WBTC) in .env for the BTC adapter. " +
+      "Set WBTC_ADDRESS in .env for the BTC adapter. " +
       "Or set IS_ETH_ASSET=true for the ETH product."
     );
   }
@@ -103,7 +102,7 @@ async function main() {
   console.log(`📋 HYPERLIQUID ADAPTER (${label})`);
   console.log("====================================");
   console.log("  HyperliquidAdapter:", adapterAddress);
-  console.log("  Wraps (HL/Mock):   ", hlAddress);
+  console.log("  Wraps HL bridge:   ", hlAddress);
   console.log("  USDC:              ", usdcAddress);
   console.log("  Asset:             ", isEth ? "native ETH" : assetAddress);
   console.log("====================================");
@@ -128,7 +127,7 @@ async function main() {
     product: label,
     contracts: {
       hyperliquidAdapter: adapterAddress,
-      hyperliquidMock: hlAddress,
+      hyperliquidBridge: hlAddress,
       usdc: usdcAddress,
       asset: assetAddress,
       isEthAsset: isEth,

@@ -1,15 +1,14 @@
 // scripts/deploy-kashyieldbtc.js
 // Deploys only KashYieldBtc (and its built-in KashTokenBtc). Uses existing wBTC, Aave pool, USDC, and BTC oracle from env.
-// Does NOT deploy MockUSDC, MockWBTC, MockAaveV3, or price feed — use existing deployments (e.g. from a previous full deploy).
-// For mainnet you will change addresses in .env and redeploy this script.
+// Uses Arbitrum One protocol/token addresses from env.
 //
 // Usage:
 //   npx hardhat run scripts/deploy-kashyieldbtc.js --network arbitrumSepolia
 //
 // Env (required for configuration after deploy). Use any of the listed names.
-//   wBTC:    WBTC_ADDRESS or MOCK_WBTC
-//   Aave:    AAVE_POOL_ADDRESS, AAVE_POOL, or MOCK_AAVE_ADDRESS
-//   USDC:    USDC_ADDRESS or MOCK_USDC_ADDRESS
+//   wBTC:    WBTC_ADDRESS
+//   Aave:    AAVE_POOL_ADDRESS (for scripts only; contract uses hardcoded Arbitrum One pool)
+//   USDC:    USDC_ADDRESS
 //   Oracle:  BTC_ORACLE_ADDRESS or BTC_ORACLE
 //
 // Env (optional):
@@ -34,15 +33,15 @@ async function main() {
 
   const botAddress = process.env.BOT_ADDRESS || deployer.address;
 
-  const wbtcAddress = process.env.WBTC_ADDRESS || process.env.MOCK_WBTC;
-  const usdcAddress = process.env.USDC_ADDRESS || process.env.MOCK_USDC_ADDRESS;
+  const wbtcAddress = process.env.WBTC_ADDRESS;
+  const usdcAddress = process.env.USDC_ADDRESS;
   const btcOracleAddress = process.env.BTC_ORACLE_ADDRESS || process.env.BTC_ORACLE;
 
   if (!wbtcAddress || !hre.ethers.isAddress(wbtcAddress)) {
-    throw new Error("Set WBTC_ADDRESS (or MOCK_WBTC) in .env to existing wBTC contract");
+    throw new Error("Set WBTC_ADDRESS in .env to existing wBTC contract");
   }
   if (!usdcAddress || !hre.ethers.isAddress(usdcAddress)) {
-    throw new Error("Set USDC_ADDRESS (or MOCK_USDC_ADDRESS) in .env to existing USDC or MockUSDC");
+    throw new Error("Set USDC_ADDRESS in .env to existing USDC");
   }
   if (!btcOracleAddress || !hre.ethers.isAddress(btcOracleAddress)) {
     throw new Error("Set BTC_ORACLE_ADDRESS (or BTC_ORACLE) in .env to existing BTC/USD price feed");

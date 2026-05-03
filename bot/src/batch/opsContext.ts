@@ -187,23 +187,24 @@ export async function computeTotalRedeemAsset(
   price: bigint,
   assetDecimals: bigint,
 ): Promise<bigint> {
-  try {
-    const redeemers: string[] = await kashYield.batchRedeemUsers(batchCycle);
-    if (redeemers.length === 0) return 0n;
-    const nav = lockedNAV ?? BigInt((await kashYield.currentNAV()).toString());
-    const feeBps = BigInt((await kashYield.feeBps()).toString());
-    let total = 0n;
-    for (const addr of redeemers) {
-      const req = await kashYield.getPendingRedeemRequest(addr, batchCycle);
-      const kashAmt = BigInt(req.kashAmount.toString());
-      if (kashAmt === 0n) continue;
-      const usdAfterFee = (kashAmt * nav / (10n ** 18n)) * (10000n - feeBps) / 10000n;
-      total += usdAfterFee * (10n ** assetDecimals) / price;
-    }
-    return total;
-  } catch {
-    return 0n;
+  const nav = lockedNAV ?? BigInt((await kashYield.currentNAV()).toString());
+  const feeBps = BigInt((await kashYield.feeBps()).toString());
+  const info = await kashYield.getBatchInfo(batchCycle);
+  const redeemUsersCount = BigInt(info.redeemUsersCount.toString());
+  if (redeemUsersCount === 0n) return 0n;
+
+  let total = 0n;
+  for (let i = 0n; i < redeemUsersCount; i++) {
+    // Solidity's public getter for `mapping(uint256 => address[])` is indexed:
+    // batchRedeemUsers(batchCycle, index), not batchRedeemUsers(batchCycle) -> address[].
+    const addr: string = await kashYield.batchRedeemUsers(batchCycle, i);
+    const req = await kashYield.getPendingRedeemRequest(addr, batchCycle);
+    const kashAmt = BigInt(req.kashAmount.toString());
+    if (kashAmt === 0n) continue;
+    const usdAfterFee = ((kashAmt * nav) / (10n ** 18n)) * (10000n - feeBps) / 10000n;
+    total += (usdAfterFee * (10n ** assetDecimals)) / price;
   }
+  return total;
 }
 
 // ---------------------------------------------------------------------------

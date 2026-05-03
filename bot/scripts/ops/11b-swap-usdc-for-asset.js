@@ -44,7 +44,8 @@ async function main() {
       : before.batchCycle;
 
     const BATCH_ABI = [
-      "function batchRedeemUsers(uint256) view returns (address[])",
+      "function getBatchInfo(uint256) view returns (uint256,uint256,bool,uint256,uint256,uint256)",
+      "function batchRedeemUsers(uint256,uint256) view returns (address)",
       "function getPendingRedeemRequest(address, uint256) view returns (tuple(address user, uint256 kashAmount, uint256 batchCycle))",
       "function currentNAV() view returns (uint256)",
       "function feeBps() view returns (uint256)",
@@ -52,13 +53,15 @@ async function main() {
     const batchContract = new ethers.Contract(
       await contract.getAddress(), BATCH_ABI, ethers.provider
     );
-    const redeemers = await batchContract.batchRedeemUsers(batchCycle);
+    const info = await batchContract.getBatchInfo(batchCycle);
+    const redeemUsersCount = Number(info[4]);
     const nav = BigInt((await batchContract.currentNAV()).toString());
     const feeBps = BigInt((await batchContract.feeBps()).toString());
     const assetDecimalsFactor = BigInt(10) ** BigInt(DECIMALS);
 
     let totalRedeemAsset = 0n;
-    for (const addr of redeemers) {
+    for (let i = 0; i < redeemUsersCount; i++) {
+      const addr = await batchContract.batchRedeemUsers(batchCycle, i);
       const req = await batchContract.getPendingRedeemRequest(addr, batchCycle);
       const kashAmt = BigInt(req.kashAmount.toString());
       if (kashAmt === 0n) continue;

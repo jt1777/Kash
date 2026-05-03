@@ -256,7 +256,7 @@ View protocol state at a glance (asset in contract, Aave, Hyperliquid):
 # ETH product
 PRODUCT=eth KASH_YIELD_ETH_ADDRESS=0x... npm run owner:status
 
-# BTC product (with MockAave)
+# BTC product
 PRODUCT=btc KASH_YIELD_BTC_ADDRESS=0x... AAVE_POOL_ADDRESS=0x... npm run owner:status
 ```
 

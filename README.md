@@ -188,9 +188,6 @@ yieldproduct/
 │   │   ├── GMXAdapter.sol          # IPerpExchange → GMX V2
 │   │   ├── AsterAdapter.sol        # IPerpExchange → Aster DEX
 │   │   └── UniswapV3Adapter.sol    # ISpotDex → Uniswap V3
-│   ├── MockHyperliquid.sol         # Mock HL for testing
-│   ├── MockPerpExchange.sol        # Universal mock IPerpExchange for tests
-│   ├── MockSpotDex.sol             # Mock ISpotDex for testnet (no real Uniswap pools)
 │   └── ...
 ├── scripts/
 │   ├── deploy-kashyieldbtc.js          # Deploy BTC product
@@ -198,8 +195,6 @@ yieldproduct/
 │   ├── deploy-hyperliquid-adapter.js   # Deploy HyperliquidAdapter
 │   ├── setHyperliquid.js               # Register adapter + propose activation
 │   ├── confirmPerpExchange.js          # Confirm adapter registration after 48h timelock
-│   ├── deploy-mock-spot-dex.js         # Deploy + fund MockSpotDex (testnet)
-│   ├── update-mock-spot-dex-price.js   # Sync MockSpotDex rates when oracle price changes
 │   └── ...
 ├── test/
 ├── docs/
@@ -262,7 +257,7 @@ npx hardhat run scripts/deploy-kashyieldbtc.js --network arbitrumSepolia
 - **Frontend**: Live on Arbitrum Sepolia. Landing at `/`, app at `/app`. Mint (ETH), redeem (ETH/wETH/wBTC), stats (NAV, deposits from chain events, KASH balance), time-window status.
 - **Contracts**: `KashYieldETH`, `KashYieldBtc`, and their KASH tokens are deployed. Addresses are in `frontend/lib/contracts/addresses.ts`; update after each deploy (see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)).
 - **Exchange adapters**: Deploy `HyperliquidAdapter` and register it via `setHyperliquid.js` (immediate on first deploy), then activate with `setActivePerpExchange.js`. Adding GMX or Aster later requires the 48h timelock flow. Adapter contracts are available but require mainnet addresses for production.
-- **Spot DEX (testnet)**: Deploy `MockSpotDex` via `deploy-mock-spot-dex.js`, fund it with USDC and wBTC/ETH, and register it on the contract via `setSpotDex(address)`. Update its rates whenever the oracle price changes using `update-mock-spot-dex-price.js`. For mainnet, deploy `UniswapV3Adapter` instead.
+- **Spot DEX**: On Arbitrum One, deploy/register `UniswapV3Adapter`.
 - **Bot**: Runs the 5-step batch flow (`phase1` → `ops` → `nav` → `mark-done` → `phase2`). See [bot/README.md](bot/README.md).
 
 ## 🌐 Frontend

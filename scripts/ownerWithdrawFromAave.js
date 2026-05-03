@@ -40,31 +40,11 @@ async function main() {
   const aavePoolAddress = await kashYield.aavePoolAddress();
   const wbtcAddress = await kashYield.wbtcAddress();
   const pool = await hre.ethers.getContractAt(
-    [
-      "function getATokenBalance(address asset, address user) view returns (uint256)",
-      "function getUserWbtcBalance(address user) view returns (uint256)",
-    ],
+    ["function getATokenBalance(address asset, address user) view returns (uint256)"],
     aavePoolAddress
   );
   const aTokenBalance = await pool.getATokenBalance(wbtcAddress, kashYieldBtcAddress);
-  // MockAaveV3: withdraw() only allows withdrawing principal (suppliedWbtcAmounts), not principal+yield.
-  // getATokenBalance returns principal+yield, so use getUserWbtcBalance (principal) when available.
   let withdrawable = aTokenBalance;
-  try {
-    const principal = await pool.getUserWbtcBalance(kashYieldBtcAddress);
-    withdrawable = principal;
-    if (principal < aTokenBalance) {
-      console.log(
-        "  (MockAave: withdrawable principal",
-        principal.toString(),
-        "raw; aToken balance includes",
-        (aTokenBalance - principal).toString(),
-        "raw accrued yield)"
-      );
-    }
-  } catch {
-    // Real Aave or pool without getUserWbtcBalance: full aToken balance is withdrawable
-  }
   console.log(
     "KashYieldBtc in Aave – withdrawable (raw):",
     withdrawable.toString(),

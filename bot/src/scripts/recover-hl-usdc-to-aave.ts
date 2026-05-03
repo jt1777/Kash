@@ -64,7 +64,7 @@ async function main() {
   const spotBalance = await kashYield.getHyperliquidSpotBalance();
   if (spotBalance === 0n) {
     console.log('HL spot USDC balance is 0. Nothing to recover.');
-    console.log('(getHyperliquidSpotBalance only returns USDC. If owner-status shows wBTC in HL spot, run Step 1 first: from repo root, npx hardhat run scripts/ownerSellHlWbtc.js --network arbitrumSepolia)');
+    console.log('(getHyperliquidSpotBalance only returns USDC. If owner-status shows asset in HL spot, handle that asset manually on Hyperliquid first, then rerun this recovery.)');
     return;
   }
 

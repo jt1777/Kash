@@ -86,8 +86,10 @@
     // But if that fails, fall back to querying events
     if (mintCount > 0) {
       try {
-        mintUsersRaw = await kashYield.batchMintUsers(batchCycle) as string[];
-        console.log(`✅ Retrieved ${mintUsersRaw.length} mint users from batchMintUsers`);
+        for (let i = 0; i < mintCount; i++) {
+          mintUsersRaw.push(await kashYield.batchMintUsers(batchCycle, i) as string);
+        }
+        console.log(`✅ Retrieved ${mintUsersRaw.length} mint users from batchMintUsers(indexed)`);
       } catch (error: any) {
         // If batchMintUsers reverts but we know there are users, query events as fallback
         console.log(`⚠️  batchMintUsers() failed, querying events as fallback...`);
@@ -122,8 +124,10 @@
 
     if (redeemCount > 0) {
       try {
-        redeemUsersRaw = await kashYield.batchRedeemUsers(batchCycle) as string[];
-        console.log(`✅ Retrieved ${redeemUsersRaw.length} redeem users from batchRedeemUsers`);
+        for (let i = 0; i < redeemCount; i++) {
+          redeemUsersRaw.push(await kashYield.batchRedeemUsers(batchCycle, i) as string);
+        }
+        console.log(`✅ Retrieved ${redeemUsersRaw.length} redeem users from batchRedeemUsers(indexed)`);
       } catch (error: any) {
         // If batchRedeemUsers reverts but we know there are users, query events as fallback
         console.log(`⚠️  batchRedeemUsers() failed, querying events as fallback...`);

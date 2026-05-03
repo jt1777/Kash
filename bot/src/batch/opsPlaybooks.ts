@@ -182,6 +182,14 @@ function relayStrictMode(): boolean {
   return (process.env.HL_EVENT_RELAY_STRICT || 'false').toLowerCase() === 'true';
 }
 
+function hlOpenShortWaitMaxMs(): number {
+  return Math.max(0, parseInt(process.env.HL_OPEN_SHORT_WAIT_MAX_MS || '180000', 10));
+}
+
+function hlOpenShortWaitPollMs(): number {
+  return Math.max(1000, parseInt(process.env.HL_OPEN_SHORT_WAIT_POLL_MS || '10000', 10));
+}
+
 function isRelayEnabled(ctx: OpsContext): boolean {
   if (!ctx.hlEventRelayEnabled) return false;
   const ex = (ctx.activePerpExchange || '').toUpperCase();
@@ -313,6 +321,71 @@ const aaveDeposit: OpStep = {
   },
 };
 
+async function readBatchMintAsset(ctx: OpsContext): Promise<bigint> {
+  try {
+    const raw = ctx.isBtc
+      ? await ctx.kashYield.batchTotalMintBtc(ctx.batchCycle)
+      : await ctx.kashYield.batchTotalMintEth(ctx.batchCycle);
+    return BigInt(raw.toString());
+  } catch {
+    return 0n;
+  }
+}
+
+async function readBatchMintDeployedToAave(ctx: OpsContext): Promise<bigint> {
+  try {
+    const raw = ctx.isBtc
+      ? await ctx.kashYield.batchMintBtcDeployedToAave(ctx.batchCycle)
+      : await ctx.kashYield.batchMintEthDeployedToAave(ctx.batchCycle);
+    return BigInt(raw.toString());
+  } catch {
+    return 0n;
+  }
+}
+
+async function markBatchMintDeployedToAave(ctx: OpsContext, amount: bigint): Promise<void> {
+  if (amount === 0n) return;
+  try {
+    const tx = ctx.isBtc
+      ? ctx.kashYield.markMintBtcDeployed(ctx.batchCycle, amount)
+      : ctx.kashYield.markMintEthDeployed(ctx.batchCycle, amount);
+    await execTx(ctx.isBtc ? 'markMintBtcDeployed' : 'markMintEthDeployed', tx);
+  } catch (e: any) {
+    console.warn(`         ⚠️  Could not mark batch mint deployed to Aave: ${e?.message ?? e}`);
+  }
+}
+
+async function computeNetMintAaveDepositAmount(ctx: OpsContext, netMintUSD: bigint): Promise<bigint> {
+  if (ctx.contractAsset === 0n || netMintUSD <= 0n) return 0n;
+  const pct = BigInt(config.strategy.aaveDepositPct);
+  const batchMintAsset = await readBatchMintAsset(ctx);
+  const netMintAsset = (netMintUSD * (10n ** ctx.assetDecimals)) / ctx.price;
+  const baseAsset = batchMintAsset > 0n && batchMintAsset < netMintAsset ? batchMintAsset : netMintAsset;
+  const targetForBatch = (baseAsset * pct) / 100n;
+  const alreadyDeployed = await readBatchMintDeployedToAave(ctx);
+  const remainingForBatch = targetForBatch > alreadyDeployed ? targetForBatch - alreadyDeployed : 0n;
+  return remainingForBatch < ctx.contractAsset ? remainingForBatch : ctx.contractAsset;
+}
+
+const aaveDepositNetMint = (netMintUSD: bigint): OpStep => ({
+  id: 'aave_deposit',
+  substep: 'aave',
+  refreshCtx: true,
+  describe: (ctx) => {
+    const pct = config.strategy.aaveDepositPct;
+    const netMintAsset = (netMintUSD * (10n ** ctx.assetDecimals)) / ctx.price;
+    return `deposit up to ${pct}% of net mint (${fmtAsset(netMintAsset, ctx)}) to Aave, capped by vault balance`;
+  },
+  canSkip: async (ctx) => (await computeNetMintAaveDepositAmount(ctx, netMintUSD)) === 0n,
+  execute: async (ctx) => {
+    const toDeposit = await computeNetMintAaveDepositAmount(ctx, netMintUSD);
+    if (toDeposit === 0n) return;
+    console.log(`         ${fmtAsset(toDeposit, ctx)} (net mint deposit only; not sweeping older vault asset)`);
+    await execTx('depositToAave', ctx.kashYield.depositToAave(toDeposit));
+    await markBatchMintDeployedToAave(ctx, toDeposit);
+  },
+});
+
 /**
  * 02 — Borrow USDC from Aave at target LTV.
  * refreshCtx=true: hl_deposit_usdc (and any subsequent step) reads ctx.contractUsdc,
@@ -442,12 +515,7 @@ const hlOpenShort = (netMintUSD: bigint): OpStep => ({
     const tx = await ctx.kashYield.openShort(symbol, size);
     await tx.wait();
     console.log('      → openShort confirmed');
-    try {
-      await maybeRunHlEventRelay(ctx, tx.hash, 'EXCHANGE_OPEN_SHORT');
-    } catch (e: any) {
-      if (relayStrictMode()) throw e;
-      console.warn(`      ⚠️  HL relay openShort failed: ${e?.message ?? e}`);
-    }
+    await maybeRunHlEventRelay(ctx, tx.hash, 'EXCHANGE_OPEN_SHORT', { required: true });
   },
 });
 
@@ -608,6 +676,47 @@ const aaveRepayRisingFinal: OpStep = {
 };
 
 /**
+ * Final Aave debt dust sweep. Aave variable debt can accrue a few USDC base units between
+ * the repay snapshot and the repay tx. If owner USDC reserve can cover that dust, release
+ * just enough reserve and repay before withdrawing remaining collateral / mark-done.
+ */
+const aaveRepayResidualDebtFromOwnerReserve: OpStep = {
+  id: 'aave_repay_residual_owner_dust',
+  substep: 'aave',
+  refreshCtx: true,
+  describe: (ctx) => `cover and repay residual Aave debt ${fmtUsdc(usdcShortfallVsContract(ctx))} from owner USDC reserve`,
+  canSkip: async (ctx) => {
+    if (ctx.aaveDebt === 0n) return true;
+    if (ctx.contractUsdc >= ctx.aaveDebt) return false;
+    let reserve = 0n;
+    try {
+      reserve = BigInt((await ctx.kashYield.ownerUsdcReserve()).toString());
+    } catch {
+      reserve = 0n;
+    }
+    return reserve === 0n;
+  },
+  execute: async (ctx) => {
+    if (ctx.aaveDebt === 0n) return;
+    let spendable = ctx.contractUsdc;
+    if (spendable < ctx.aaveDebt) {
+      const reserve = BigInt((await ctx.kashYield.ownerUsdcReserve()).toString());
+      const shortfall = ctx.aaveDebt - spendable;
+      const cover = shortfall < reserve ? shortfall : reserve;
+      if (cover > 0n) {
+        console.log(`         coverUsdcShortfall ${fmtUsdc(cover)} for residual Aave debt dust`);
+        await execTx('coverUsdcShortfall(residual)', ctx.kashYield.coverUsdcShortfall(cover));
+        spendable += cover;
+      }
+    }
+    const amount = spendable < ctx.aaveDebt ? spendable : ctx.aaveDebt;
+    if (amount === 0n) return;
+    console.log(`         repay residual ${fmtUsdc(amount)} to Aave (debt=${fmtUsdc(ctx.aaveDebt)})`);
+    await execTx('repayToAave(residual)', ctx.kashYield.repayToAave(ctx.aaveUsdcAddress, amount));
+  },
+};
+
+/**
  * Repay from contract USDC only when rising tail: skip entirely if no USDC (avoids no-op step noise).
  * Falling/balanced use `aaveRepay` first, which must still run when debt > 0 even if USDC is 0
  * (e.g. mis-synced snapshot — execute no-ops safely).
@@ -727,16 +836,10 @@ const aaveWithdrawPartial: OpStep = {
     const assetForSf =
       shortfall > 0n ? (shortfall * (10n ** 12n) * (10n ** ctx.assetDecimals)) / ctx.price : 0n;
     const redeemGap = ctx.totalRedeemAsset > ctx.contractAsset ? ctx.totalRedeemAsset - ctx.contractAsset : 0n;
-    const needMax = assetForSf > redeemGap ? assetForSf : redeemGap;
-    if (redeemGap > 0n && shortfall === 0n) {
-      return `partial Aave withdraw ${fmtAsset(needMax, ctx)} for redeem collateral (vault < total redeem asset)`;
-    }
-    return `partial Aave withdraw ${fmtAsset(needMax, ctx)} — USDC shortfall ${fmtUsdc(shortfall)}, redeem gap ${fmtAsset(redeemGap, ctx)} (11a path)`;
+    return `partial Aave withdraw ${fmtAsset(assetForSf, ctx)} for 11a USDC shortfall ${fmtUsdc(shortfall)}; redeem gap ${fmtAsset(redeemGap, ctx)} handled after repay`;
   },
   canSkip: async (ctx) => {
     if (ctx.aaveSupplied === 0n) return true;
-    const redeemGap = ctx.totalRedeemAsset > ctx.contractAsset ? ctx.totalRedeemAsset - ctx.contractAsset : 0n;
-    if (redeemGap > 0n) return false;
 
     if (ctx.aaveDebt <= ctx.contractUsdc) return true; // no USDC shortfall
     const sf = usdcShortfallVsContract(ctx);
@@ -777,7 +880,7 @@ const aaveWithdrawPartial: OpStep = {
     }
 
     const redeemGap = ctx.totalRedeemAsset > ctx.contractAsset ? ctx.totalRedeemAsset - ctx.contractAsset : 0n;
-    let toWithdraw = assetForShortfall > redeemGap ? assetForShortfall : redeemGap;
+    let toWithdraw = assetForShortfall;
     if (toWithdraw === 0n) return;
     if (toWithdraw > ctx.aaveSupplied) toWithdraw = ctx.aaveSupplied;
     console.log(
@@ -980,6 +1083,11 @@ function findPosition(clearinghouseState: any, symbol: string): any {
   );
 }
 
+function isInsufficientHlMarginError(e: any): boolean {
+  const msg = String(e?.message ?? e ?? '');
+  return /insufficient margin/i.test(msg);
+}
+
 function decimalToBigInt(value: unknown, decimals: number): bigint {
   const s = String(value ?? '0').trim();
   if (!s || s === '0') return 0n;
@@ -1004,6 +1112,50 @@ function selectUsdcForSync(spotUsdcStr: string, withdrawableStr: string): string
   const spot6 = decimalToBigInt(spotUsdcStr || '0', 6);
   const wd6 = decimalToBigInt(withdrawableStr || '0', 6);
   return wd6 > spot6 ? withdrawableStr : spotUsdcStr;
+}
+
+async function readHlPositionSize(
+  info: any,
+  hlUser: string,
+  symbol: string,
+  assetDecimals: number,
+): Promise<bigint> {
+  const ch: any = await info.clearinghouseState({ user: hlUser });
+  const pos = findPosition(ch, symbol);
+  return decimalToBigInt(absDecimal(pos?.position?.szi || '0'), assetDecimals);
+}
+
+async function waitForHlPositionAtLeast(
+  info: any,
+  hlUser: string,
+  symbol: string,
+  assetDecimals: number,
+  minSize: bigint,
+): Promise<void> {
+  const maxMs = hlOpenShortWaitMaxMs();
+  const pollMs = hlOpenShortWaitPollMs();
+  const start = Date.now();
+
+  while (true) {
+    const actual = await readHlPositionSize(info, hlUser, symbol, assetDecimals);
+    if (actual >= minSize) {
+      console.log(`      → HL position confirmed: ${ethers.formatUnits(actual, assetDecimals)} ${symbol}`);
+      return;
+    }
+
+    if (Date.now() - start >= maxMs) {
+      throw new Error(
+        `HL open short not confirmed: position ${ethers.formatUnits(actual, assetDecimals)} ${symbol} ` +
+          `< expected ${ethers.formatUnits(minSize, assetDecimals)} ${symbol}`,
+      );
+    }
+
+    console.log(
+      `      ↪ waiting for HL position confirmation: ${ethers.formatUnits(actual, assetDecimals)} / ` +
+        `${ethers.formatUnits(minSize, assetDecimals)} ${symbol}`,
+    );
+    await sleep(pollMs);
+  }
 }
 
 /**
@@ -1068,12 +1220,21 @@ async function syncHlAdapterFromHyperliquidApi(
   console.log('      → HL adapter syncBalances + syncPosition confirmed');
 }
 
-async function maybeRunHlEventRelay(ctx: OpsContext, txHash: string, expected: HlIntent): Promise<void> {
-  if (!isRelayEnabled(ctx)) return;
+async function maybeRunHlEventRelay(
+  ctx: OpsContext,
+  txHash: string,
+  expected: HlIntent,
+  options?: { required?: boolean },
+): Promise<void> {
+  const required = options?.required === true;
+  if (!isRelayEnabled(ctx)) {
+    if (required) throw new Error(`${expected}: HL event relay is disabled; cannot confirm real Hyperliquid execution`);
+    return;
+  }
   const signerPk = process.env.HYPERLIQUID_API_PRIVATE_KEY || config.privateKey;
   if (!signerPk) {
     const msg = `${expected}: missing HYPERLIQUID_API_PRIVATE_KEY (or PRIVATE_KEY) for HL relay`;
-    if (relayStrictMode()) throw new Error(msg);
+    if (required || relayStrictMode()) throw new Error(msg);
     console.warn(`      ⚠️  ${msg}`);
     return;
   }
@@ -1081,7 +1242,7 @@ async function maybeRunHlEventRelay(ctx: OpsContext, txHash: string, expected: H
   const hlUser = hlUserAddress(ctx);
   if (!hlUser || hlUser === ethers.ZeroAddress) {
     const msg = `${expected}: unable to resolve HL user address`;
-    if (relayStrictMode()) throw new Error(msg);
+    if (required || relayStrictMode()) throw new Error(msg);
     console.warn(`      ⚠️  ${msg}`);
     return;
   }
@@ -1112,15 +1273,37 @@ async function maybeRunHlEventRelay(ctx: OpsContext, txHash: string, expected: H
     const symbol = String(parsed.args[0]).toUpperCase();
     const assetId = findPerpAssetId(perpMeta, symbol);
     const szDecimals = Number(perpMeta?.universe?.[assetId]?.szDecimals ?? 0);
-    const rawSize = ethers.formatUnits(BigInt(parsed.args[1].toString()), Number(ctx.assetDecimals));
+    const requestedSize = BigInt(parsed.args[1].toString());
+    const assetDecimals = Number(ctx.assetDecimals);
+    const rawSize = ethers.formatUnits(requestedSize, assetDecimals);
     const size = formatHlSize(rawSize, szDecimals);
     if (!size || size === '0') throw new Error(`computed HL order size is 0 after szDecimals=${szDecimals} rounding`);
+    const placedSize = decimalToBigInt(size, assetDecimals);
     const px = formatHlLimitPx(mids[symbol], false, szDecimals);
-    console.log(`      ↪ HL relay: SELL ${size} ${symbol} @ IOC ${px}`);
-    await exchange.order({
-      orders: [{ a: assetId, b: false, p: px, s: size, r: false, t: { limit: { tif: 'Ioc' } } }],
-      grouping: 'na',
-    }, orderOpts as any);
+    const beforeSize = await readHlPositionSize(info, hlUser, symbol, assetDecimals);
+    const expectedSize = beforeSize + placedSize;
+    const maxMs = hlOpenShortWaitMaxMs();
+    const pollMs = hlOpenShortWaitPollMs();
+    const start = Date.now();
+
+    while (true) {
+      console.log(`      ↪ HL relay: SELL ${size} ${symbol} @ IOC ${px}`);
+      try {
+        await exchange.order({
+          orders: [{ a: assetId, b: false, p: px, s: size, r: false, t: { limit: { tif: 'Ioc' } } }],
+          grouping: 'na',
+        }, orderOpts as any);
+        break;
+      } catch (e: any) {
+        if (!isInsufficientHlMarginError(e) || Date.now() - start >= maxMs) throw e;
+        console.warn(
+          `      ⚠️  HL openShort waiting for usable margin: ${e?.message ?? e}. ` +
+            `Retrying in ${(pollMs / 1000).toFixed(0)}s...`,
+        );
+        await sleep(pollMs);
+      }
+    }
+    await waitForHlPositionAtLeast(info, hlUser, symbol, assetDecimals, expectedSize);
   } else if (expected === 'EXCHANGE_CLOSE_SHORT') {
     const symbol = String(parsed.args[0]).toUpperCase();
     let closeSize18 = 0n;
@@ -1224,7 +1407,7 @@ async function maybeInitiateHlOffchainWithdraw(ctx: OpsContext, amountUsdc6: big
  */
 export function buildMintPlaybook(netMintUSD: bigint): OpStep[] {
   return [
-    aaveDeposit,
+    aaveDepositNetMint(netMintUSD),
     aaveBorrow,
     hlDepositUsdc,
     hlOpenShort(netMintUSD),
@@ -1248,9 +1431,10 @@ export function buildRedeemCore(): OpStep[] {
 export function buildRedeemTail(tail: RedeemTail, lockedNAV: bigint | undefined): OpStep[] {
   switch (tail) {
     case 'falling':
-      // Repay in full → swap excess USDC to asset (11b) → proportional Aave withdraw
+      // Repay in full → sweep residual Aave debt dust → swap excess USDC to asset (11b) → proportional Aave withdraw
       return [
         aaveRepay,
+        aaveRepayResidualDebtFromOwnerReserve,
         dexSwapFromUsdc(lockedNAV),
         aaveWithdraw('proportional'),
       ];
@@ -1265,13 +1449,15 @@ export function buildRedeemTail(tail: RedeemTail, lockedNAV: bigint | undefined)
         dexSwapForUsdc,
         risingTailCoverOwnerUsdc,
         aaveRepayRisingFinal,
+        aaveRepayResidualDebtFromOwnerReserve,
         aaveWithdraw('remaining'),
       ];
 
     case 'balanced':
-      // Repay fully → proportional Aave withdraw
+      // Repay fully → sweep residual Aave debt dust → proportional Aave withdraw
       return [
         aaveRepay,
+        aaveRepayResidualDebtFromOwnerReserve,
         aaveWithdraw('proportional'),
       ];
   }

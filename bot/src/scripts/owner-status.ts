@@ -219,12 +219,17 @@ async function main() {
     const wbtcAddr = isBtc ? await kashYield.wbtcAddress() : null;
     const usdcAddr: string = await kashYield.usdcAddress();
 
+    const aaveUserAddr = (config.aaveUserAddress || '').trim() || vaultAddress;
+
     // Use the real Aave V3-compatible helpers (fall through mock → variable debt token → getUserAccountData)
     const assetAddr = isBtc ? (wbtcAddr ?? ethers.ZeroAddress) : (wethAddr ?? ethers.ZeroAddress);
-    const aaveSupplied = await getAaveSuppliedAmountV3(provider, aavePoolAddr, assetAddr, vaultAddress);
-    usdcBorrowed = await getAaveBorrowedAmountV3(provider, aavePoolAddr, usdcAddr, vaultAddress);
+    const aaveSupplied = await getAaveSuppliedAmountV3(provider, aavePoolAddr, assetAddr, aaveUserAddr);
+    usdcBorrowed = await getAaveBorrowedAmountV3(provider, aavePoolAddr, usdcAddr, aaveUserAddr);
 
     console.log('🏦 Aave');
+    if (aaveUserAddr.toLowerCase() !== vaultAddress.toLowerCase()) {
+      console.log('  (AAVE_USER_ADDRESS≠vault — supplied/debt are for this user, same as bot ops snapshot)');
+    }
     if (isBtc) {
       console.log('  Supplied wBTC:   ', ethers.formatUnits(aaveSupplied, 8), 'wBTC');
     } else {

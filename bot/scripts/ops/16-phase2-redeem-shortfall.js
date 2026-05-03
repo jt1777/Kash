@@ -40,7 +40,7 @@ const VIEW_ABI = [
   "function ownerEthReserve() view returns (uint256)",
   "function wbtcAddress() view returns (address)",
   "function getPendingRedeemRequest(address,uint256) view returns (tuple(address user,uint256 kashAmount,uint256 batchCycle))",
-  "function batchRedeemUsers(uint256) view returns (address[])",
+  "function batchRedeemUsers(uint256,uint256) view returns (address)",
 ];
 
 const NAV_DENOM = BigInt(1e18);
@@ -53,11 +53,11 @@ function aggregateNeeded(totalKash, nav, feeBps, price, assetDecimals) {
   return (usdAfterFee * factor) / price;
 }
 
-async function exactNeededFromList(v, batchCycle, nav, feeBps, price, assetDecimals) {
-  const redeemers = await v.batchRedeemUsers(batchCycle);
+async function exactNeededFromList(v, batchCycle, redeemerCount, nav, feeBps, price, assetDecimals) {
   let total = 0n;
   const factor = BigInt(10) ** BigInt(assetDecimals);
-  for (const addr of redeemers) {
+  for (let i = 0; i < redeemerCount; i++) {
+    const addr = await v.batchRedeemUsers(batchCycle, i);
     const req = await v.getPendingRedeemRequest(addr, batchCycle);
     const kashAmt = BigInt(req.kashAmount.toString());
     if (kashAmt === 0n) continue;
@@ -65,7 +65,7 @@ async function exactNeededFromList(v, batchCycle, nav, feeBps, price, assetDecim
     const usdAfterFee = (usdValue * (10000n - feeBps)) / 10000n;
     total += (usdAfterFee * factor) / price;
   }
-  return { total, redeemerCount: redeemers.length };
+  return { total, redeemerCount };
 }
 
 async function main() {
@@ -140,7 +140,7 @@ async function main() {
 
   if (redeemUsersCount <= maxIter) {
     try {
-      const { total } = await exactNeededFromList(v, batchCycle, nav, feeBps, price, DECIMALS);
+      const { total } = await exactNeededFromList(v, batchCycle, redeemUsersCount, nav, feeBps, price, DECIMALS);
       totalRedeemAssetNeeded = total;
       method = `exact (iterated ≤${maxIter} redeemers, batchRedeemUsers eth_call ok)`;
     } catch (e) {

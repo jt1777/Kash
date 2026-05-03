@@ -21,8 +21,8 @@ const TOKEN_ADDRESSES = {
 const AAVE_POOL_ADDRESS = config.aavePoolAddress;
 const isBtc = config.product === 'btc';
 
-/** Minimum NAV (18 decimals). Prevents updateNAV(1) when supply is dust and (portfolio+yield)/supply truncates to 1. */
-const MIN_NAV = 10n ** 18n;
+/** Initial NAV (18 decimals) used only before any KASH supply exists. */
+const INITIAL_NAV = 10n ** 18n;
 
 const BATCH_STEP_NAMES = ['phase1', 'ops', 'nav', 'mark-done', 'phase2'] as const;
 function isSingleStepMode(): boolean {
@@ -377,7 +377,9 @@ export class BatchProcessor {
     void batchCycle;
     const newNAV =
       precomputedNAV ??
-      (await this.computeNewNAV({ applySettlementBuffer: options?.computeForSettlement === true }));
+      (await this.computeNewNAV({
+        applySettlementBuffer: options?.computeForSettlement === true,
+      }));
 
     let usdcBalance = 0n;
     let assetBalance = 0n;
@@ -450,7 +452,7 @@ export class BatchProcessor {
     console.log('   ✅ markBatchOpsDone\n');
   }
 
-  /** Compute new NAV (18 decimals) from portfolio and yield; clamp to MIN_NAV. */
+  /** Compute new NAV (18 decimals) from portfolio and yield. Uses $1 only when no KASH exists yet. */
   private async computeNewNAV(options?: { applySettlementBuffer?: boolean }): Promise<bigint> {
     const tokenAddr = await (isBtc ? this.kashYield.kashTokenBtc() : this.kashYield.kashTokenEth()).catch(() => null);
     const kashSupply = tokenAddr
@@ -459,7 +461,7 @@ export class BatchProcessor {
     if (kashSupply === 0n) {
       // No outstanding KASH — use $1.00 per KASH (1e18) instead of stale on-chain currentNAV().
       console.log(`   📈 KASH supply is 0, using NAV = $1.00 per KASH (1e18) for updateNAV`);
-      return MIN_NAV;
+      return INITIAL_NAV;
     }
 
     // Live mark-to-market NAV input:
@@ -468,20 +470,14 @@ export class BatchProcessor {
     const portfolioValueUSD = await this.estimatePortfolioValueUSD();
     let newNAV = (portfolioValueUSD * (10n ** 18n)) / BigInt(kashSupply.toString());
     if (newNAV === 0n) {
-      const current = BigInt((await this.kashYield.currentNAV()).toString());
-      newNAV = current > 0n ? current : MIN_NAV;
-    }
-    if (newNAV > 0n && newNAV < MIN_NAV) {
-      newNAV = MIN_NAV;
-      console.log(`   📈 NAV clamped to minimum $1 (was dust from small supply)`);
+      // Contract rejects updateNAV(0). Use the smallest non-zero NAV rather than imposing a $1 floor.
+      newNAV = 1n;
     }
     const bps = options?.applySettlementBuffer ? BigInt(config.settlementNavBufferBps) : 0n;
     if (bps > 0n && newNAV > 0n) {
       const before = newNAV;
       newNAV = (newNAV * (10000n - bps)) / 10000n;
-      if (newNAV > 0n && newNAV < MIN_NAV) {
-        newNAV = MIN_NAV;
-      }
+      if (newNAV === 0n) newNAV = 1n;
       console.log(
         `   📈 Settlement NAV buffer −${bps} bps: $${ethers.formatEther(before)} → $${ethers.formatEther(newNAV)} per KASH`,
       );
