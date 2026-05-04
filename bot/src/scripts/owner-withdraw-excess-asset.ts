@@ -4,7 +4,7 @@
  *
  * Max withdraw on-chain: amount + reserved <= vault balance (fixed `ownerWithdrawWbtc` / `ownerWithdrawEth`).
  *
- * Usage:
+ * Usage (run in bot directory)
  *   PRODUCT=btc npm run owner:withdraw-excess-asset
  *   PRODUCT=eth npm run owner:withdraw-excess-asset
  *   PRODUCT=btc npm run owner:withdraw-excess-asset -- --dry-run

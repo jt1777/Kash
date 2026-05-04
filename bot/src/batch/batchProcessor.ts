@@ -538,7 +538,7 @@ export class BatchProcessor {
 
       // 4) USDC legs
       const contractUsdc = await this.getContractUsdcBalance();
-      const hlUsdc = await this.getHyperliquidSpotBalance();
+      const hlUsdc = await this.getHyperliquidNavUsdcBalance();
       const aaveDebtUsdc = await this.getAaveBorrowedAmount();
 
       const totalAsset = contractAsset + aaveSupplied + hlAsset;
@@ -1296,6 +1296,61 @@ export class BatchProcessor {
       return await this.kashYield.getHyperliquidSpotBalance();
     } catch {
       return 0n;
+    }
+  }
+
+  private decimalStringToUsdc6(value: unknown): bigint {
+    const raw = String(value ?? '0').trim();
+    if (!raw || raw === '0') return 0n;
+    const neg = raw.startsWith('-');
+    const unsigned = neg ? raw.slice(1) : raw;
+    const [wholeRaw, fracRaw = ''] = unsigned.split('.');
+    const whole = wholeRaw || '0';
+    const frac = fracRaw.slice(0, 6).padEnd(6, '0');
+    const parsed = BigInt(whole) * 1_000_000n + BigInt(frac || '0');
+    return neg ? -parsed : parsed;
+  }
+
+  /**
+   * NAV should include the best single Hyperliquid USDC/equity read, not only the
+   * stale on-chain adapter balance. Spot and perp account values are alternative
+   * views in this setup, so adding them can double-count HL collateral.
+   */
+  private async getHyperliquidNavUsdcBalance(): Promise<bigint> {
+    const fallback = await this.getHyperliquidSpotBalance();
+    try {
+      const activePerpExchange = await this.kashYield.activePerpExchange().catch(() => '');
+      const adapterAddr = await readHyperliquidAdapterAddress(this.kashYield, activePerpExchange);
+      if (!adapterAddr || adapterAddr === ethers.ZeroAddress) return fallback;
+
+      const adapter = new ethers.Contract(
+        adapterAddr,
+        ['function hlAccount() view returns (address)'],
+        this.provider,
+      );
+      let hlUser = await adapter.hlAccount().catch(() => '');
+      if (!hlUser || hlUser === ethers.ZeroAddress) {
+        const pk = process.env.HYPERLIQUID_API_PRIVATE_KEY || config.privateKey;
+        if (!pk) return fallback;
+        hlUser = new ethers.Wallet(pk).address;
+      }
+
+      const { InfoClient, HttpTransport } = await import('@nktkas/hyperliquid');
+      const hlApiUrl = (process.env.HYPERLIQUID_API_URL || 'https://api.hyperliquid.xyz').replace(/\/+$/, '');
+      const info = new InfoClient({ transport: new HttpTransport({ apiUrl: hlApiUrl }) });
+      const ch: any = await info.clearinghouseState({ user: hlUser });
+      const spot = await info.spotClearinghouseState({ user: hlUser }).catch(() => ({ balances: [] }));
+      const spotUsdc = this.decimalStringToUsdc6(
+        (spot?.balances || []).find((b: any) => String(b?.coin || '').toUpperCase() === 'USDC')?.total || '0',
+      );
+      const withdrawable = this.decimalStringToUsdc6(ch?.withdrawable || '0');
+      const accountValue = this.decimalStringToUsdc6(ch?.marginSummary?.accountValue ?? ch?.crossMarginSummary?.accountValue ?? '0');
+      return [fallback, spotUsdc, withdrawable, accountValue].reduce(
+        (max, v) => (v > max ? v : max),
+        0n,
+      );
+    } catch {
+      return fallback;
     }
   }
 

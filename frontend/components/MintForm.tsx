@@ -181,15 +181,6 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
     }
   }, [isMintSuccess, mintHash, amount]);
 
-  // Helper to safely render error cause
-  const renderErrorCause = (error: typeof mintError) => {
-    if (!error?.cause) return null;
-    const cause = error.cause;
-    if (cause instanceof Error) return cause.message;
-    if (typeof cause === 'string') return cause;
-    return 'Unknown error';
-  };
-
   const parsedAmount = amount ?
     (depositToken.symbol === 'ETH' ? parseEther(amount) : parseUnits(amount, depositToken.decimals))
     : BigInt(0);
@@ -424,15 +415,21 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
 
       {/* Error Messages */}
       {(mintError || isMintError) && (
-        <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
-          <p className="text-sm text-red-800 font-medium">Transaction Failed</p>
-          <p className="text-xs text-red-600 mt-1">
-            {mintError?.message || 'Transaction was rejected or failed. Please try again.'}
-          </p>
-          {mintError?.cause !== undefined && mintError.cause !== null && (
-            <p className="text-xs text-red-500 mt-1">
-              {renderErrorCause(mintError)}
-            </p>
+        <div className="p-3 rounded-lg border border-red-200 bg-red-50 text-left">
+          {isUserRejectedWalletError(mintError) ? (
+            <>
+              <p className="text-sm font-medium text-red-800">Mint request cancelled</p>
+              <p className="text-xs text-red-600/90 mt-1.5 leading-relaxed">
+                You closed the wallet prompt or declined the transaction. No funds were spent. Submit again when you are ready.
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="text-sm font-medium text-red-800">Transaction failed</p>
+              <p className="text-xs text-red-600 mt-1.5 leading-relaxed">
+                The mint request could not be completed. Try again, or check your wallet for details.
+              </p>
+            </>
           )}
         </div>
       )}
