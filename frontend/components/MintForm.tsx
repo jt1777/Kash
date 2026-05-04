@@ -17,6 +17,15 @@ const ARB_L2_FALLBACK_MAX_FEE_WEI = 10n ** 9n;
 type Product = 'eth' | 'btc';
 
 const ACTIVITY_REFRESH_EVENT = 'kash-activity-refresh';
+const ACTIVITY_REFRESH_RETRY_DELAYS_MS = [0, 4000, 12000, 30000];
+
+function dispatchActivityRefresh() {
+  ACTIVITY_REFRESH_RETRY_DELAYS_MS.forEach((delay) => {
+    window.setTimeout(() => {
+      window.dispatchEvent(new Event(ACTIVITY_REFRESH_EVENT));
+    }, delay);
+  });
+}
 
 function isUserRejectedWalletError(error: Error | null | undefined): boolean {
   if (!error) return false;
@@ -52,6 +61,8 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
   const kashYield = isBtc ? CONTRACTS.kashYieldBtc! : CONTRACTS.kashYieldEth;
   const depositToken = isBtc ? MINT_TOKEN_BTC : MINT_TOKEN_ETH;
   const [amount, setAmount] = useState('');
+  const [submittedMint, setSubmittedMint] = useState<{ hash: `0x${string}`; amount: string } | null>(null);
+  const [lastActivityRefreshHash, setLastActivityRefreshHash] = useState<`0x${string}` | null>(null);
   const [hideSettled, setHideSettled] = useState(false);
   const [hadPendingBeforeBatch, setHadPendingBeforeBatch] = useState(false);
 
@@ -154,7 +165,9 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
   const mintSettled = batchProcessed && hadPendingBeforeBatch && Boolean(pendingMintRequest?.amountIn && pendingMintRequest.amountIn > 0n);
 
   const { writeContract: approve, data: approveHash, isPending: isApprovePending, error: approveError } = useWriteContract();
-  const { writeContract: mint, data: mintHash, isPending: isMintPending, error: mintError } = useWriteContract();
+  const mintWriteResult = useWriteContract();
+  const { writeContract: mint, data: mintHash, isPending: isMintPending, error: mintError } = mintWriteResult;
+  const resetMint = 'reset' in mintWriteResult ? (mintWriteResult as { reset: () => void }).reset : () => {};
   const { writeContract: cancelMint, data: cancelMintHash, isPending: isCancelMintPending } = useWriteContract();
 
   const { isLoading: isApproveConfirming, isSuccess: isApproveSuccess, isError: isApproveError } = useWaitForTransactionReceipt({ hash: approveHash });
@@ -176,10 +189,12 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
   }, [isMintSuccess, refetchPendingMint]);
 
   useEffect(() => {
-    if (isMintSuccess && mintHash && amount) {
-      window.dispatchEvent(new Event(ACTIVITY_REFRESH_EVENT));
+    if (isMintSuccess && mintHash && amount && lastActivityRefreshHash !== mintHash) {
+      setSubmittedMint({ hash: mintHash, amount });
+      setLastActivityRefreshHash(mintHash);
+      dispatchActivityRefresh();
     }
-  }, [isMintSuccess, mintHash, amount]);
+  }, [isMintSuccess, mintHash, amount, lastActivityRefreshHash]);
 
   const parsedAmount = amount ?
     (depositToken.symbol === 'ETH' ? parseEther(amount) : parseUnits(amount, depositToken.decimals))
@@ -244,8 +259,8 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
     });
   };
 
-  if (isMintSuccess && amount && mintHash) {
-    const txUrl = chainId === HARDHAT_CHAIN_ID ? '#' : `${ARBITRUM_ONE_BLOCK_EXPLORER}/tx/${mintHash}`;
+  if (submittedMint) {
+    const txUrl = chainId === HARDHAT_CHAIN_ID ? '#' : `${ARBITRUM_ONE_BLOCK_EXPLORER}/tx/${submittedMint.hash}`;
     return (
       <div className="text-center py-8">
         <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -261,7 +276,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
         <div className="rounded-xl p-4 mb-6 border border-gray-200 bg-indigo-50 shadow-md text-left space-y-2">
           <p className="text-sm font-medium text-gray-700">Deposit summary</p>
           <p className="text-sm text-gray-600">
-            You deposited <span className="font-semibold text-indigo-600">{amount} {depositToken.symbol}</span>
+            You deposited <span className="font-semibold text-indigo-600">{submittedMint.amount} {depositToken.symbol}</span>
           </p>
           <p className="text-sm text-gray-600">
             Transaction:{' '}
@@ -271,7 +286,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
               rel="noopener noreferrer"
               className="text-indigo-600 hover:text-indigo-700 font-mono text-xs break-all transition-colors"
             >
-              {mintHash.slice(0, 10)}…{mintHash.slice(-8)}
+              {submittedMint.hash.slice(0, 10)}…{submittedMint.hash.slice(-8)}
             </a>
             <span className="text-gray-500 ml-1">(opens block explorer)</span>
           </p>
@@ -279,7 +294,11 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
 
         <button
           type="button"
-          onClick={() => setAmount('')}
+          onClick={() => {
+            setSubmittedMint(null);
+            setAmount('');
+            resetMint();
+          }}
           className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors cursor-pointer"
         >
           Make Another Request

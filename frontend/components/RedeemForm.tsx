@@ -15,6 +15,15 @@ const FEE_BUFFER_PERCENT = 120n;
 type Product = 'eth' | 'btc';
 
 const ACTIVITY_REFRESH_EVENT = 'kash-activity-refresh';
+const ACTIVITY_REFRESH_RETRY_DELAYS_MS = [0, 4000, 12000, 30000];
+
+function dispatchActivityRefresh() {
+  ACTIVITY_REFRESH_RETRY_DELAYS_MS.forEach((delay) => {
+    window.setTimeout(() => {
+      window.dispatchEvent(new Event(ACTIVITY_REFRESH_EVENT));
+    }, delay);
+  });
+}
 
 export function RedeemForm({ product = 'eth' }: { product?: Product }) {
   const { address } = useAccount();
@@ -25,6 +34,8 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
   const kashToken = isBtc ? CONTRACTS.kashTokenBtc! : CONTRACTS.kashTokenEth;
   const redeemSymbol = isBtc ? 'KASH-BTC' : 'KASH-ETH';
   const [amount, setAmount] = useState('');
+  const [submittedRedeem, setSubmittedRedeem] = useState<{ hash: `0x${string}`; amount: string } | null>(null);
+  const [lastActivityRefreshHash, setLastActivityRefreshHash] = useState<`0x${string}` | null>(null);
   const [hideSettled, setHideSettled] = useState(false);
   const [hadPendingBeforeBatch, setHadPendingBeforeBatch] = useState(false);
 
@@ -121,7 +132,9 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
   const redeemSettled = batchProcessed && hadPendingBeforeBatch && Boolean(pendingRedeemRequest?.kashAmount && pendingRedeemRequest.kashAmount > 0n);
 
   const { writeContract: approve, data: approveHash, isPending: isApprovePending } = useWriteContract();
-  const { writeContract: redeem, data: redeemHash, isPending: isRedeemPending } = useWriteContract();
+  const redeemWriteResult = useWriteContract();
+  const { writeContract: redeem, data: redeemHash, isPending: isRedeemPending } = redeemWriteResult;
+  const resetRedeem = 'reset' in redeemWriteResult ? (redeemWriteResult as { reset: () => void }).reset : () => {};
   const { writeContract: cancelRedeem, data: cancelRedeemHash, isPending: isCancelRedeemPending } = useWriteContract();
 
   const { isLoading: isApproveConfirming, isSuccess: isApproveSuccess } = useWaitForTransactionReceipt({ hash: approveHash });
@@ -146,10 +159,12 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
   }, [isRedeemSuccess, refetchPendingRedeem]);
 
   useEffect(() => {
-    if (isRedeemSuccess && redeemHash && amount) {
-      window.dispatchEvent(new Event(ACTIVITY_REFRESH_EVENT));
+    if (isRedeemSuccess && redeemHash && amount && lastActivityRefreshHash !== redeemHash) {
+      setSubmittedRedeem({ hash: redeemHash, amount });
+      setLastActivityRefreshHash(redeemHash);
+      dispatchActivityRefresh();
     }
-  }, [isRedeemSuccess, redeemHash, amount]);
+  }, [isRedeemSuccess, redeemHash, amount, lastActivityRefreshHash]);
 
   const handleApprove = async () => {
     if (!parsedAmount) return;
@@ -192,8 +207,8 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
     }
   };
 
-  if (isRedeemSuccess && amount && redeemHash) {
-    const txUrl = `${ARBITRUM_ONE_BLOCK_EXPLORER}/tx/${redeemHash}`;
+  if (submittedRedeem) {
+    const txUrl = `${ARBITRUM_ONE_BLOCK_EXPLORER}/tx/${submittedRedeem.hash}`;
     return (
       <div className="text-center py-8">
         <div className="w-16 h-16 bg-purple-100 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -209,7 +224,7 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
         <div className="rounded-xl p-4 mb-6 border border-gray-200 bg-purple-50 shadow-md text-left space-y-2">
           <p className="text-sm font-medium text-gray-700">Request summary</p>
           <p className="text-sm text-gray-600">
-            You requested to redeem <span className="font-semibold text-purple-600">{amount} {redeemSymbol}</span>
+            You requested to redeem <span className="font-semibold text-purple-600">{submittedRedeem.amount} {redeemSymbol}</span>
           </p>
           <p className="text-sm text-gray-600">
             Transaction:{' '}
@@ -219,7 +234,7 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
               rel="noopener noreferrer"
               className="text-purple-600 hover:text-purple-700 font-mono text-xs break-all transition-colors"
             >
-              {redeemHash.slice(0, 10)}…{redeemHash.slice(-8)}
+              {submittedRedeem.hash.slice(0, 10)}…{submittedRedeem.hash.slice(-8)}
             </a>
             <span className="text-gray-500 ml-1">(opens block explorer)</span>
           </p>
@@ -227,7 +242,11 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
 
         <button
           type="button"
-          onClick={() => setAmount('')}
+          onClick={() => {
+            setSubmittedRedeem(null);
+            setAmount('');
+            resetRedeem();
+          }}
           className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors cursor-pointer"
         >
           Make Another Request

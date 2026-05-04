@@ -128,6 +128,25 @@ export function RecentActivity() {
     }
   }, [address, cycleDuration, compactActivityView, activityPage]);
 
+  const loadLatest = useCallback(async () => {
+    if (!address) return;
+    setIsLoading(true);
+    setLoadError(null);
+    try {
+      const { list, error, hasMore } = await fetchActivity(
+        address,
+        cycleDuration,
+        0,
+        COMPACT_ACTIVITY_LIMIT,
+      );
+      setActivities(list);
+      setHasMoreActivities(hasMore);
+      setLoadError(error ?? null);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [address, cycleDuration]);
+
   useEffect(() => {
     if (address && isArbitrumOne) load();
     else {
@@ -243,11 +262,15 @@ export function RecentActivity() {
 
   useEffect(() => {
     const onExternalRefresh = () => {
-      void handleRefresh();
+      setCompactActivityView(true);
+      setActivityPage(1);
+      void loadLatest().then(() => {
+        refetchOnChain();
+      });
     };
     window.addEventListener(ACTIVITY_REFRESH_EVENT, onExternalRefresh);
     return () => window.removeEventListener(ACTIVITY_REFRESH_EVENT, onExternalRefresh);
-  }, [handleRefresh]);
+  }, [loadLatest, refetchOnChain]);
 
   const writeContractResult = useWriteContract();
   const { writeContract: writeCancel, data: cancelTxHash, isPending: isCancelPending, error: cancelError } = writeContractResult;
