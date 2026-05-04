@@ -18,6 +18,9 @@ const WETH_ADDRESS = "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1";
 const WBTC_ADDRESS = "0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f";
 const HL_BRIDGE   = "0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7";
 const CYCLE_SECS  = 3600n;
+const NAV_1       = 10n ** 18n;
+const FEE_BPS     = 3n;
+const BPS         = 10_000n;
 
 describe("Mainnet fork — Advanced KashYield scenarios", function () {
   let owner, bot, user1, user2, user3;
@@ -134,6 +137,60 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     return batchCycle;
   }
 
+  async function totalRedeemEthFor(kashAmounts, nav = NAV_1) {
+    const ethPrice = await kashYieldEth.getEthPrice();
+    return kashAmounts.reduce((sum, kashAmount) => {
+      const usdValue = (kashAmount * nav) / NAV_1;
+      const usdAfterFee = (usdValue * (BPS - FEE_BPS)) / BPS;
+      return sum + (usdAfterFee * (10n ** 18n)) / ethPrice;
+    }, 0n);
+  }
+
+  async function simulateHlReturnToAdapter(amount) {
+    if (amount === 0n) return;
+    await hre.network.provider.send("hardhat_impersonateAccount", [HL_BRIDGE]);
+    await hre.network.provider.send("hardhat_setBalance", [HL_BRIDGE, "0xDE0B6B3A7640000"]);
+    const bridgeSigner = await ethers.getSigner(HL_BRIDGE);
+    await usdc.connect(bridgeSigner).transfer(await hlAdapter.getAddress(), amount);
+    await hre.network.provider.send("hardhat_stopImpersonatingAccount", [HL_BRIDGE]);
+  }
+
+  async function settlePhase2(batchCycle, nav = NAV_1) {
+    await kashYieldEth.connect(bot).updateNAV(nav, 0n, 0n, 0n);
+    await kashYieldEth.connect(bot).markBatchOpsDone(batchCycle);
+    await kashYieldEth.connect(bot).performUpkeep("0x");
+    expect(await kashYieldEth.batchProcessed(batchCycle)).to.be.true;
+  }
+
+  async function settleRedeemCycleThroughAaveAndHl(batchCycle, redeemEthNeeded, nav = NAV_1) {
+    const adapterDeposit = await hlAdapter.usdcBalance();
+    if (adapterDeposit > 0n) {
+      await simulateHlReturnToAdapter(adapterDeposit);
+      await kashYieldEth.connect(bot).withdrawFromHyperliquid(adapterDeposit);
+    }
+
+    const usdcBal = await usdc.balanceOf(await kashYieldEth.getAddress());
+    if (usdcBal > 0n) {
+      await kashYieldEth.connect(bot).repayToAave(USDC_ADDRESS, usdcBal);
+    }
+
+    if (redeemEthNeeded > 0n) {
+      await kashYieldEth.connect(bot).withdrawFromAave(redeemEthNeeded);
+    }
+
+    await settlePhase2(batchCycle, nav);
+  }
+
+  async function setMockEthPrice(price18) {
+    const MockChainlinkOracle = await ethers.getContractFactory("MockChainlinkOracle");
+    // KashYieldETH normalizes oracle answers by `10 ** (18 - decimals)`.
+    // Use an 8-decimal Chainlink-style answer for parity with Arbitrum ETH/USD.
+    const mockOracle = await MockChainlinkOracle.deploy(price18 / (10n ** 10n), 8);
+    await mockOracle.waitForDeployment();
+    await kashYieldEth.setEthOracle(await mockOracle.getAddress());
+    return mockOracle;
+  }
+
   it("Multiple users mint in the same batch — both receive KashTokens", async function () {
     const batchCycle = BigInt((await ethers.provider.getBlock("latest")).timestamp) / CYCLE_SECS;
 
@@ -164,7 +221,7 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     console.log(`       user1: ${ethers.formatEther(bal1)} KASH, user2: ${ethers.formatEther(bal2)} KASH`);
   });
 
-  it("Two users partially redeem in the same batch — batchTotalRedeemKash sums both", async function () {
+  it("Two users partially redeem in the same batch — settles through HL + Aave and pays both", async function () {
     await runMultiUserMintCycle(ethers.parseEther("0.4"), ethers.parseEther("0.4"));
 
     await ethers.provider.send("evm_increaseTime", [Number(CYCLE_SECS)]);
@@ -172,8 +229,13 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     const batchCycle =
       BigInt((await ethers.provider.getBlock("latest")).timestamp) / CYCLE_SECS;
 
-    const half1 = (await kashTokenEth.balanceOf(user1.address)) / 2n;
-    const half2 = (await kashTokenEth.balanceOf(user2.address)) / 2n;
+    const user1KashBefore = await kashTokenEth.balanceOf(user1.address);
+    const user2KashBefore = await kashTokenEth.balanceOf(user2.address);
+    const supplyBefore = await kashTokenEth.totalSupply();
+    const half1 = user1KashBefore / 2n;
+    const half2 = user2KashBefore / 2n;
+    const user1EthBefore = await ethers.provider.getBalance(user1.address);
+    const user2EthBefore = await ethers.provider.getBalance(user2.address);
     await kashTokenEth.connect(user1).approve(await kashYieldEth.getAddress(), half1);
     await kashTokenEth.connect(user2).approve(await kashYieldEth.getAddress(), half2);
     await kashYieldEth.connect(user1).requestRedeem(half1);
@@ -183,9 +245,18 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     const info = await kashYieldEth.getBatchInfo(batchCycle);
     expect(info.redeemUsersCount).to.equal(2n);
     expect(info.totalRedeemKash).to.equal(half1 + half2);
+
+    const redeemEthNeeded = await totalRedeemEthFor([half1, half2]);
+    await settleRedeemCycleThroughAaveAndHl(batchCycle, redeemEthNeeded);
+
+    expect(await kashTokenEth.balanceOf(user1.address)).to.equal(user1KashBefore - half1);
+    expect(await kashTokenEth.balanceOf(user2.address)).to.equal(user2KashBefore - half2);
+    expect(await kashTokenEth.totalSupply()).to.equal(supplyBefore - half1 - half2);
+    expect(await ethers.provider.getBalance(user1.address)).to.be.gt(user1EthBefore);
+    expect(await ethers.provider.getBalance(user2.address)).to.be.gt(user2EthBefore);
   });
 
-  it("Two users fully redeem in the same batch — aggregate equals both balances", async function () {
+  it("Two users fully redeem in the same batch — burns both balances and pays both", async function () {
     await runMultiUserMintCycle(ethers.parseEther("0.25"), ethers.parseEther("0.25"));
 
     await ethers.provider.send("evm_increaseTime", [Number(CYCLE_SECS)]);
@@ -195,6 +266,9 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
 
     const b1 = await kashTokenEth.balanceOf(user1.address);
     const b2 = await kashTokenEth.balanceOf(user2.address);
+    const supplyBefore = await kashTokenEth.totalSupply();
+    const user1EthBefore = await ethers.provider.getBalance(user1.address);
+    const user2EthBefore = await ethers.provider.getBalance(user2.address);
     await kashTokenEth.connect(user1).approve(await kashYieldEth.getAddress(), b1);
     await kashTokenEth.connect(user2).approve(await kashYieldEth.getAddress(), b2);
     await kashYieldEth.connect(user1).requestRedeem(b1);
@@ -204,6 +278,15 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     const info = await kashYieldEth.getBatchInfo(batchCycle);
     expect(info.redeemUsersCount).to.equal(2n);
     expect(info.totalRedeemKash).to.equal(b1 + b2);
+
+    const redeemEthNeeded = await totalRedeemEthFor([b1, b2]);
+    await settleRedeemCycleThroughAaveAndHl(batchCycle, redeemEthNeeded);
+
+    expect(await kashTokenEth.balanceOf(user1.address)).to.equal(0n);
+    expect(await kashTokenEth.balanceOf(user2.address)).to.equal(0n);
+    expect(await kashTokenEth.totalSupply()).to.equal(supplyBefore - b1 - b2);
+    expect(await ethers.provider.getBalance(user1.address)).to.be.gt(user1EthBefore);
+    expect(await ethers.provider.getBalance(user2.address)).to.be.gt(user2EthBefore);
   });
 
   it("Mixed mint + redeem same batch (net mint) — minter and redeemer both recorded", async function () {
@@ -214,16 +297,27 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     const batchCycle =
       BigInt((await ethers.provider.getBlock("latest")).timestamp) / CYCLE_SECS;
 
+    const user2BeforeRequest = await kashTokenEth.balanceOf(user2.address);
     const redeemAmt = (await kashTokenEth.balanceOf(user2.address)) / 4n;
     await kashYieldEth.connect(user1).requestMint(0, { value: ethers.parseEther("0.6") });
     await kashTokenEth.connect(user2).approve(await kashYieldEth.getAddress(), redeemAmt);
     await kashYieldEth.connect(user2).requestRedeem(redeemAmt);
+    const user2AfterRequest = await kashTokenEth.balanceOf(user2.address);
     await kashYieldEth.connect(bot).performUpkeep("0x");
 
     const info = await kashYieldEth.getBatchInfo(batchCycle);
     expect(info.mintUsersCount).to.equal(1n);
     expect(info.redeemUsersCount).to.equal(1n);
     expect(info.totalMintUSD).to.be.gt(info.totalRedeemUSD);
+
+    const user1Before = await kashTokenEth.balanceOf(user1.address);
+    const supplyBefore = await kashTokenEth.totalSupply();
+    await settlePhase2(batchCycle);
+
+    expect(await kashTokenEth.balanceOf(user1.address)).to.be.gt(user1Before);
+    expect(user2AfterRequest).to.equal(user2BeforeRequest - redeemAmt);
+    expect(await kashTokenEth.balanceOf(user2.address)).to.equal(user2AfterRequest);
+    expect(await kashTokenEth.totalSupply()).to.be.gt(supplyBefore - redeemAmt);
   });
 
   it("Mixed mint + redeem (net redeem) — strategy unwind fraction <= gross redeem fraction", async function () {
@@ -234,10 +328,12 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     const batchCycle =
       BigInt((await ethers.provider.getBlock("latest")).timestamp) / CYCLE_SECS;
 
-    const redeemAmt = ((await kashTokenEth.balanceOf(user1.address)) * 3n) / 4n;
+    const user1BeforeRequest = await kashTokenEth.balanceOf(user1.address);
+    const redeemAmt = (user1BeforeRequest * 3n) / 4n;
     await kashYieldEth.connect(user1).requestMint(0, { value: ethers.parseEther("0.05") });
     await kashTokenEth.connect(user1).approve(await kashYieldEth.getAddress(), redeemAmt);
     await kashYieldEth.connect(user1).requestRedeem(redeemAmt);
+    const user1AfterRequest = await kashTokenEth.balanceOf(user1.address);
     await kashYieldEth.connect(bot).performUpkeep("0x");
 
     const info = await kashYieldEth.getBatchInfo(batchCycle);
@@ -260,6 +356,82 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     });
     expect(strat <= gross).to.be.true;
     expect(strat).to.be.lt(gross);
+
+    const redeemEthNeeded = await totalRedeemEthFor([redeemAmt]);
+    await settleRedeemCycleThroughAaveAndHl(batchCycle, redeemEthNeeded);
+
+    const user1AfterSettlement = await kashTokenEth.balanceOf(user1.address);
+    expect(user1AfterRequest).to.equal(user1BeforeRequest - redeemAmt);
+    expect(user1AfterSettlement).to.be.gt(user1AfterRequest);
+    expect(user1AfterSettlement).to.be.lt(user1BeforeRequest);
+    expect(await kashYieldEth.batchProcessed(batchCycle)).to.be.true;
+  });
+
+  it("Redeem after ETH price doubles with flat NAV — receives fewer ETH units", async function () {
+    await ethers.provider.send("evm_increaseTime", [Number(CYCLE_SECS)]);
+    await ethers.provider.send("evm_mine");
+
+    const mintPrice = await kashYieldEth.getEthPrice();
+    await runMintCycle(user3, ethers.parseEther("1"));
+    const kashBalance = await kashTokenEth.balanceOf(user3.address);
+    expect(kashBalance).to.be.gt(0n);
+
+    await setMockEthPrice(mintPrice * 2n);
+
+    await ethers.provider.send("evm_increaseTime", [Number(CYCLE_SECS)]);
+    await ethers.provider.send("evm_mine");
+    const redeemCycle = BigInt((await ethers.provider.getBlock("latest")).timestamp) / CYCLE_SECS;
+
+    const expectedRedeemEth = await totalRedeemEthFor([kashBalance]);
+    expect(expectedRedeemEth).to.be.lt(ethers.parseEther("0.6"));
+
+    const ethBefore = await ethers.provider.getBalance(user3.address);
+    await kashTokenEth.connect(user3).approve(await kashYieldEth.getAddress(), kashBalance);
+    await kashYieldEth.connect(user3).requestRedeem(kashBalance);
+    await kashYieldEth.connect(bot).performUpkeep("0x");
+    await settleRedeemCycleThroughAaveAndHl(redeemCycle, expectedRedeemEth);
+
+    const ethAfter = await ethers.provider.getBalance(user3.address);
+    expect(ethAfter - ethBefore).to.be.closeTo(expectedRedeemEth, expectedRedeemEth / 100n);
+    expect(ethAfter - ethBefore).to.be.lt(ethers.parseEther("0.6"));
+  });
+
+  it("Redeem after ETH price halves with flat NAV — receives more ETH units", async function () {
+    await ethers.provider.send("evm_increaseTime", [Number(CYCLE_SECS)]);
+    await ethers.provider.send("evm_mine");
+
+    const mintPrice = await kashYieldEth.getEthPrice();
+    await runMintCycle(user3, ethers.parseEther("1"));
+    const kashBalance = await kashTokenEth.balanceOf(user3.address);
+    expect(kashBalance).to.be.gt(0n);
+
+    await setMockEthPrice(mintPrice / 2n);
+
+    await ethers.provider.send("evm_increaseTime", [Number(CYCLE_SECS)]);
+    await ethers.provider.send("evm_mine");
+    const redeemCycle = BigInt((await ethers.provider.getBlock("latest")).timestamp) / CYCLE_SECS;
+
+    const expectedRedeemEth = await totalRedeemEthFor([kashBalance]);
+    expect(expectedRedeemEth).to.be.gt(ethers.parseEther("1.8"));
+
+    const ethBefore = await ethers.provider.getBalance(user3.address);
+    await kashTokenEth.connect(user3).approve(await kashYieldEth.getAddress(), kashBalance);
+    await kashYieldEth.connect(user3).requestRedeem(kashBalance);
+    await kashYieldEth.connect(bot).performUpkeep("0x");
+
+    // Falling ETH price means the short profit should fund extra ETH. Simulate that profit by
+    // adding the extra redeem ETH needed beyond the original 1 ETH Aave collateral.
+    if (expectedRedeemEth > ethers.parseEther("1")) {
+      await owner.sendTransaction({
+        to: await kashYieldEth.getAddress(),
+        value: expectedRedeemEth - ethers.parseEther("1"),
+      });
+    }
+    await settleRedeemCycleThroughAaveAndHl(redeemCycle, ethers.parseEther("1"));
+
+    const ethAfter = await ethers.provider.getBalance(user3.address);
+    expect(ethAfter - ethBefore).to.be.closeTo(expectedRedeemEth, expectedRedeemEth / 100n);
+    expect(ethAfter - ethBefore).to.be.gt(ethers.parseEther("1.8"));
   });
 
   it("User redeems after price rise — receives more ETH back", async function () {

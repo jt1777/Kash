@@ -802,7 +802,8 @@ const dexSwapFromUsdc = (_lockedNAV: bigint | undefined): OpStep => ({
  * For falling price and balanced: proportional withdrawal (redeemFraction × aaveSupplied),
  * or full sweep on 100% redemption.
  * For rising price (after partial-withdraw-for-swap):
- * withdraw only what remains to reach totalRedeemAsset.
+ * withdraw only what remains to reach totalRedeemAsset, except full strategy redeems
+ * sweep all remaining Aave collateral so settlement NAV cannot strand dust in Aave.
  */
 const aaveWithdraw = (mode: 'proportional' | 'remaining'): OpStep => ({
   id: mode === 'proportional' ? 'aave_withdraw' : 'aave_withdraw_rest',
@@ -816,6 +817,8 @@ const aaveWithdraw = (mode: 'proportional' | 'remaining'): OpStep => ({
       return `withdraw ${fmtAsset(amount, ctx)} from Aave (proportional)`;
     }
     // mode === 'remaining': withdraw to top up contract to totalRedeemAsset
+    const isFullStrategyRedeem = ctx.strategyRedeemFraction >= WAD;
+    if (isFullStrategyRedeem) return `withdraw ALL ${fmtAsset(ctx.aaveSupplied, ctx)} from Aave (remaining full redeem sweep)`;
     const needed = ctx.totalRedeemAsset > ctx.contractAsset
       ? ctx.totalRedeemAsset - ctx.contractAsset
       : 0n;
@@ -827,13 +830,18 @@ const aaveWithdraw = (mode: 'proportional' | 'remaining'): OpStep => ({
     if (ctx.aaveSupplied === 0n) return;
     let amount: bigint;
     if (mode === 'proportional') {
-      const isFullStrategyRedeem = ctx.strategyRedeemFraction >= BigInt(1e18);
+      const isFullStrategyRedeem = ctx.strategyRedeemFraction >= WAD;
       amount = isFullStrategyRedeem ? ctx.aaveSupplied : _proportionalWithdrawAmount(ctx);
     } else {
+      const isFullStrategyRedeem = ctx.strategyRedeemFraction >= WAD;
+      if (isFullStrategyRedeem) {
+        amount = ctx.aaveSupplied;
+      } else {
       const needed = ctx.totalRedeemAsset > ctx.contractAsset
         ? ctx.totalRedeemAsset - ctx.contractAsset
         : 0n;
       amount = needed < ctx.aaveSupplied ? needed : ctx.aaveSupplied;
+      }
     }
     if (amount === 0n) return;
     console.log(`         ${fmtAsset(amount, ctx)}`);
