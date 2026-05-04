@@ -5,6 +5,7 @@ import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadCont
 import { CONTRACTS, ARBITRUM_ONE_BLOCK_EXPLORER, HARDHAT_CHAIN_ID } from '@/lib/contracts/addresses';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 import { kashTokenABI } from '@/lib/contracts/kashTokenABI';
+import { chainlinkAggregatorABI } from '@/lib/contracts/chainlinkAggregatorABI';
 import { parseEther, parseUnits, formatEther, formatUnits, zeroAddress } from 'viem';
 import { useChainId } from 'wagmi';
 
@@ -52,6 +53,37 @@ function formatEtherDisplayDecimals(wei: bigint, decimals: number): string {
   return `${neg ? '-' : ''}${whole.toString()}.${fracStr}`;
 }
 
+function readTupleAnswer(readData: unknown): bigint | undefined {
+  if (!readData || !Array.isArray(readData) || readData.length < 2 || readData[1] == null) return undefined;
+  try {
+    const a = readData[1];
+    return typeof a === 'bigint' ? a : BigInt(a as string | number);
+  } catch {
+    return undefined;
+  }
+}
+
+/** USD value as 18-decimal fixed point: deposit (smallest units) × oracle USD price. */
+function usdWei18FromDepositAndOracle(
+  depositSmallestUnits: bigint,
+  tokenDecimals: number,
+  oracleAnswer: bigint | undefined,
+  oracleDecimals: number | undefined,
+): bigint | null {
+  if (depositSmallestUnits <= 0n || oracleAnswer === undefined || oracleAnswer <= 0n || oracleDecimals === undefined) {
+    return null;
+  }
+  return (depositSmallestUnits * oracleAnswer * 10n ** 18n)
+    / (10n ** BigInt(tokenDecimals) * 10n ** BigInt(oracleDecimals));
+}
+
+function formatApproxUsd(usdWei18: bigint | null): string {
+  if (usdWei18 === null) return '—';
+  const n = Number(formatEther(usdWei18));
+  if (!Number.isFinite(n)) return '—';
+  return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 export function MintForm({ product = 'eth' }: { product?: Product }) {
   const { address } = useAccount();
   const chainId = useChainId();
@@ -61,6 +93,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
   const kashYield = isBtc ? CONTRACTS.kashYieldBtc! : CONTRACTS.kashYieldEth;
   const depositToken = isBtc ? MINT_TOKEN_BTC : MINT_TOKEN_ETH;
   const [amount, setAmount] = useState('');
+  const [showMintConfirm, setShowMintConfirm] = useState(false);
   const [submittedMint, setSubmittedMint] = useState<{ hash: `0x${string}`; amount: string } | null>(null);
   const [lastActivityRefreshHash, setLastActivityRefreshHash] = useState<`0x${string}` | null>(null);
   const [hideSettled, setHideSettled] = useState(false);
@@ -111,6 +144,26 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
     args: currentBatchCycle !== undefined ? [currentBatchCycle] : undefined,
     query: { refetchInterval: 15000 },
   });
+
+  const spotOracleAddress = isBtc ? CONTRACTS.oracles.btcUsd : CONTRACTS.oracles.ethUsd;
+
+  const { data: oracleRound, isFetched: oracleRoundFetched } = useReadContract({
+    address: spotOracleAddress,
+    abi: chainlinkAggregatorABI,
+    functionName: 'latestRoundData',
+    query: { refetchInterval: 60_000 },
+  });
+
+  const { data: oracleDecimalsRaw } = useReadContract({
+    address: spotOracleAddress,
+    abi: chainlinkAggregatorABI,
+    functionName: 'decimals',
+    query: { refetchInterval: 60_000 },
+  });
+
+  const oracleAnswer = readTupleAnswer(oracleRound);
+  const oracleDecimals =
+    oracleDecimalsRaw !== undefined ? Number(oracleDecimalsRaw as number | bigint) : undefined;
 
   const { data: cycleDurationSecondsRaw } = useReadContract({
     address: kashYield,
@@ -200,6 +253,30 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
     (depositToken.symbol === 'ETH' ? parseEther(amount) : parseUnits(amount, depositToken.decimals))
     : BigInt(0);
 
+  const mintApproxUsdWei18 = useMemo(() => {
+    try {
+      return usdWei18FromDepositAndOracle(
+        parsedAmount,
+        depositToken.decimals,
+        oracleAnswer && oracleAnswer > 0n ? oracleAnswer : undefined,
+        oracleDecimals,
+      );
+    } catch {
+      return null;
+    }
+  }, [parsedAmount, depositToken.decimals, oracleAnswer, oracleDecimals]);
+
+  const mintUsdLabel = formatApproxUsd(mintApproxUsdWei18);
+
+  useEffect(() => {
+    if (!showMintConfirm) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowMintConfirm(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [showMintConfirm]);
+
   // For ETH mint: require balance >= amount + gas reserve so wallet never fails with "Insufficient funds"
   const exceedsBalance = depositToken.symbol === 'ETH' && parsedAmount > 0n && parsedAmount > maxMintEth;
   const exceedsWbtcBalance = isBtc && wbtcBalance && parsedAmount > 0n && parsedAmount > wbtcBalance.value;
@@ -223,6 +300,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
 
   const handleMint = async () => {
     if (!parsedAmount || exceedsBalance || exceedsWbtcBalance) return;
+    setShowMintConfirm(false);
 
     try {
       if (depositToken.symbol === 'ETH' && !isBtc) {
@@ -297,6 +375,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
           onClick={() => {
             setSubmittedMint(null);
             setAmount('');
+            setShowMintConfirm(false);
             resetMint();
           }}
           className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors cursor-pointer"
@@ -308,7 +387,69 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 relative">
+      {showMintConfirm && (
+        <div
+          className="fixed inset-0 z-[110] flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="mint-confirm-title"
+        >
+          <button
+            type="button"
+            className="absolute inset-0 cursor-pointer backdrop-blur-sm"
+            style={{ backgroundColor: 'rgba(10, 10, 30, 0.82)' }}
+            aria-label="Dismiss"
+            onClick={() => setShowMintConfirm(false)}
+          />
+          <div
+            className="relative z-[111] bg-white rounded-2xl shadow-xl border max-w-md w-full p-6 text-left"
+            style={{ borderColor: 'rgba(0, 255, 255, 0.22)', boxShadow: '0 10px 40px rgba(0, 0, 0, 0.45), 0 0 25px rgba(0, 255, 255, 0.08)' }}
+          >
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-9 h-9 bg-green-100 rounded-lg flex items-center justify-center shrink-0 border border-transparent" style={{ boxShadow: '0 0 12px rgba(0, 255, 255, 0.12)' }}>
+                <svg className="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+              </div>
+              <h3 id="mint-confirm-title" className="text-xl font-bold text-gray-900">
+                Confirm mint
+              </h3>
+            </div>
+            <p className="text-sm text-gray-600 leading-relaxed">
+              You are depositing{' '}
+              <span className="font-semibold text-gray-900">
+                {amount} {depositToken.symbol}
+              </span>{' '}
+              currently valued at approximately{' '}
+              <span className="font-semibold text-indigo-600">${mintUsdLabel}</span>
+              {!oracleRoundFetched && mintApproxUsdWei18 === null && parsedAmount > 0n ? (
+                <span className="text-gray-500"> (loading price…)</span>
+              ) : null}
+            </p>
+            <p className="text-xs text-gray-500 mt-4 leading-relaxed">
+              Estimates use the latest on-chain oracle price and are not a guarantee of batch execution value.
+            </p>
+            <div className="flex flex-col sm:flex-row gap-3 mt-6">
+              <button
+                type="button"
+                onClick={() => setShowMintConfirm(false)}
+                className="flex-1 px-6 py-3 rounded-lg font-medium transition border cursor-pointer bg-white/10 text-gray-400 hover:text-white border-white/20 hover:bg-white/15"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleMint()}
+                disabled={isMintPending || isMintConfirming}
+                className="flex-1 px-6 py-3 rounded-lg bg-linear-to-r from-indigo-600 to-purple-600 text-white font-medium hover:from-indigo-700 hover:to-purple-700 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed cursor-pointer transition-all shadow-lg disabled:shadow-none border-2 border-transparent"
+              >
+                Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Token (single option per product) */}
       <div className="text-sm font-medium text-gray-700">
         Deposit: {depositToken.symbol}
@@ -424,7 +565,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
         
         <button
           type="button"
-          onClick={handleMint}
+          onClick={() => setShowMintConfirm(true)}
           disabled={isMintPending || isMintConfirming || !amount || needsApproval || exceedsBalance || !!exceedsWbtcBalance}
           className="w-full px-6 py-3 bg-linear-to-r from-indigo-600 to-purple-600 text-white rounded-lg font-medium hover:from-indigo-700 hover:to-purple-700 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed cursor-pointer transition-all shadow-lg"
         >

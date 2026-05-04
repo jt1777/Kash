@@ -161,6 +161,17 @@ function swapTxOverrides(): { gasLimit?: bigint } {
   }
 }
 
+/** Real Aave V3 calls can be under-estimated on Arbitrum; use a modest default buffer. */
+function aaveTxOverrides(): { gasLimit?: bigint } {
+  const raw = (process.env.OPS_AAVE_GAS_LIMIT || '500000').trim();
+  try {
+    const n = BigInt(raw);
+    return n > 0n ? { gasLimit: n } : {};
+  } catch {
+    return { gasLimit: 500000n };
+  }
+}
+
 const HL_ACTION_IFACE = new ethers.Interface([
   'function openShort(string symbol, uint256 size)',
   'function closeShort(string symbol)',
@@ -335,7 +346,7 @@ const aaveDeposit: OpStep = {
     const toDeposit = target < ctx.contractAsset ? target : ctx.contractAsset;
     if (toDeposit === 0n) return;
     console.log(`         ${fmtAsset(toDeposit, ctx)}`);
-    await execTx('depositToAave', ctx.kashYield.depositToAave(toDeposit));
+    await execTx('depositToAave', ctx.kashYield.depositToAave(toDeposit, aaveTxOverrides()));
   },
 };
 
@@ -399,7 +410,7 @@ const aaveDepositNetMint = (netMintUSD: bigint): OpStep => ({
     const toDeposit = await computeNetMintAaveDepositAmount(ctx, netMintUSD);
     if (toDeposit === 0n) return;
     console.log(`         ${fmtAsset(toDeposit, ctx)} (net mint deposit only; not sweeping older vault asset)`);
-    await execTx('depositToAave', ctx.kashYield.depositToAave(toDeposit));
+    await execTx('depositToAave', ctx.kashYield.depositToAave(toDeposit, aaveTxOverrides()));
     await markBatchMintDeployedToAave(ctx, toDeposit);
   },
 });
@@ -450,7 +461,7 @@ const aaveBorrow: OpStep = {
     } else {
       console.log(`         ${fmtUsdc(toBorrow)}`);
     }
-    await execTx('borrowFromAave', ctx.kashYield.borrowFromAave(ctx.aaveUsdcAddress, toBorrow));
+    await execTx('borrowFromAave', ctx.kashYield.borrowFromAave(ctx.aaveUsdcAddress, toBorrow, aaveTxOverrides()));
   },
 };
 
@@ -640,7 +651,7 @@ async function executeAaveRepay(ctx: OpsContext): Promise<void> {
   const amount = ctx.contractUsdc < debtToRepay ? ctx.contractUsdc : debtToRepay;
   if (amount === 0n) return;
   console.log(`         ${fmtUsdc(amount)}`);
-  await execTx('repayToAave', ctx.kashYield.repayToAave(ctx.aaveUsdcAddress, amount));
+  await execTx('repayToAave', ctx.kashYield.repayToAave(ctx.aaveUsdcAddress, amount, aaveTxOverrides()));
 }
 
 /** Final repay in rising tail after optional tiny-shortfall swap skip — fails loud if USDC still missing. */
@@ -661,7 +672,7 @@ async function executeAaveRepayRisingFinal(ctx: OpsContext): Promise<void> {
   }
   if (amount === 0n) return;
   console.log(`         ${fmtUsdc(amount)}`);
-  await execTx('repayToAave', ctx.kashYield.repayToAave(ctx.aaveUsdcAddress, amount));
+  await execTx('repayToAave', ctx.kashYield.repayToAave(ctx.aaveUsdcAddress, amount, aaveTxOverrides()));
 }
 
 function describeAaveRepay(ctx: OpsContext): string {
@@ -731,7 +742,7 @@ const aaveRepayResidualDebtFromOwnerReserve: OpStep = {
     const amount = spendable < debtToRepay ? spendable : debtToRepay;
     if (amount === 0n) return;
     console.log(`         repay residual ${fmtUsdc(amount)} to Aave (debt=${fmtUsdc(ctx.aaveDebt)})`);
-    await execTx('repayToAave(residual)', ctx.kashYield.repayToAave(ctx.aaveUsdcAddress, amount));
+    await execTx('repayToAave(residual)', ctx.kashYield.repayToAave(ctx.aaveUsdcAddress, amount, aaveTxOverrides()));
   },
 };
 
@@ -845,7 +856,7 @@ const aaveWithdraw = (mode: 'proportional' | 'remaining'): OpStep => ({
     }
     if (amount === 0n) return;
     console.log(`         ${fmtAsset(amount, ctx)}`);
-    await execTx('withdrawFromAave', ctx.kashYield.withdrawFromAave(amount));
+    await execTx('withdrawFromAave', ctx.kashYield.withdrawFromAave(amount, aaveTxOverrides()));
   },
 });
 
@@ -913,7 +924,7 @@ const aaveWithdrawPartial: OpStep = {
     console.log(
       `         ${fmtAsset(toWithdraw, ctx)} (for swap≤${fmtAsset(assetForShortfall, ctx)}, redeem gap ${fmtAsset(redeemGap, ctx)})`,
     );
-    await execTx('withdrawFromAave(partial)', ctx.kashYield.withdrawFromAave(toWithdraw));
+    await execTx('withdrawFromAave(partial)', ctx.kashYield.withdrawFromAave(toWithdraw, aaveTxOverrides()));
   },
 };
 

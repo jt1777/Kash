@@ -8,6 +8,13 @@ import { kashTokenABI } from '@/lib/contracts/kashTokenABI';
 import { parseEther, formatEther } from 'viem';
 import { useChainId } from 'wagmi';
 
+function formatApproxUsd(usdWei18: bigint | null): string {
+  if (usdWei18 === null) return '—';
+  const n = Number(formatEther(usdWei18));
+  if (!Number.isFinite(n)) return '—';
+  return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 const MIN_MAX_FEE_GWEI = 30n;
 const GWEI = 10n ** 9n;
 const FEE_BUFFER_PERCENT = 120n;
@@ -34,6 +41,7 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
   const kashToken = isBtc ? CONTRACTS.kashTokenBtc! : CONTRACTS.kashTokenEth;
   const redeemSymbol = isBtc ? 'KASH-BTC' : 'KASH-ETH';
   const [amount, setAmount] = useState('');
+  const [showRedeemConfirm, setShowRedeemConfirm] = useState(false);
   const [submittedRedeem, setSubmittedRedeem] = useState<{ hash: `0x${string}`; amount: string } | null>(null);
   const [lastActivityRefreshHash, setLastActivityRefreshHash] = useState<`0x${string}` | null>(null);
   const [hideSettled, setHideSettled] = useState(false);
@@ -69,6 +77,13 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
     address: kashYield,
     abi: kashYieldABI,
     functionName: 'getCurrentBatchCycle',
+  });
+
+  const { data: currentNav, isFetched: navFetched } = useReadContract({
+    address: kashYield,
+    abi: kashYieldABI,
+    functionName: 'currentNAV',
+    query: { refetchInterval: 15_000 },
   });
 
   const { data: batchInfo } = useReadContract({
@@ -142,6 +157,14 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
   const { isLoading: isCancelRedeemConfirming } = useWaitForTransactionReceipt({ hash: cancelRedeemHash });
 
   const parsedAmount = amount ? parseEther(amount) : BigInt(0);
+
+  const redeemApproxUsdWei18 = useMemo(() => {
+    if (parsedAmount <= 0n || currentNav === undefined || currentNav <= 0n) return null;
+    return (parsedAmount * currentNav) / 10n ** 18n;
+  }, [parsedAmount, currentNav]);
+
+  const redeemUsdLabel = formatApproxUsd(redeemApproxUsdWei18);
+
   const needsApproval = allowance !== undefined && parsedAmount > BigInt(0) && allowance < parsedAmount;
 
   // Refetch allowance after approve succeeds so UI updates and Submit Redeem Request becomes enabled
@@ -166,6 +189,15 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
     }
   }, [isRedeemSuccess, redeemHash, amount, lastActivityRefreshHash]);
 
+  useEffect(() => {
+    if (!showRedeemConfirm) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowRedeemConfirm(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [showRedeemConfirm]);
+
   const handleApprove = async () => {
     if (!parsedAmount) return;
 
@@ -180,6 +212,7 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
 
   const handleRedeem = async () => {
     if (!parsedAmount) return;
+    setShowRedeemConfirm(false);
 
     redeem({
       address: kashYield,
@@ -245,6 +278,7 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
           onClick={() => {
             setSubmittedRedeem(null);
             setAmount('');
+            setShowRedeemConfirm(false);
             resetRedeem();
           }}
           className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors cursor-pointer"
@@ -256,7 +290,69 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 relative">
+      {showRedeemConfirm && (
+        <div
+          className="fixed inset-0 z-[110] flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="redeem-confirm-title"
+        >
+          <button
+            type="button"
+            className="absolute inset-0 cursor-pointer backdrop-blur-sm"
+            style={{ backgroundColor: 'rgba(10, 10, 30, 0.82)' }}
+            aria-label="Dismiss"
+            onClick={() => setShowRedeemConfirm(false)}
+          />
+          <div
+            className="relative z-[111] bg-white rounded-2xl shadow-xl border max-w-md w-full p-6 text-left"
+            style={{ borderColor: 'rgba(0, 255, 255, 0.22)', boxShadow: '0 10px 40px rgba(0, 0, 0, 0.45), 0 0 25px rgba(0, 255, 255, 0.08)' }}
+          >
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-9 h-9 bg-purple-100 rounded-lg flex items-center justify-center shrink-0 border border-transparent" style={{ boxShadow: '0 0 12px rgba(0, 255, 255, 0.12)' }}>
+                <svg className="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
+                </svg>
+              </div>
+              <h3 id="redeem-confirm-title" className="text-xl font-bold text-gray-900">
+                Confirm redemption
+              </h3>
+            </div>
+            <p className="text-sm text-gray-600 leading-relaxed">
+              You are redeeming{' '}
+              <span className="font-semibold text-gray-900">
+                {amount} {redeemSymbol}
+              </span>{' '}
+              tokens currently valued at approximately{' '}
+              <span className="font-semibold text-purple-600">${redeemUsdLabel}</span>
+              {!navFetched && redeemApproxUsdWei18 === null && parsedAmount > 0n ? (
+                <span className="text-gray-500"> (loading NAV…)</span>
+              ) : null}
+            </p>
+            <p className="text-xs text-gray-500 mt-4 leading-relaxed">
+              Value uses the contract&apos;s current NAV per token; settlement may differ slightly after fees and the next batch.
+            </p>
+            <div className="flex flex-col sm:flex-row gap-3 mt-6">
+              <button
+                type="button"
+                onClick={() => setShowRedeemConfirm(false)}
+                className="flex-1 px-6 py-3 rounded-lg font-medium transition border cursor-pointer bg-white/10 text-gray-400 hover:text-white border-white/20 hover:bg-white/15"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleRedeem()}
+                disabled={isRedeemPending || isRedeemConfirming}
+                className="flex-1 px-6 py-3 rounded-lg bg-linear-to-r from-purple-600 to-pink-600 text-white font-medium hover:from-purple-700 hover:to-pink-700 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed cursor-pointer transition-all shadow-lg disabled:shadow-none border-2 border-transparent"
+              >
+                Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Token (single option per product) */}
       <div className="text-sm font-medium text-gray-700">
         Redeem: {redeemSymbol}
@@ -338,7 +434,7 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
         
         <button
           type="button"
-          onClick={handleRedeem}
+          onClick={() => setShowRedeemConfirm(true)}
           disabled={isRedeemPending || isRedeemConfirming || !amount || needsApproval || (kashBalance !== undefined && parsedAmount > kashBalance)}
           className="w-full px-6 py-3 bg-linear-to-r from-purple-600 to-pink-600 text-white rounded-lg font-medium hover:from-purple-700 hover:to-pink-700 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed cursor-pointer transition-all shadow-lg"
         >
