@@ -183,7 +183,8 @@ export async function getAaveSuppliedAmountV3(
 // ---------------------------------------------------------------------------
 
 /**
- * Compute total asset (ETH or wBTC) owed to all redeemers in the given batch cycle.
+ * Compute total asset (ETH or wBTC) consumed by pending redeems in the given batch cycle.
+ * This is the gross KASH claim: redeemer payout plus protocol fee retained as owner reserve.
  * This is the single authoritative formula used by:
  *   - snapshotOpsContext (to populate ctx.totalRedeemAsset)
  *   - runStepMarkDone preflight gate
@@ -197,7 +198,6 @@ export async function computeTotalRedeemAsset(
   assetDecimals: bigint,
 ): Promise<bigint> {
   const nav = lockedNAV ?? BigInt((await kashYield.currentNAV()).toString());
-  const feeBps = BigInt((await kashYield.feeBps()).toString());
   const info = await kashYield.getBatchInfo(batchCycle);
   const redeemUsersCount = BigInt(info.redeemUsersCount.toString());
   if (redeemUsersCount === 0n) return 0n;
@@ -210,8 +210,8 @@ export async function computeTotalRedeemAsset(
     const req = await kashYield.getPendingRedeemRequest(addr, batchCycle);
     const kashAmt = BigInt(req.kashAmount.toString());
     if (kashAmt === 0n) continue;
-    const usdAfterFee = ((kashAmt * nav) / (10n ** 18n)) * (10000n - feeBps) / 10000n;
-    total += (usdAfterFee * (10n ** assetDecimals)) / price;
+    const usdValue = (kashAmt * nav) / (10n ** 18n);
+    total += (usdValue * (10n ** assetDecimals)) / price;
   }
   return total;
 }

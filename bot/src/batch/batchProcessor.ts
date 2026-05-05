@@ -432,19 +432,20 @@ export class BatchProcessor {
         } catch { ownerAssetReserve = 0n; }
       }
 
-      // Must match on-chain Phase 2: balance >= owner*Reserve + total redeem asset (KashYieldBtc / KashYieldETH).
+      // Must match on-chain Phase 2: balance >= owner*Reserve + gross redeem asset
+      // (redeemer payout plus protocol fee retained as owner reserve).
       const requiredForPhase2 = totalRedeemAsset + ownerAssetReserve;
       if (contractBalance < requiredForPhase2) {
         throw new Error(
           `Cannot markBatchOpsDone: contract holds ${ethers.formatUnits(contractBalance, Number(decimals))} ` +
           `but Phase 2 needs ${ethers.formatUnits(requiredForPhase2, Number(decimals))} ` +
-          `(redeemers ${ethers.formatUnits(totalRedeemAsset, Number(decimals))} + owner reserve ${ethers.formatUnits(ownerAssetReserve, Number(decimals))}). ` +
+          `(gross redeem ${ethers.formatUnits(totalRedeemAsset, Number(decimals))} + owner reserve ${ethers.formatUnits(ownerAssetReserve, Number(decimals))}). ` +
           `Withdraw more ${isBtc ? 'wBTC' : 'ETH'} from Aave (or reduce owner reserve) before proceeding.`
         );
       }
       console.log(
         `   ✅ Balance check passed: contract has ${ethers.formatUnits(contractBalance, Number(decimals))} ` +
-          `(need ${ethers.formatUnits(requiredForPhase2, Number(decimals))} = redeem ${ethers.formatUnits(totalRedeemAsset, Number(decimals))} + owner reserve ${ethers.formatUnits(ownerAssetReserve, Number(decimals))})`,
+          `(need ${ethers.formatUnits(requiredForPhase2, Number(decimals))} = gross redeem ${ethers.formatUnits(totalRedeemAsset, Number(decimals))} + owner reserve ${ethers.formatUnits(ownerAssetReserve, Number(decimals))})`,
       );
     }
 
@@ -545,17 +546,17 @@ export class BatchProcessor {
       const assetUsd18 = (totalAsset * price) / (10n ** assetDecimals);
       const netUsdc6 = contractUsdc + hlUsdc - aaveDebtUsdc;
       const netUsdcUsd18 = netUsdc6 * (10n ** 12n);
-      const pendingMintUsdAfterFee = await this.getUnprocessedPendingMintUsdAfterFee(price, assetDecimals);
+      const pendingMintUsdGross = await this.getUnprocessedPendingMintUsdGross(price, assetDecimals);
       let portfolioUsd18 = assetUsd18 + netUsdcUsd18;
-      portfolioUsd18 = portfolioUsd18 > pendingMintUsdAfterFee
-        ? portfolioUsd18 - pendingMintUsdAfterFee
+      portfolioUsd18 = portfolioUsd18 > pendingMintUsdGross
+        ? portfolioUsd18 - pendingMintUsdGross
         : 0n;
 
       console.log(
         `   📈 Live portfolio: asset=${ethers.formatUnits(totalAsset, Number(assetDecimals))} ${isBtc ? 'BTC' : 'ETH'} ` +
         `(${ethers.formatEther(assetUsd18)} USD), netUSDC=${ethers.formatUnits(netUsdc6, 6)} ` +
-        `(${ethers.formatEther(netUsdcUsd18)} USD), pendingMintExcluded=${ethers.formatEther(pendingMintUsdAfterFee)} USD ` +
-        `(after fee; redeem payout on vault is not excluded)`
+        `(${ethers.formatEther(netUsdcUsd18)} USD), pendingMintExcluded=${ethers.formatEther(pendingMintUsdGross)} USD ` +
+        `(gross; protocol mint fee is owner reserve, redeem payout on vault is not excluded)`
       );
 
       return portfolioUsd18 > 0n ? portfolioUsd18 : 0n;
@@ -746,7 +747,8 @@ export class BatchProcessor {
   private async handleNetMintAave(amount: bigint): Promise<{ toDeposit: bigint; borrowedUsdcDelta: bigint }> {
     const price = isBtc ? await this.kashYield.getBtcPrice() : await this.kashYield.getEthPrice();
     const pct = BigInt(config.strategy.aaveDepositPct);
-    const depositAmountUSD = (amount * pct) / 100n;
+    const deployableAmount = await this.getAfterFeeNetMintUsd(amount);
+    const depositAmountUSD = (deployableAmount * pct) / 100n;
     const depositAmount = isBtc
       ? (depositAmountUSD * (10n ** 8n)) / price
       : (depositAmountUSD * (10n ** 18n)) / price;
@@ -818,13 +820,29 @@ export class BatchProcessor {
     const shouldAddOrOpen = extendShort || !hasShort;
     if (shouldAddOrOpen) {
       const leverageScaled = BigInt(Math.round(config.strategy.shortLeverage * 100));
-      const shortSizeUSD = (amount * leverageScaled) / 100n;
+      const deployableAmount = await this.getAfterFeeNetMintUsd(amount);
+      const shortSizeUSD = (deployableAmount * leverageScaled) / 100n;
       console.log(
         `   [HL] Stage 3: ${hasShort ? 'Add to' : 'Open'} ${config.strategy.shortLeverage}x ${shortSymbol} short (incremental notional)`
       );
       await this.openShortOnHyperliquid(shortSizeUSD, price, shortSymbol);
     } else {
       console.log(`   [HL] Stage 3: Skip short (position already open, no new collateral or borrow this run)`);
+    }
+  }
+
+  private async getAfterFeeNetMintUsd(fallbackNetMintUSD: bigint): Promise<bigint> {
+    try {
+      const currentCycle = BigInt((await this.kashYield.getCurrentBatchCycle()).toString());
+      const info = await this.kashYield.getBatchInfo(currentCycle);
+      const totalMintUSD = BigInt(info.totalMintUSD.toString());
+      const totalRedeemUSD = BigInt(info.totalRedeemUSD.toString());
+      const feeBps = BigInt((await this.kashYield.feeBps()).toString());
+      const afterFeeMintUSD = (totalMintUSD * (10000n - feeBps)) / 10000n;
+      return afterFeeMintUSD > totalRedeemUSD ? afterFeeMintUSD - totalRedeemUSD : 0n;
+    } catch {
+      const feeBps = BigInt((await this.kashYield.feeBps()).toString());
+      return (fallbackNetMintUSD * (10000n - feeBps)) / 10000n;
     }
   }
 
@@ -1230,12 +1248,11 @@ export class BatchProcessor {
 
   /**
    * Pending mint capital is not backing existing KASH yet, even if the bot already deployed it
-   * into Aave/HL during ops. Subtract the after-fee USD value from NAV; the fee remains in NAV
-   * as protocol/holder value, matching Phase 2 mint math.
+   * into Aave/HL during ops. Subtract the gross USD value from NAV: after-fee principal backs
+   * newly minted KASH, while the protocol fee is owner reserve rather than holder NAV.
    */
-  private async getUnprocessedPendingMintUsdAfterFee(price: bigint, assetDecimals: bigint): Promise<bigint> {
+  private async getUnprocessedPendingMintUsdGross(price: bigint, assetDecimals: bigint): Promise<bigint> {
     const currentCycle = BigInt((await this.kashYield.getCurrentBatchCycle()).toString());
-    const feeBps = BigInt((await this.kashYield.feeBps()).toString());
     let sum = 0n;
     const lookback = 10n;
     for (let i = 0n; i <= lookback; i++) {
@@ -1256,7 +1273,7 @@ export class BatchProcessor {
         totalMintUsd = (totalMintAsset * price) / (10n ** assetDecimals);
       }
       if (totalMintUsd === 0n) continue;
-      sum += (totalMintUsd * (10000n - feeBps)) / 10000n;
+      sum += totalMintUsd;
     }
     return sum;
   }

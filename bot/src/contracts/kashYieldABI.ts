@@ -77,6 +77,8 @@ export const kashYieldABI = [
   { inputs: [], name: "ownerUsdcReserve", outputs: [{ name: "", type: "uint256" }], stateMutability: "view", type: "function" },
   { inputs: [], name: "ownerEthReserve", outputs: [{ name: "", type: "uint256" }], stateMutability: "view", type: "function" },
   { inputs: [], name: "ownerWbtcReserve", outputs: [{ name: "", type: "uint256" }], stateMutability: "view", type: "function" },
+  { inputs: [], name: "protocolFeeEthReserve", outputs: [{ name: "", type: "uint256" }], stateMutability: "view", type: "function" },
+  { inputs: [], name: "protocolFeeWbtcReserve", outputs: [{ name: "", type: "uint256" }], stateMutability: "view", type: "function" },
   { inputs: [{ name: "amount", type: "uint256" }], name: "coverUsdcShortfall", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [], name: "wethAddress", outputs: [{ name: "", type: "address" }], stateMutability: "view", type: "function" },
   { inputs: [], name: "wbtcAddress", outputs: [{ name: "", type: "address" }], stateMutability: "view", type: "function" },

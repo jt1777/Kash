@@ -2,7 +2,7 @@
  * Owner Status Script
  *
  * Shows protocol state for KashYieldETH or KashYieldBtc:
- * - Asset in contract: total vs getReserved* (pending mints + redeem BTC/ETH estimate) vs owner-excess
+ * - Asset in contract: total vs getReserved* (pending mints + gross redeem estimate) vs owner/protocol-fee reserve
  * - Aave: supplied ETH/wBTC, borrowed USDC
  * - Hyperliquid: USDC in spot, wBTC/ETH in spot, perp positions (ETH/BTC: size, collateral, active)
  *
@@ -39,7 +39,8 @@ const RESERVED_LOOKBACK = 10;
 /**
  * Mirror KashYield `getReservedBtc` / `getReservedEth`: for unprocessed cycles in the same 11-cycle
  * lookback, sum pending mint wBTC/ETH plus **estimated** wBTC/ETH owed on pending redeems
- * (batchTotalRedeemKash × currentNAV × (1−fee) / oracle price). Not USDC-in-NAV directly;
+ * (batchTotalRedeemKash × currentNAV / oracle price). Redeem protocol fees are retained
+ * as owner reserve during Phase 2, so the reserved estimate is gross rather than after-fee.
  * higher `currentNAV` increases the redeem leg and thus "reserved" vs raw mint only.
  */
 async function reservedAssetBreakdown(
@@ -48,7 +49,6 @@ async function reservedAssetBreakdown(
 ): Promise<{ mintSum: bigint; redeemEst: bigint; total: bigint }> {
   const currentCycle = BigInt((await kashYield.getCurrentBatchCycle()).toString());
   const nav = BigInt((await kashYield.currentNAV()).toString());
-  const feeBps = BigInt((await kashYield.feeBps()).toString());
   const price = BigInt(
     (await (isBtc ? kashYield.getBtcPrice() : kashYield.getEthPrice())).toString(),
   );
@@ -68,8 +68,7 @@ async function reservedAssetBreakdown(
     const totalRedeemKash = BigInt((await kashYield.batchTotalRedeemKash(cycle)).toString());
     if (totalRedeemKash > 0n) {
       const redeemUsdEstimate = (totalRedeemKash * nav) / 10n ** 18n;
-      const redeemAssetEstimate =
-        (((redeemUsdEstimate * (10000n - feeBps)) / 10000n) * 10n ** assetDec) / price;
+      const redeemAssetEstimate = (redeemUsdEstimate * 10n ** assetDec) / price;
       redeemEst += redeemAssetEstimate;
     }
   }
@@ -119,6 +118,8 @@ async function main() {
     reserved = await kashYield.getReservedBtc();
     const br = await reservedAssetBreakdown(kashYield, true);
     const excess = totalInContract > reserved ? totalInContract - reserved : 0n;
+    const ownerAssetReserve = await kashYield.ownerWbtcReserve().catch(() => 0n);
+    const protocolFeeReserve = await kashYield.protocolFeeWbtcReserve().catch(() => 0n);
     console.log('📦 Asset in Contract (wBTC)');
     console.log('  Total:            ', ethers.formatUnits(totalInContract, 8), 'wBTC');
     console.log(
@@ -134,20 +135,24 @@ async function main() {
     console.log(
       '    · Redeem est.:   ',
       ethers.formatUnits(br.redeemEst, 8),
-      'wBTC (KASH×currentNAV×(1−fee)/BTC price — not Phase 2 exactNAV)',
+      'wBTC (KASH×currentNAV/BTC price, gross incl. protocol fee — not Phase 2 exactNAV)',
     );
     if (br.total !== reserved) {
       console.log('    ⚠️  Breakdown sum ≠ on-chain reserved (unexpected); trust getReservedBtc.');
     }
+    console.log('  Owner reserve:    ', ethers.formatUnits(ownerAssetReserve, 8), 'wBTC (excluded from user NAV / ops)');
+    console.log('    · Protocol fee: ', ethers.formatUnits(protocolFeeReserve, 8), 'wBTC (current fee-owned portion)');
     console.log('  Excess (owner):   ', ethers.formatUnits(excess, 8), 'wBTC (withdrawable via ownerWithdrawWbtc)');
     console.log(
-      '  Note: "Reserved" is not "mint deposits only" if any batch has pending redeems. NAV affects the redeem estimate.',
+      '  Note: "Reserved" is user obligations; owner reserve/protocol fees are separate owner-withdrawable excess.',
     );
   } else {
     totalInContract = await provider.getBalance(vaultAddress);
     reserved = await kashYield.getReservedEth();
     const br = await reservedAssetBreakdown(kashYield, false);
     const excess = totalInContract > reserved ? totalInContract - reserved : 0n;
+    const ownerAssetReserve = await kashYield.ownerEthReserve().catch(() => 0n);
+    const protocolFeeReserve = await kashYield.protocolFeeEthReserve().catch(() => 0n);
     console.log('📦 Asset in Contract (ETH)');
     console.log('  Total:            ', ethers.formatEther(totalInContract), 'ETH');
     console.log(
@@ -160,9 +165,11 @@ async function main() {
     if (br.total !== reserved) {
       console.log('    ⚠️  Breakdown sum ≠ on-chain reserved (unexpected); trust getReservedEth.');
     }
+    console.log('  Owner reserve:    ', ethers.formatEther(ownerAssetReserve), 'ETH (excluded from user NAV / ops)');
+    console.log('    · Protocol fee: ', ethers.formatEther(protocolFeeReserve), 'ETH (current fee-owned portion)');
     console.log('  Excess (owner):   ', ethers.formatEther(excess), 'ETH (withdrawable via ownerWithdrawEth)');
     console.log(
-      '  Note: Same as wBTC — reserved includes redeem estimate from currentNAV, not mint-only.',
+      '  Note: Reserved is user obligations; owner reserve/protocol fees are separate owner-withdrawable excess.',
     );
   }
   console.log('');

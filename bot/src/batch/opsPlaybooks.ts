@@ -355,17 +355,6 @@ const aaveDeposit: OpStep = {
   },
 };
 
-async function readBatchMintAsset(ctx: OpsContext): Promise<bigint> {
-  try {
-    const raw = ctx.isBtc
-      ? await ctx.kashYield.batchTotalMintBtc(ctx.batchCycle)
-      : await ctx.kashYield.batchTotalMintEth(ctx.batchCycle);
-    return BigInt(raw.toString());
-  } catch {
-    return 0n;
-  }
-}
-
 async function readBatchMintDeployedToAave(ctx: OpsContext): Promise<bigint> {
   try {
     const raw = ctx.isBtc
@@ -375,6 +364,25 @@ async function readBatchMintDeployedToAave(ctx: OpsContext): Promise<bigint> {
   } catch {
     return 0n;
   }
+}
+
+async function computeDeployableNetMintUsd(ctx: OpsContext, fallbackNetMintUSD: bigint): Promise<bigint> {
+  try {
+    const info = await ctx.kashYield.getBatchInfo(ctx.batchCycle);
+    const totalMintUSD = BigInt(info.totalMintUSD.toString());
+    const totalRedeemUSD = BigInt(info.totalRedeemUSD.toString());
+    const feeBps = BigInt((await ctx.kashYield.feeBps()).toString());
+    const afterFeeMintUSD = (totalMintUSD * (10000n - feeBps)) / 10000n;
+    return afterFeeMintUSD > totalRedeemUSD ? afterFeeMintUSD - totalRedeemUSD : 0n;
+  } catch {
+    const feeBps = BigInt((await ctx.kashYield.feeBps()).toString());
+    return (fallbackNetMintUSD * (10000n - feeBps)) / 10000n;
+  }
+}
+
+async function computeDeployableNetMintAsset(ctx: OpsContext, fallbackNetMintUSD: bigint): Promise<bigint> {
+  const deployUsd = await computeDeployableNetMintUsd(ctx, fallbackNetMintUSD);
+  return (deployUsd * (10n ** ctx.assetDecimals)) / ctx.price;
 }
 
 async function markBatchMintDeployedToAave(ctx: OpsContext, amount: bigint): Promise<void> {
@@ -392,10 +400,8 @@ async function markBatchMintDeployedToAave(ctx: OpsContext, amount: bigint): Pro
 async function computeNetMintAaveDepositAmount(ctx: OpsContext, netMintUSD: bigint): Promise<bigint> {
   if (ctx.contractAsset === 0n || netMintUSD <= 0n) return 0n;
   const pct = BigInt(config.strategy.aaveDepositPct);
-  const batchMintAsset = await readBatchMintAsset(ctx);
-  const netMintAsset = (netMintUSD * (10n ** ctx.assetDecimals)) / ctx.price;
-  const baseAsset = batchMintAsset > 0n && batchMintAsset < netMintAsset ? batchMintAsset : netMintAsset;
-  const targetForBatch = (baseAsset * pct) / 100n;
+  const deployableNetMintAsset = await computeDeployableNetMintAsset(ctx, netMintUSD);
+  const targetForBatch = (deployableNetMintAsset * pct) / 100n;
   const alreadyDeployed = await readBatchMintDeployedToAave(ctx);
   const remainingForBatch = targetForBatch > alreadyDeployed ? targetForBatch - alreadyDeployed : 0n;
   return remainingForBatch < ctx.contractAsset ? remainingForBatch : ctx.contractAsset;
@@ -407,14 +413,14 @@ const aaveDepositNetMint = (netMintUSD: bigint): OpStep => ({
   refreshCtx: true,
   describe: (ctx) => {
     const pct = config.strategy.aaveDepositPct;
-    const netMintAsset = (netMintUSD * (10n ** ctx.assetDecimals)) / ctx.price;
-    return `deposit up to ${pct}% of net mint (${fmtAsset(netMintAsset, ctx)}) to Aave, capped by vault balance`;
+    const grossNetMintAsset = (netMintUSD * (10n ** ctx.assetDecimals)) / ctx.price;
+    return `deposit up to ${pct}% of after-fee net mint (gross net ${fmtAsset(grossNetMintAsset, ctx)}), capped by vault balance`;
   },
   canSkip: async (ctx) => (await computeNetMintAaveDepositAmount(ctx, netMintUSD)) === 0n,
   execute: async (ctx) => {
     const toDeposit = await computeNetMintAaveDepositAmount(ctx, netMintUSD);
     if (toDeposit === 0n) return;
-    console.log(`         ${fmtAsset(toDeposit, ctx)} (net mint deposit only; not sweeping older vault asset)`);
+    console.log(`         ${fmtAsset(toDeposit, ctx)} (after-fee net mint deposit only; protocol fee stays on vault)`);
     await execTx('depositToAave', ctx.kashYield.depositToAave(toDeposit, aaveTxOverrides()));
     await markBatchMintDeployedToAave(ctx, toDeposit);
   },
@@ -529,9 +535,10 @@ const hlOpenShort = (netMintUSD: bigint): OpStep => ({
   describe: (ctx) => {
     const leverage = config.strategy.shortLeverage;
     const leverageScaled = BigInt(Math.round(leverage * 100));
-    const shortSizeUSD = (netMintUSD * leverageScaled) / 100n;
+    const deployableNetMintUSD = netMintUSD; // exact after-fee size is recomputed at execution time
+    const shortSizeUSD = (deployableNetMintUSD * leverageScaled) / 100n;
     const shortSizeAsset = (shortSizeUSD * (10n ** ctx.assetDecimals)) / ctx.price;
-    return `open/extend ${leverage}x ${ctx.assetSymbol} short — notional ${fmtAsset(shortSizeAsset, ctx)}`;
+    return `open/extend ${leverage}x ${ctx.assetSymbol} short — after-fee notional up to ${fmtAsset(shortSizeAsset, ctx)}`;
   },
   canSkip: async (ctx) => {
     // Only skip if short exists AND we didn't deposit new USDC collateral this run
@@ -541,7 +548,8 @@ const hlOpenShort = (netMintUSD: bigint): OpStep => ({
   },
   execute: async (ctx) => {
     const leverageScaled = BigInt(Math.round(config.strategy.shortLeverage * 100));
-    const shortSizeUSD = (netMintUSD * leverageScaled) / 100n;
+    const deployableNetMintUSD = await computeDeployableNetMintUsd(ctx, netMintUSD);
+    const shortSizeUSD = (deployableNetMintUSD * leverageScaled) / 100n;
     if (shortSizeUSD === 0n) return;
     const size = (shortSizeUSD * (10n ** ctx.assetDecimals)) / ctx.price;
     const symbol = ctx.assetSymbol;

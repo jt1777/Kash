@@ -14,23 +14,33 @@ function afterFee(value, feeBps = FEE_BPS) {
 
 function settleBatch({ supply, nav, portfolioUsd, mintUsd = [], redeemKash = [], feeBps = FEE_BPS }) {
   const totalMintUsd = mintUsd.reduce((sum, v) => sum + v, 0n);
+  const totalMintFeeUsd = mintUsd.reduce((sum, v) => sum + (v * feeBps) / BPS, 0n);
   const totalMintKash = mintUsd.reduce(
     (sum, v) => sum + mintKashEstimateFromBatchMintUsd(v, feeBps, nav),
     0n,
   );
   const totalRedeemKash = redeemKash.reduce((sum, v) => sum + v, 0n);
+  const redeemUsdGross = redeemKash.reduce(
+    (sum, v) => sum + (v * nav) / WAD,
+    0n,
+  );
   const redeemUsdAfterFee = redeemKash.reduce(
     (sum, v) => sum + afterFee((v * nav) / WAD, feeBps),
     0n,
   );
+  const redeemFeeUsd = redeemUsdGross - redeemUsdAfterFee;
   return {
     totalMintUsd,
+    totalMintFeeUsd,
     totalMintKash,
     totalRedeemKash,
+    redeemUsdGross,
     redeemUsdAfterFee,
+    redeemFeeUsd,
+    ownerProtocolFeeUsd: totalMintFeeUsd + redeemFeeUsd,
     netKash: totalMintKash - totalRedeemKash,
     supplyAfter: supply + totalMintKash - totalRedeemKash,
-    portfolioAfter: portfolioUsd + totalMintUsd - redeemUsdAfterFee,
+    portfolioAfter: portfolioUsd + totalMintUsd - totalMintFeeUsd - redeemUsdGross,
     strategyRedeemFraction: strategyRedeemFractionPure({
       totalSupply: supply,
       redeemKash: totalRedeemKash,
@@ -107,7 +117,8 @@ describe("bot batch process math", function () {
     expect(result.strategyRedeemFraction).to.equal(WAD);
     expect(result.netKash).to.equal(-supply);
     expect(result.supplyAfter).to.equal(0n);
-    expect(result.portfolioAfter).to.equal(portfolioUsd - afterFee(portfolioUsd));
+    expect(result.portfolioAfter).to.equal(0n);
+    expect(result.ownerProtocolFeeUsd).to.equal(portfolioUsd - afterFee(portfolioUsd));
   });
 
   it("mixed mint and redeem, net mint: incoming mints fully offset strategy unwind", function () {
@@ -191,10 +202,11 @@ describe("bot batch process math", function () {
     expect(navFrom(portfolioUsd, supply)).to.equal(WAD);
   });
 
-  it("multiple users over multiple days: fees increase NAV but do not create unexplained drift", function () {
+  it("multiple users over multiple days: fees accrue to owner, not user NAV", function () {
     let supply = 1_000n * WAD;
     let portfolioUsd = supply;
     let nav = navFrom(portfolioUsd, supply);
+    let ownerFees = 0n;
 
     for (const batch of [
       { mintUsd: [50n * WAD, 75n * WAD], redeemKash: [] },
@@ -204,12 +216,13 @@ describe("bot batch process math", function () {
       const result = settleBatch({ supply, nav, portfolioUsd, ...batch });
       supply = result.supplyAfter;
       portfolioUsd = result.portfolioAfter;
+      ownerFees += result.ownerProtocolFeeUsd;
       const nextNav = navFrom(portfolioUsd, supply);
-      expect(nextNav).to.be.gte(nav);
+      expect(nextNav).to.equal(nav);
       nav = nextNav;
     }
 
-    // Fees are retained by the vault, so NAV should move only slightly after these small batches.
-    expect(nav).to.be.lt(WAD + WAD / 1_000n);
+    expect(nav).to.equal(WAD);
+    expect(ownerFees).to.be.gt(0n);
   });
 });

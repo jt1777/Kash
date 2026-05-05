@@ -149,14 +149,13 @@ async function getHyperliquidNavUsdcBalance(kashYield: ethers.Contract, provider
   }
 }
 
-async function getPendingMintUsdAfterFee(
+async function getPendingMintUsdGross(
   kashYield: ethers.Contract,
   price: bigint,
   assetDecimals: bigint,
   isBtc: boolean,
 ): Promise<bigint> {
   const currentCycle = BigInt((await kashYield.getCurrentBatchCycle()).toString());
-  const feeBps = BigInt((await kashYield.feeBps()).toString());
   let sum = 0n;
   for (let i = 0n; i <= 10n; i++) {
     if (i > currentCycle) break;
@@ -172,7 +171,7 @@ async function getPendingMintUsdAfterFee(
         : BigInt((await kashYield.batchTotalMintEth(cycle)).toString());
       totalMintUsd = (totalMintAsset * price) / (10n ** assetDecimals);
     }
-    sum += (totalMintUsd * (10000n - feeBps)) / 10000n;
+    sum += totalMintUsd;
   }
   return sum;
 }
@@ -227,14 +226,14 @@ async function main() {
   const hlNavUsdc = hlNavOverride ?? hlNavUsdcAuto;
   const hlSpotForUpdate = BigInt((await kashYield.getHyperliquidSpotBalance().catch(() => 0n)).toString());
   const hlAssetForUpdate = hlAsset;
-  const pendingMintUsdAfterFee = await getPendingMintUsdAfterFee(kashYield, price, assetDecimals, isBtc);
+  const pendingMintUsdGross = await getPendingMintUsdGross(kashYield, price, assetDecimals, isBtc);
 
   const totalAsset = contractAsset + aaveSupplied + hlAsset;
   const assetUsd = (totalAsset * price) / (10n ** assetDecimals);
   const netUsdc = contractUsdc + hlNavUsdc - aaveDebt;
   const netUsdcUsd = netUsdc * 10n ** 12n;
   let portfolioUsd = assetUsd + netUsdcUsd;
-  portfolioUsd = portfolioUsd > pendingMintUsdAfterFee ? portfolioUsd - pendingMintUsdAfterFee : 0n;
+  portfolioUsd = portfolioUsd > pendingMintUsdGross ? portfolioUsd - pendingMintUsdGross : 0n;
   const newNav = supply === 0n ? INITIAL_NAV : (portfolioUsd * 10n ** 18n) / supply || 1n;
 
   console.log('\nNAV-only update');
@@ -254,7 +253,7 @@ async function main() {
   console.log(`  HL withdrawable:         ${ethers.formatUnits(hlNavRead.withdrawable, 6)} USDC`);
   console.log(`  HL account value:        ${ethers.formatUnits(hlNavRead.accountValue, 6)} USDC`);
   console.log(`Aave debt:                ${ethers.formatUnits(aaveDebt, 6)} USDC`);
-  console.log(`Pending mint excluded:    $${ethers.formatEther(pendingMintUsdAfterFee)}`);
+  console.log(`Pending mint excluded:    $${ethers.formatEther(pendingMintUsdGross)} (gross; protocol mint fee is owner reserve)`);
   console.log(`Portfolio USD for NAV:    $${ethers.formatEther(portfolioUsd)}`);
   console.log(`Computed NAV:             $${ethers.formatEther(newNav)} per KASH`);
   console.log(`updateNAV usdcBalance arg: ${ethers.formatUnits(hlSpotForUpdate, 6)} USDC`);

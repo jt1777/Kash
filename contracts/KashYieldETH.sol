@@ -150,6 +150,8 @@ contract KashYieldETH is ReentrancyGuard {
     uint256 public ownerUsdcReserve;
     /// @notice Owner ETH buffer (gas, HL fees, profit) excluded from user NAV accounting (see markOwnerEthDeposit).
     uint256 public ownerEthReserve;
+    /// @notice Current owner ETH reserve that came from protocol mint/redeem fees.
+    uint256 public protocolFeeEthReserve;
 
     // ── Batch state ───────────────────────────────────────────────────────
     uint256 public currentBatchCycle;
@@ -541,9 +543,11 @@ contract KashYieldETH is ReentrancyGuard {
         address[] memory redeemers = batchRedeemUsers[batchCycle];
 
         uint256 totalMintKash = 0;
+        uint256 totalMintFeeEth = 0;
         for (uint256 i = 0; i < minters.length; i++) {
             MintRequest memory req = userMintRequests[minters[i]][batchCycle];
             if (req.amountInUSD > 0) {
+                totalMintFeeEth += req.amountIn * feeBps / 10000;
                 uint256 amountAfterFee = req.amountInUSD * (10000 - feeBps) / 10000;
                 totalMintKash += (amountAfterFee * 1e18) / exactNAV;
             }
@@ -551,16 +555,22 @@ contract KashYieldETH is ReentrancyGuard {
 
         uint256[] memory redeemEthAmounts = new uint256[](redeemers.length);
         uint256 totalRedeemEthNeeded = 0;
+        uint256 totalRedeemFeeEth = 0;
         for (uint256 i = 0; i < redeemers.length; i++) {
             RedeemRequest memory req = userRedeemRequests[redeemers[i]][batchCycle];
             if (req.kashAmount > 0) {
                 uint256 usdValue = (req.kashAmount * exactNAV) / 1e18;
-                uint256 usdAfterFee = usdValue * (10000 - feeBps) / 10000;
-                redeemEthAmounts[i] = (usdAfterFee * (10 ** ETH_DECIMALS)) / ethPrice;
+                uint256 grossEthAmount = (usdValue * (10 ** ETH_DECIMALS)) / ethPrice;
+                uint256 feeEthAmount = grossEthAmount * feeBps / 10000;
+                redeemEthAmounts[i] = grossEthAmount - feeEthAmount;
                 totalRedeemEthNeeded += redeemEthAmounts[i];
+                totalRedeemFeeEth += feeEthAmount;
             }
         }
-        if (address(this).balance < ownerEthReserve + totalRedeemEthNeeded) revert InsufficientEthForRedeems();
+        uint256 totalProtocolFeeEth = totalMintFeeEth + totalRedeemFeeEth;
+        if (address(this).balance < ownerEthReserve + totalProtocolFeeEth + totalRedeemEthNeeded) revert InsufficientEthForRedeems();
+        ownerEthReserve += totalProtocolFeeEth;
+        protocolFeeEthReserve += totalProtocolFeeEth;
 
         batchExactNAV[batchCycle] = exactNAV;
         batchProcessed[batchCycle] = true;
@@ -829,7 +839,7 @@ contract KashYieldETH is ReentrancyGuard {
             if (batchProcessed[cycle]) continue;
             reserved += batchTotalMintEth[cycle];
             uint256 redeemUsdEstimate = (batchTotalRedeemKash[cycle] * currentNAV) / 1e18;
-            uint256 redeemEthEstimate = (redeemUsdEstimate * (10000 - feeBps) / 10000 * (10 ** ETH_DECIMALS)) / ethPrice;
+            uint256 redeemEthEstimate = (redeemUsdEstimate * (10 ** ETH_DECIMALS)) / ethPrice;
             reserved += redeemEthEstimate;
         }
         return reserved;
@@ -850,6 +860,10 @@ contract KashYieldETH is ReentrancyGuard {
         uint256 fromReserve = amount < ownerEthReserve ? amount : ownerEthReserve;
         unchecked {
             ownerEthReserve -= fromReserve;
+        }
+        uint256 protocolFeeConsumed = fromReserve < protocolFeeEthReserve ? fromReserve : protocolFeeEthReserve;
+        unchecked {
+            protocolFeeEthReserve -= protocolFeeConsumed;
         }
         payable(owner).transfer(amount);
         emit ProtocolInteraction(ProtocolActionCodes.OWNER_WITHDRAW_ETH, ETH_ADDRESS, amount);

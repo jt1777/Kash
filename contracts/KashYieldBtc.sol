@@ -143,6 +143,7 @@ contract KashYieldBtc is ReentrancyGuard {
 
     uint256 public ownerUsdcReserve;
     uint256 public ownerWbtcReserve;
+    uint256 public protocolFeeWbtcReserve;
 
     // ── Batch state ───────────────────────────────────────────────────────
     uint256 public currentBatchCycle;
@@ -528,9 +529,11 @@ contract KashYieldBtc is ReentrancyGuard {
         address[] memory redeemers = batchRedeemUsers[batchCycle];
 
         uint256 totalMintKash = 0;
+        uint256 totalMintFeeBtc = 0;
         for (uint256 i = 0; i < minters.length; i++) {
             MintRequest memory req = userMintRequests[minters[i]][batchCycle];
             if (req.amountInUSD > 0) {
+                totalMintFeeBtc += req.amountIn * feeBps / 10000;
                 uint256 amountAfterFee = req.amountInUSD * (10000 - feeBps) / 10000;
                 totalMintKash += (amountAfterFee * 1e18) / exactNAV;
             }
@@ -538,16 +541,22 @@ contract KashYieldBtc is ReentrancyGuard {
 
         uint256[] memory redeemWbtcAmounts = new uint256[](redeemers.length);
         uint256 totalRedeemBtcNeeded = 0;
+        uint256 totalRedeemFeeBtc = 0;
         for (uint256 i = 0; i < redeemers.length; i++) {
             RedeemRequest memory req = userRedeemRequests[redeemers[i]][batchCycle];
             if (req.kashAmount > 0) {
                 uint256 usdValue = (req.kashAmount * exactNAV) / 1e18;
-                uint256 usdAfterFee = usdValue * (10000 - feeBps) / 10000;
-                redeemWbtcAmounts[i] = (usdAfterFee * (10 ** WBTC_DECIMALS)) / btcPrice;
+                uint256 grossWbtcAmount = (usdValue * (10 ** WBTC_DECIMALS)) / btcPrice;
+                uint256 feeWbtcAmount = grossWbtcAmount * feeBps / 10000;
+                redeemWbtcAmounts[i] = grossWbtcAmount - feeWbtcAmount;
                 totalRedeemBtcNeeded += redeemWbtcAmounts[i];
+                totalRedeemFeeBtc += feeWbtcAmount;
             }
         }
-        if (IERC20(wbtcAddress).balanceOf(address(this)) < ownerWbtcReserve + totalRedeemBtcNeeded) revert InsufficientWbtcForRedeems();
+        uint256 totalProtocolFeeBtc = totalMintFeeBtc + totalRedeemFeeBtc;
+        if (IERC20(wbtcAddress).balanceOf(address(this)) < ownerWbtcReserve + totalProtocolFeeBtc + totalRedeemBtcNeeded) revert InsufficientWbtcForRedeems();
+        ownerWbtcReserve += totalProtocolFeeBtc;
+        protocolFeeWbtcReserve += totalProtocolFeeBtc;
 
         batchExactNAV[batchCycle] = exactNAV;
         batchProcessed[batchCycle] = true;
@@ -810,7 +819,7 @@ contract KashYieldBtc is ReentrancyGuard {
             if (batchProcessed[cycle]) continue;
             reserved += batchTotalMintBtc[cycle];
             uint256 redeemUsdEstimate = (batchTotalRedeemKash[cycle] * currentNAV) / 1e18;
-            uint256 redeemBtcEstimate = (redeemUsdEstimate * (10000 - feeBps) / 10000 * (10 ** WBTC_DECIMALS)) / btcPrice;
+            uint256 redeemBtcEstimate = (redeemUsdEstimate * (10 ** WBTC_DECIMALS)) / btcPrice;
             reserved += redeemBtcEstimate;
         }
         return reserved;
@@ -831,6 +840,10 @@ contract KashYieldBtc is ReentrancyGuard {
         uint256 fromReserve = amount < ownerWbtcReserve ? amount : ownerWbtcReserve;
         unchecked {
             ownerWbtcReserve -= fromReserve;
+        }
+        uint256 protocolFeeConsumed = fromReserve < protocolFeeWbtcReserve ? fromReserve : protocolFeeWbtcReserve;
+        unchecked {
+            protocolFeeWbtcReserve -= protocolFeeConsumed;
         }
         IERC20(wbtcAddress).safeTransfer(owner, amount);
         emit ProtocolInteraction(ProtocolActionCodes.OWNER_WITHDRAW_WBTC, wbtcAddress, amount);
