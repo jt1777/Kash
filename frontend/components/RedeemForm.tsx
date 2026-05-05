@@ -331,7 +331,7 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
               ) : null}
             </p>
             <p className="text-xs text-gray-500 mt-4 leading-relaxed">
-              Value uses the contract&apos;s current NAV per token; settlement may differ slightly after fees and the next batch.
+              Value uses the contract&apos;s current NAV per token; settlement NAV may differ slightly after fees and slippage.
             </p>
             <div className="flex flex-col sm:flex-row gap-3 mt-6">
               <button

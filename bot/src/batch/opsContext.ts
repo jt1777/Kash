@@ -30,7 +30,7 @@ export interface OpsContext {
   /** USDC ERC-20 physically held by the HL adapter on L2. May be nonzero while `hlUsdcBalance` is 0 after sync (bridge delivered, HL API spot is 0). */
   adapterUsdcErc20: bigint;
   hlAssetBalance: bigint;  // ETH (18 dec) or wBTC (8 dec) — spot position (0 in USDC-collateral model)
-  shortSize: bigint;       // asset units
+  shortSize: bigint;       // perp size from adapter getPosition (18-dec internal; see HyperliquidAdapter)
   shortIsActive: boolean;
   activePerpExchange: string; // e.g. "HL"
   perpAdapterAddress: string;

@@ -82,6 +82,8 @@ export function RecentActivity() {
   const [compactActivityView, setCompactActivityView] = useState(true);
   const [activityPage, setActivityPage] = useState(1);
   const [hasMoreActivities, setHasMoreActivities] = useState(false);
+  /** Bumped on `kash-activity-refresh` so we refetch without duplicating `load()` + `loadLatest()`. */
+  const [activityExternalRefreshNonce, setActivityExternalRefreshNonce] = useState(0);
   const [cancelTarget, setCancelTarget] = useState<{ contractAddress: string; batchCycle: number; type: 'mint' | 'redeem' } | null>(null);
   /** Set when user submits a cancel tx; used on receipt so message is correct even if cancelTarget is cleared before the effect runs again. */
   const cancelFeedbackContextRef = useRef<{ type: 'mint' | 'redeem'; contractAddress: string } | null>(null);
@@ -128,25 +130,6 @@ export function RecentActivity() {
     }
   }, [address, cycleDuration, compactActivityView, activityPage]);
 
-  const loadLatest = useCallback(async () => {
-    if (!address) return;
-    setIsLoading(true);
-    setLoadError(null);
-    try {
-      const { list, error, hasMore } = await fetchActivity(
-        address,
-        cycleDuration,
-        0,
-        COMPACT_ACTIVITY_LIMIT,
-      );
-      setActivities(list);
-      setHasMoreActivities(hasMore);
-      setLoadError(error ?? null);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [address, cycleDuration]);
-
   useEffect(() => {
     if (address && isArbitrumOne) load();
     else {
@@ -156,7 +139,7 @@ export function RecentActivity() {
       setCompactActivityView(true);
       setActivityPage(1);
     }
-  }, [address, isArbitrumOne, load]);
+  }, [address, isArbitrumOne, load, activityExternalRefreshNonce]);
 
   // For each activity: getBatchInfo (processed?) and getPendingMintRequest/getPendingRedeemRequest (still has request?)
   const readConfigs: { address: `0x${string}`; abi: typeof kashYieldABI; functionName: 'getBatchInfo' | 'getPendingMintRequest' | 'getPendingRedeemRequest'; args: [bigint] | [string, bigint] }[] = [];
@@ -264,13 +247,11 @@ export function RecentActivity() {
     const onExternalRefresh = () => {
       setCompactActivityView(true);
       setActivityPage(1);
-      void loadLatest().then(() => {
-        refetchOnChain();
-      });
+      setActivityExternalRefreshNonce((n) => n + 1);
     };
     window.addEventListener(ACTIVITY_REFRESH_EVENT, onExternalRefresh);
     return () => window.removeEventListener(ACTIVITY_REFRESH_EVENT, onExternalRefresh);
-  }, [loadLatest, refetchOnChain]);
+  }, []);
 
   const writeContractResult = useWriteContract();
   const { writeContract: writeCancel, data: cancelTxHash, isPending: isCancelPending, error: cancelError } = writeContractResult;

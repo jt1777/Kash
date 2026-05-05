@@ -417,7 +417,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
               </h3>
             </div>
             <p className="text-sm text-gray-600 leading-relaxed">
-              You are depositing{' '}
+              You are swapping{' '}
               <span className="font-semibold text-gray-900">
                 {amount} {depositToken.symbol}
               </span>{' '}
@@ -428,7 +428,8 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
               ) : null}
             </p>
             <p className="text-xs text-gray-500 mt-4 leading-relaxed">
-              Estimates use the latest on-chain oracle price and are not a guarantee of batch execution value.
+              and will receive KASH tokens at an NAV that will be determined at the end of the next batch cycle.
+              Your KASH tokens will be sent to your wallet when ready.
             </p>
             <div className="flex flex-col sm:flex-row gap-3 mt-6">
               <button

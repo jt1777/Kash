@@ -214,6 +214,11 @@ function fmtUsdc(v: bigint): string { return ethers.formatUnits(v, 6) + ' USDC';
 function fmtAsset(v: bigint, ctx: OpsContext): string {
   return ethers.formatUnits(v, Number(ctx.assetDecimals)) + ' ' + ctx.assetSymbol;
 }
+/** HL perp sizes on the adapter / in closeShort(uint256) are always 18-dec (not token decimals). */
+const HL_PERP_SIZE_DECIMALS = 18;
+function fmtHlPerpSize(v: bigint, ctx: OpsContext): string {
+  return ethers.formatUnits(v, HL_PERP_SIZE_DECIMALS) + ' ' + ctx.assetSymbol;
+}
 function fmtUsd(v: bigint): string { return '$' + ethers.formatEther(v); }
 const WAD = 10n ** 18n;
 
@@ -560,7 +565,7 @@ const hlCloseShort: OpStep = {
   describe: (ctx) => {
     const pct = (Number(ctx.strategyRedeemFraction) / 1e16).toFixed(2);
     const closeSize = (ctx.shortSize * ctx.strategyRedeemFraction) / BigInt(1e18);
-    return `close ${pct}% strategy unwind of ${ctx.assetSymbol} short (${fmtAsset(closeSize, ctx)} of ${fmtAsset(ctx.shortSize, ctx)}; gross redeem ${(Number(ctx.redeemFraction) / 1e16).toFixed(2)}%)`;
+    return `close ${pct}% strategy unwind of ${ctx.assetSymbol} short (${fmtHlPerpSize(closeSize, ctx)} of ${fmtHlPerpSize(ctx.shortSize, ctx)}; gross redeem ${(Number(ctx.redeemFraction) / 1e16).toFixed(2)}%)`;
   },
   canSkip: async (ctx) => {
     if (!ctx.shortIsActive) {
@@ -597,7 +602,7 @@ const hlCloseShort: OpStep = {
       console.log('      → closeShort(full) confirmed');
       await maybeRunHlEventRelay(ctx, tx.hash, 'EXCHANGE_CLOSE_SHORT', { required: true });
     } else {
-      console.log(`         closing ${fmtAsset(closeSize, ctx)} of ${fmtAsset(fullSize, ctx)}`);
+      console.log(`         closing ${fmtHlPerpSize(closeSize, ctx)} of ${fmtHlPerpSize(fullSize, ctx)}`);
       const tx = await ctx.kashYield['closeShort(string,uint256)'](symbol, closeSize);
       await tx.wait();
       console.log('      → closeShort(partial) confirmed');
@@ -1202,7 +1207,7 @@ async function waitForHlShortCloseConfirmed(
   hlUser: string,
   symbol: string,
   assetAliases: string,
-  assetDecimals: number,
+  hlPositionDecimals: number,
   sizeBefore: bigint,
   placedSize: bigint,
   fullClose: boolean,
@@ -1213,7 +1218,7 @@ async function waitForHlShortCloseConfirmed(
   const needReduction = fullClose ? sizeBefore : placedSize < sizeBefore ? placedSize : sizeBefore;
 
   while (true) {
-    const after = await readHlPositionSize(info, hlUser, symbol, assetDecimals);
+    const after = await readHlPositionSize(info, hlUser, symbol, hlPositionDecimals);
     const reduced = sizeBefore > after ? sizeBefore - after : 0n;
     if (fullClose && after === 0n) {
       console.log(`      → HL short fully closed (0 ${assetAliases})`);
@@ -1221,22 +1226,22 @@ async function waitForHlShortCloseConfirmed(
     }
     if (!fullClose && (reduced >= needReduction || after === 0n)) {
       console.log(
-        `      → HL short reduced by ${ethers.formatUnits(reduced, assetDecimals)} ${assetAliases} ` +
-          `(before ${ethers.formatUnits(sizeBefore, assetDecimals)})`,
+        `      → HL short reduced by ${ethers.formatUnits(reduced, hlPositionDecimals)} ${assetAliases} ` +
+          `(before ${ethers.formatUnits(sizeBefore, hlPositionDecimals)})`,
       );
       return;
     }
 
     if (Date.now() - start >= maxMs) {
       throw new Error(
-        `HL closeShort not confirmed: ${symbol} before=${ethers.formatUnits(sizeBefore, assetDecimals)} ` +
-          `after=${ethers.formatUnits(after, assetDecimals)} needReduction≈${ethers.formatUnits(needReduction, assetDecimals)}`,
+        `HL closeShort not confirmed: ${symbol} before=${ethers.formatUnits(sizeBefore, hlPositionDecimals)} ` +
+          `after=${ethers.formatUnits(after, hlPositionDecimals)} needReduction≈${ethers.formatUnits(needReduction, hlPositionDecimals)}`,
       );
     }
 
     console.log(
-      `      ↪ waiting for HL close: size ${ethers.formatUnits(after, assetDecimals)} ${assetAliases} ` +
-        `(reduced ${ethers.formatUnits(reduced, assetDecimals)})`,
+      `      ↪ waiting for HL close: size ${ethers.formatUnits(after, hlPositionDecimals)} ${assetAliases} ` +
+        `(reduced ${ethers.formatUnits(reduced, hlPositionDecimals)})`,
     );
     await sleep(pollMs);
   }
@@ -1390,24 +1395,25 @@ async function maybeRunHlEventRelay(
     await waitForHlPositionAtLeast(info, hlUser, symbol, assetDecimals, expectedSize);
   } else if (expected === 'EXCHANGE_CLOSE_SHORT') {
     const symbol = String(parsed.args[0]).toUpperCase();
-    const assetDecimals = Number(ctx.assetDecimals);
-    const beforeSize = await readHlPositionSize(info, hlUser, symbol, assetDecimals);
+    // Adapter + partial closeShort(uint256) use 18-dec internal perp size (HyperliquidAdapter.positions).
+    // Do not use ctx.assetDecimals (8 for wBTC) here; that mis-scales partial closes by 10^(18-8).
+    const beforeSize = await readHlPositionSize(info, hlUser, symbol, HL_PERP_SIZE_DECIMALS);
     if (beforeSize === 0n) {
       console.log(`      ↪ HL relay: no open ${symbol} short on HL — close relay skipped`);
       return;
     }
 
-    let closeSize18 = 0n;
+    let closeSizeWei = 0n;
     if (parsed.name === 'closeShort' && parsed.args.length > 1) {
-      closeSize18 = BigInt(parsed.args[1].toString());
+      closeSizeWei = BigInt(parsed.args[1].toString());
     } else {
-      closeSize18 = beforeSize;
+      closeSizeWei = beforeSize;
     }
 
-    if (closeSize18 > 0n) {
+    if (closeSizeWei > 0n) {
       const assetId = findPerpAssetId(perpMeta, symbol);
       const szDecimals = Number(perpMeta?.universe?.[assetId]?.szDecimals ?? 0);
-      const rawSize = ethers.formatUnits(closeSize18, assetDecimals);
+      const rawSize = ethers.formatUnits(closeSizeWei, HL_PERP_SIZE_DECIMALS);
       const size = formatHlSize(rawSize, szDecimals);
       if (!size || size === '0') {
         const msg = `HL relay: close size rounds to 0 at szDecimals=${szDecimals}`;
@@ -1415,7 +1421,7 @@ async function maybeRunHlEventRelay(
         console.log(`      ↪ ${msg}; skipping close order`);
         return;
       }
-      const placedSize = decimalToBigInt(size, assetDecimals);
+      const placedSize = decimalToBigInt(size, HL_PERP_SIZE_DECIMALS);
       const px = formatHlLimitPx(mids[symbol], true, szDecimals);
       const fullClose = parsed.name === 'closeShort' && parsed.args.length === 1;
       console.log(`      ↪ HL relay: BUY ${size} ${symbol} reduce-only @ IOC ${px}`);
@@ -1429,7 +1435,7 @@ async function maybeRunHlEventRelay(
           hlUser,
           symbol,
           ctx.assetSymbol,
-          assetDecimals,
+          HL_PERP_SIZE_DECIMALS,
           beforeSize,
           placedSize,
           fullClose,
