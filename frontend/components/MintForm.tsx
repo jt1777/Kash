@@ -390,7 +390,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
     <div className="space-y-4 relative">
       {showMintConfirm && (
         <div
-          className="fixed inset-0 z-[110] flex items-center justify-center p-4"
+          className="fixed inset-0 z-110 flex items-center justify-center p-4"
           role="dialog"
           aria-modal="true"
           aria-labelledby="mint-confirm-title"
@@ -403,7 +403,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
             onClick={() => setShowMintConfirm(false)}
           />
           <div
-            className="relative z-[111] bg-white rounded-2xl shadow-xl border max-w-md w-full p-6 text-left"
+            className="relative z-111 bg-white rounded-2xl shadow-xl border max-w-md w-full p-6 text-left"
             style={{ borderColor: 'rgba(0, 255, 255, 0.22)', boxShadow: '0 10px 40px rgba(0, 0, 0, 0.45), 0 0 25px rgba(0, 255, 255, 0.08)' }}
           >
             <div className="flex items-center gap-3 mb-4">

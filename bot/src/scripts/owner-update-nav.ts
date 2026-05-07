@@ -7,6 +7,12 @@
  * Usage:
  *   PRODUCT=btc npm run owner:update-nav -- --dry-run
  *   PRODUCT=btc npm run owner:update-nav
+ *   PRODUCT=btc npm run owner:update-nav:hourly
+ *
+ * Cron safety:
+ *   By default the script skips writes when the current batch is not phase 0 or
+ *   the contract is outside the user window, and within 15 minutes before the
+ *   processing window. Use --force or NAV_UPDATE_FORCE=true only for manual recovery.
  *
  * Optional recovery override:
  *   HL_NAV_USDC=28.390088   # override HL equity/account value used for NAV
@@ -26,6 +32,17 @@ const ERC20_ABI = [
 ] as const;
 
 const INITIAL_NAV = 10n ** 18n;
+
+function shouldForceUpdate(): boolean {
+  return process.argv.includes('--force') || process.env.NAV_UPDATE_FORCE === 'true';
+}
+
+function navUpdateProcessingBufferSeconds(): bigint {
+  const raw = process.env.NAV_UPDATE_PROCESSING_BUFFER_SECONDS ?? '900';
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return 900n;
+  return BigInt(parsed);
+}
 
 function hlNavUsdcOverride(): bigint | null {
   const raw = (process.env.HL_NAV_USDC || '').trim();
@@ -176,8 +193,66 @@ async function getPendingMintUsdGross(
   return sum;
 }
 
+async function checkNavUpdateSafety(
+  provider: ethers.Provider,
+  kashYield: ethers.Contract,
+  dryRun: boolean,
+  force: boolean,
+): Promise<boolean> {
+  const currentCycle = BigInt((await kashYield.getCurrentBatchCycle()).toString());
+  const phase = Number(await kashYield.batchPhase(currentCycle));
+  const cycleDuration = BigInt((await kashYield.cycleDurationSeconds()).toString());
+  const processingWindowStart = BigInt((await kashYield.processingWindowStart().catch(() => cycleDuration)).toString());
+  const latestBlock = await provider.getBlock('latest');
+  const secondsIntoCycle = cycleDuration > 0n && latestBlock
+    ? BigInt(latestBlock.timestamp) % cycleDuration
+    : 0n;
+  const secondsUntilProcessing = processingWindowStart >= secondsIntoCycle
+    ? processingWindowStart - secondsIntoCycle
+    : cycleDuration - secondsIntoCycle + processingWindowStart;
+  const processingBufferSeconds = navUpdateProcessingBufferSeconds();
+  const [isUserWindow, isProcessingWindow] = await Promise.all([
+    kashYield.isUserWindow().catch(() => false),
+    kashYield.isProcessingWindow().catch(() => false),
+  ]);
+
+  console.log(`Batch cycle: ${currentCycle.toString()}`);
+  console.log(`Batch phase: ${phase}`);
+  console.log(`User window: ${isUserWindow ? 'yes' : 'no'}`);
+  console.log(`Processing window: ${isProcessingWindow ? 'yes' : 'no'}`);
+  console.log(`Seconds until processing: ${secondsUntilProcessing.toString()} (buffer ${processingBufferSeconds.toString()})`);
+
+  const unsafeReason =
+    phase !== 0
+      ? `current batch is phase ${phase}, so batch processing owns currentNAV`
+      : isProcessingWindow
+        ? 'processing window is active'
+        : !isUserWindow
+          ? 'user window is closed'
+          : secondsUntilProcessing <= processingBufferSeconds
+            ? `processing window starts in ${secondsUntilProcessing.toString()} seconds`
+          : '';
+
+  if (!unsafeReason) return true;
+
+  const message = `Skipping NAV update: ${unsafeReason}.`;
+  if (force) {
+    console.warn(`⚠️  ${message} Continuing because --force/NAV_UPDATE_FORCE is set.`);
+    return true;
+  }
+  if (dryRun) {
+    console.warn(`⚠️  ${message} Dry-run will continue without sending a transaction.`);
+    return true;
+  }
+
+  console.log(`\n${message}`);
+  console.log('Use --force or NAV_UPDATE_FORCE=true only for manual recovery.');
+  return false;
+}
+
 async function main() {
   const dryRun = process.argv.includes('--dry-run');
+  const force = shouldForceUpdate();
   const isBtc = config.product === 'btc';
   const vaultAddr = config.kashYieldAddress;
   if (!vaultAddr || !ethers.isAddress(vaultAddr)) {
@@ -188,6 +263,9 @@ async function main() {
   const provider = new ethers.JsonRpcProvider(config.rpcUrl);
   const wallet = new ethers.Wallet(config.privateKey, provider);
   const kashYield = new ethers.Contract(vaultAddr, kashYieldABI, wallet);
+  const canUpdate = await checkNavUpdateSafety(provider, kashYield, dryRun, force);
+  if (!canUpdate) return;
+
   const assetDecimals = isBtc ? 8n : 18n;
   const assetLabel = isBtc ? 'BTC' : 'ETH';
   const price = BigInt((await (isBtc ? kashYield.getBtcPrice() : kashYield.getEthPrice())).toString());

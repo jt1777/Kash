@@ -16,10 +16,10 @@ export function StatsCard({ product = 'eth' }: { product?: Product }) {
   const kashYield = isBtc ? CONTRACTS.kashYieldBtc! : CONTRACTS.kashYieldEth;
   const kashToken = isBtc ? CONTRACTS.kashTokenBtc! : CONTRACTS.kashTokenEth;
 
-  const { data: nav } = useReadContract({
+  const { data: nav, refetch: refetchNav, isFetching: isNavFetching } = useReadContract({
     address: kashYield,
     abi: kashYieldABI,
-    functionName: 'currentNAV',
+    functionName: 'getNAV',
   });
 
   const { data: kashBalance, refetch: refetchKashBalance, isFetching: isKashBalanceFetching } = useReadContract({
@@ -56,17 +56,36 @@ export function StatsCard({ product = 'eth' }: { product?: Product }) {
       <div className="bg-white rounded-xl shadow-md p-6 border border-gray-100">
         <div className="flex items-center justify-between mb-2">
           <span className="text-sm text-gray-500 font-medium">Current NAV</span>
-          <div className="w-8 h-8 bg-indigo-100 rounded-lg flex items-center justify-center">
-            <svg className="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          <button
+            type="button"
+            onClick={() => void refetchNav()}
+            disabled={isNavFetching}
+            className="text-xs font-medium text-indigo-600 hover:text-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition flex items-center gap-1"
+            title="Refresh latest bot-updated NAV"
+            aria-label="Refresh latest bot-updated NAV"
+          >
+            <svg
+              className={`w-4 h-4 shrink-0 ${isNavFetching ? 'animate-spin' : ''}`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              aria-hidden
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+              />
             </svg>
-          </div>
+            Refresh NAV
+          </button>
         </div>
         <p className="text-3xl font-bold text-gray-900">
           ${navDisplay}
         </p>
         <p className="text-xs text-gray-500 mt-1">
-          Per KASH token
+          Per KASH token, updated by the NAV bot
         </p>
       </div>
 

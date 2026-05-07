@@ -4,6 +4,7 @@ export const kashYieldABI = [
   { inputs: [], name: "getNAV", outputs: [{ name: "", type: "uint256" }], stateMutability: "view", type: "function" },
   { inputs: [], name: "getCurrentBatchCycle", outputs: [{ name: "", type: "uint256" }], stateMutability: "view", type: "function" },
   { inputs: [], name: "cycleDurationSeconds", outputs: [{ name: "", type: "uint256" }], stateMutability: "view", type: "function" },
+  { inputs: [], name: "processingWindowStart", outputs: [{ name: "", type: "uint256" }], stateMutability: "view", type: "function" },
   { inputs: [{ name: "_seconds", type: "uint256" }], name: "setCycleDurationSeconds", outputs: [], stateMutability: "nonpayable", type: "function" },
   {
     inputs: [

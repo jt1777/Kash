@@ -222,6 +222,21 @@ function fmtHlPerpSize(v: bigint, ctx: OpsContext): string {
 function fmtUsd(v: bigint): string { return '$' + ethers.formatEther(v); }
 const WAD = 10n ** 18n;
 
+function getHlCloseShortMinNotionalUsd18(): bigint {
+  const raw = process.env.HL_CLOSE_SHORT_MIN_NOTIONAL_USD || '11';
+  try {
+    const parsed = ethers.parseEther(raw);
+    return parsed > 0n ? parsed : 11n * WAD;
+  } catch {
+    return 11n * WAD;
+  }
+}
+
+function ceilDiv(a: bigint, b: bigint): bigint {
+  if (b <= 0n) throw new Error('ceilDiv divisor must be positive');
+  return (a + b - 1n) / b;
+}
+
 function getHlWithdrawFeeToleranceUsdc6(): bigint {
   const raw = process.env.HL_WITHDRAW_FEE_TOLERANCE_USDC || '1';
   try {
@@ -598,10 +613,30 @@ const hlCloseShort: OpStep = {
   execute: async (ctx) => {
     const symbol = ctx.assetSymbol;
     const fullSize = ctx.shortSize;
-    const closeSize = (fullSize * ctx.strategyRedeemFraction) / BigInt(1e18);
+    let closeSize = (fullSize * ctx.strategyRedeemFraction) / BigInt(1e18);
     if (closeSize === 0n) {
       console.log(`         strategy unwind is 0; no ${symbol} short close needed`);
       return;
+    }
+    const closeNotionalUsd18 = (closeSize * ctx.price) / WAD;
+    const minCloseNotionalUsd18 = getHlCloseShortMinNotionalUsd18();
+    if (closeNotionalUsd18 < minCloseNotionalUsd18) {
+      const halfMinCloseNotionalUsd18 = minCloseNotionalUsd18 / 2n;
+      if (closeNotionalUsd18 < halfMinCloseNotionalUsd18) {
+        console.log(
+          `         skip ${symbol} short close: ${fmtUsd(closeNotionalUsd18)} notional is below half of ` +
+            `${fmtUsd(minCloseNotionalUsd18)} HL_CLOSE_SHORT_MIN_NOTIONAL_USD`,
+        );
+        return;
+      }
+
+      const minCloseSize = ceilDiv(minCloseNotionalUsd18 * WAD, ctx.price);
+      const adjustedCloseSize = minCloseSize < fullSize ? minCloseSize : fullSize;
+      console.log(
+        `         round ${symbol} short close up from ${fmtUsd(closeNotionalUsd18)} to ` +
+          `${fmtUsd((adjustedCloseSize * ctx.price) / WAD)} notional to satisfy HL_CLOSE_SHORT_MIN_NOTIONAL_USD`,
+      );
+      closeSize = adjustedCloseSize;
     }
     if (closeSize >= fullSize) {
       console.log(`         closing full ${symbol} short`);

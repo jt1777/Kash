@@ -15,7 +15,7 @@ When you deposit ETH into KASH:
 
 The result: the protocol holds ETH (long) and simultaneously holds a short ETH position of the same size. The two positions cancel out — no directional exposure to ETH price. This is what "delta-neutral" means.
 
-**The yield comes from funding rates.** On perpetuals exchanges, traders who are long pay a fee to traders who are short (or vice versa, depending on market conditions). When longs dominate the market — which is historically common in bull markets — shorts earn a continuous funding rate income. That income accrues to the protocol and flows back to you through an increasing NAV.
+**The yield comes from funding rates.** On perpetuals exchanges, when the futures price is greater than the oracle price (or spot market price) traders who are long pay a fee to traders who are short (funding rate is positive). If the futures price is below the oracle price, then trader who are short pay a fee to traders who are long (funding rate is negative).  When longs dominate the market — which is historically common in bull markets — shorts earn a continuous funding rate income. That income accrues to the protocol and flows back to you through an increasing NAV.
 
 ---
 
@@ -66,13 +66,6 @@ Your deposit or redemption will be included in the batch for the day you submit 
 
 ---
 
-## Why is the strategy "safe" for ETH holders?
-
-Because the short position offsets the ETH exposure exactly. If ETH goes up 10%, your collateral increases in value but your short position loses the same amount — and vice versa. Net result: no gain or loss from price movement. You only earn (or lose, if conditions are unfavourable) the funding rate.
-
-This also means KASH is not a leveraged ETH product. It is a yield product that uses ETH as collateral.
-
----
 
 ## What determines yield?
 
@@ -82,4 +75,4 @@ The main driver is the **funding rate** on perpetuals markets:
 - In bear markets or sideways conditions, funding rates can turn negative — you pay
 - The lending protocol also earns interest on the ETH collateral, which adds a small base return
 
-Historical funding rates on perpetuals have generally been positive over bull cycles, averaging roughly 10–20% APY for short positions. This is not guaranteed for future periods.
+Historical funding rates on perpetuals have generally been positive over bull cycles, however this is not guaranteed for future periods.
