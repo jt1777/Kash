@@ -98,7 +98,10 @@ export default function Home() {
         }
         .landing .container { max-width: 1200px; margin: 0 auto; padding: 0 20px; position: relative; z-index: 1; }
         .landing .hero {
-          min-height: 100vh;
+          /* Taller than one viewport so content breathes; dvh/svh behave better than vh on mobile */
+          min-height: calc(100vh + 2.5rem);
+          min-height: calc(100svh + 2.5rem);
+          min-height: calc(100dvh + 2.5rem);
           display: flex;
           flex-direction: column;
           justify-content: center;
@@ -106,6 +109,9 @@ export default function Home() {
           text-align: center;
           position: relative;
           z-index: 1;
+          padding-top: clamp(5.75rem, 11vw, 7.75rem);
+          padding-bottom: clamp(2.5rem, 5vh, 4rem);
+          box-sizing: border-box;
           background-color: #0A0A1E;
           background-image:
             linear-gradient(
@@ -427,8 +433,18 @@ export default function Home() {
           0%, 100% { box-shadow: 0 0 15px rgba(0, 255, 255, 0.5); }
           50% { box-shadow: 0 0 25px rgba(0, 255, 255, 0.7), 0 0 40px rgba(0, 255, 255, 0.2); }
         }
+        @media (min-width: 769px) {
+          .landing .hero .subtitle {
+            max-width: min(48rem, 86vw);
+          }
+          .landing .hero .hero-human-hint {
+            max-width: min(44rem, 82vw);
+          }
+        }
         @media (max-width: 768px) {
-          .landing .hero { padding-top: 120px; }
+          .landing .hero {
+            padding-top: clamp(7.25rem, 22vw, 11rem);
+          }
           .landing .secondary-cta { display: block; margin: 16px 0 0 0; }
           .landing .nav-content { justify-content: center; }
           .landing .nav-links { justify-content: center; }
@@ -451,7 +467,6 @@ export default function Home() {
               <a href="#verify" className="nav-link">Verify</a>
               <a href="#agent-quickstart" className="nav-link">Quickstart</a>
               <a href="#integration" className="nav-link">Integration</a>
-              <a href="https://github.com/jt1777/yieldproduct" className="nav-link" target="_blank" rel="noopener noreferrer">GitHub</a>
               <Link href="/app" className="nav-button">Launch App →</Link>
             </div>
           </div>
@@ -467,7 +482,7 @@ export default function Home() {
               Returns depend on funding rates and protocol risks — verify contracts and NAV before allocating capital.
             </p>
             <p className="hero-human-hint" role="note">
-              <strong>For humans:</strong> read <strong>Documentation</strong> first, then click <strong>Launch App</strong> below to mint or redeem.
+              <strong>For humans:</strong> read <strong>Documentation</strong> first, then click <strong>Launch App</strong> below to begin.
             </p>
             <div>
               <Link href="/app" className="cta-button">🚀 Launch App</Link>
