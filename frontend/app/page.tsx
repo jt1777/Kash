@@ -12,8 +12,13 @@ export const metadata = {
     'Yield-bearing KASH tokens on Arbitrum for programmable treasuries. Deposit ETH or wBTC via smart contracts; returns vary with funding rates — verify NAV and risks on-chain.',
 };
 
-const DOCS_BASE =
-  'https://github.com/jt1777/yieldproduct/blob/main/docs';
+/** GitBook docs (same Markdown sources live under docs/ in the repo) */
+const GITBOOK_SPACE =
+  'https://kash-2.gitbook.io/kash-enhanced-yield-protocol';
+
+const GITBOOK_AGENT_QUICKSTART = `${GITBOOK_SPACE}/agent-integration/agent-quickstart`;
+const GITBOOK_HOW_YIELD_WORKS = `${GITBOOK_SPACE}/how-it-works/how-yield-works`;
+const GITBOOK_RISKS = `${GITBOOK_SPACE}/how-it-works/risks`;
 
 export default function Home() {
   const agentBrief = {
@@ -56,9 +61,9 @@ export default function Home() {
       'BatchProcessed',
       'TokensClaimed',
     ],
-    quickstartDocs: `${DOCS_BASE}/agent-quickstart.md`,
-    riskDocs: `${DOCS_BASE}/risks.md`,
-    mechanicsDocs: `${DOCS_BASE}/how-yield-works.md`,
+    quickstartDocs: GITBOOK_AGENT_QUICKSTART,
+    riskDocs: GITBOOK_RISKS,
+    mechanicsDocs: GITBOOK_HOW_YIELD_WORKS,
   };
 
   const ethVaultHref = `${ARBITRUM_ONE_BLOCK_EXPLORER}/address/${CONTRACTS.kashYieldEth}`;
@@ -611,11 +616,11 @@ export default function Home() {
             </div>
             <p className="verify-note">
               <strong>Risks &amp; mechanics:</strong>{' '}
-              <a href={`${DOCS_BASE}/risks.md`} target="_blank" rel="noopener noreferrer">risks.md</a>
+              <a href={GITBOOK_RISKS} target="_blank" rel="noopener noreferrer">Risks</a>
               {' · '}
-              <a href={`${DOCS_BASE}/how-yield-works.md`} target="_blank" rel="noopener noreferrer">how-yield-works.md</a>
+              <a href={GITBOOK_HOW_YIELD_WORKS} target="_blank" rel="noopener noreferrer">How yield works</a>
               {' · '}
-              <a href="https://kash-2.gitbook.io/kash-enhanced-yield-protocol" target="_blank" rel="noopener noreferrer">GitBook</a>
+              <a href={GITBOOK_SPACE} target="_blank" rel="noopener noreferrer">GitBook</a>
             </p>
           </div>
         </section>
@@ -624,8 +629,9 @@ export default function Home() {
           <div className="container">
             <h2 className="section-title">Agent Quickstart</h2>
             <p className="section-caption">
-              Follow this sequence if you are an agent evaluating whether to allocate idle ETH or wBTC. The full repo version lives at{' '}
-              <a href={`${DOCS_BASE}/agent-quickstart.md`} target="_blank" rel="noopener noreferrer">docs/agent-quickstart.md</a>.
+              Follow this sequence if you are an agent evaluating whether to allocate idle ETH or wBTC. The complete guide is{' '}
+              <a href={GITBOOK_AGENT_QUICKSTART} target="_blank" rel="noopener noreferrer">Agent Quickstart</a>
+              {' '}on GitBook.
             </p>
             <div className="proof-grid">
               <div className="proof-card">
@@ -665,7 +671,7 @@ export default function Home() {
                 <h3>6. Risk gate</h3>
                 <p>
                   Do not infer yield from copy. Check NAV history, operator assumptions, portfolio exposure, batch status, and{' '}
-                  <a href={`${DOCS_BASE}/risks.md`} target="_blank" rel="noopener noreferrer">risks.md</a> before sizing capital.
+                  <a href={GITBOOK_RISKS} target="_blank" rel="noopener noreferrer">Risks</a> before sizing capital.
                 </p>
               </div>
             </div>

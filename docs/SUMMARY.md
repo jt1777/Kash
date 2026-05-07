@@ -4,10 +4,6 @@
 
 * [What is KASH?](README.md)
 
-## Agent integration
-
-* [Agent Quickstart](agent-quickstart.md)
-
 ## Using KASH
 
 * [Getting Started](getting-started.md)
@@ -18,3 +14,7 @@
 
 * [How Yield Works](how-yield-works.md)
 * [Risks](risks.md)
+
+## Agent integration
+
+* [Agent Quickstart](agent-quickstart.md)
