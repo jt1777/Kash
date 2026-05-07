@@ -157,6 +157,25 @@ export default function Home() {
           line-height: 1.7;
           text-align: center;
         }
+        .landing .hero-human-hint {
+          display: block;
+          max-width: 560px;
+          margin: -16px auto 28px;
+          padding: 14px 20px;
+          text-align: center;
+          font-size: clamp(0.88rem, 2.2vw, 1rem);
+          line-height: 1.55;
+          color: rgba(255, 255, 255, 0.93);
+          background: rgba(0, 255, 255, 0.12);
+          border: 1px solid rgba(0, 255, 255, 0.5);
+          border-radius: 8px;
+          box-shadow: 0 0 22px rgba(0, 255, 255, 0.18), inset 0 0 24px rgba(0, 255, 255, 0.04);
+        }
+        .landing .hero-human-hint strong {
+          color: #00FFFF;
+          font-weight: 600;
+          text-shadow: 0 0 10px rgba(0, 255, 255, 0.35);
+        }
         .landing .cta-button {
           display: inline-block;
           background: #00FFFF;
@@ -428,6 +447,7 @@ export default function Home() {
             <Link href="/" className="nav-logo">KASH</Link>
             <div className="nav-links">
               <a href="#features" className="nav-link">Features</a>
+              <a href="#agent-brief" className="nav-link">For AI</a>
               <a href="#verify" className="nav-link">Verify</a>
               <a href="#agent-quickstart" className="nav-link">Quickstart</a>
               <a href="#integration" className="nav-link">Integration</a>
@@ -446,6 +466,9 @@ export default function Home() {
               Programmable treasury yield on Arbitrum: deposit ETH or wBTC into KashYield, receive ERC-20 KASH priced off NAV, redeem through daily batches.
               Returns depend on funding rates and protocol risks — verify contracts and NAV before allocating capital.
             </p>
+            <p className="hero-human-hint" role="note">
+              <strong>For humans:</strong> read <strong>Documentation</strong> first, then click <strong>Launch App</strong> below to mint or redeem.
+            </p>
             <div>
               <Link href="/app" className="cta-button">🚀 Launch App</Link>
               <a href="https://kash-2.gitbook.io/kash-enhanced-yield-protocol" target="_blank" rel="noopener noreferrer" className="secondary-cta">Documentation</a>
@@ -457,8 +480,8 @@ export default function Home() {
         <section className="stats">
           <div className="container">
             <div className="stats-grid">
-              <div><div className="stat-value">3 bps</div><div className="stat-label">Tx fee (verify)</div></div>
-              <div><div className="stat-value">Δ</div><div className="stat-label">Delta-neutral intent</div></div>
+              <div><div className="stat-value">3 bps</div><div className="stat-label">Protocol fee</div></div>
+              <div><div className="stat-value">Δ</div><div className="stat-label">Delta-neutral strategies</div></div>
               <div><div className="stat-value">UTC</div><div className="stat-label">Daily batch window</div></div>
             </div>
           </div>
@@ -510,11 +533,35 @@ export default function Home() {
           </div>
         </section>
 
+        <section className="for-ai" id="agent-brief">
+          <div className="container">
+            <h2 className="section-title">Built for AI agents</h2>
+            <p className="section-caption">
+              Machine-readable integration brief (addresses come from app env defaults — confirm before mainnet execution).
+            </p>
+            <p className="agent-json-caption">Copy as JSON for tools / planners</p>
+            <div className="code-block" style={{ marginBottom: 48 }}>
+              <div className="code-header">
+                <div className="dot red" /><div className="dot yellow" /><div className="dot green" />
+              </div>
+              <pre>{JSON.stringify(agentBrief, null, 2)}</pre>
+            </div>
+            <ul className="ai-list">
+              <li><strong>Contract-first</strong> — Integrate via KashYield + ERC-20 KASH; optional UI is unrelated to execution.</li>
+              <li><strong>Deterministic scheduling</strong> — Poll <code style={{ color: '#00FFFF' }}>isUserWindow</code>, submit before batch cutoff, await <code style={{ color: '#00FFFF' }}>BatchProcessed</code>.</li>
+              <li><strong>Bounded surface area</strong> — Primary flows: mint, redeem, cancel; approvals only where ERC-20 pulls apply.</li>
+              <li><strong>Composable ERC-20</strong> — Move KASH like any token; remember redeems move KASH back to the vault during requests.</li>
+              <li><strong>Ops reality</strong> — Strategy execution and NAV inputs rely on protocol operators — audit trust assumptions in docs, not buzzwords.</li>
+              <li><strong>Decision-grade reads</strong> — NAV, fee bps, pending requests, and batch tuples are exposed for monitoring / risk triggers.</li>
+            </ul>
+          </div>
+        </section>
+
         <section className="proof-section" id="verify">
           <div className="container">
             <h2 className="section-title">Verify before you allocate</h2>
             <p className="section-caption">
-              Nothing here updates live in real time — treat this as pointers to on-chain checks an autonomous treasury should run (RPC, Arbiscan, or your indexer).
+              Verification checklist: confirm each item against live chain state using your own RPC, Arbiscan, or an indexer before you size or route capital.
             </p>
             <div className="proof-grid">
               <div className="proof-card">
@@ -614,7 +661,7 @@ export default function Home() {
           <div className="container">
             <h2 className="section-title">Minimal integration (matches deployed ABI)</h2>
             <p className="section-caption">
-              Contracts use <code style={{ color: '#00FFFF' }}>requestMint</code> / <code style={{ color: '#00FFFF' }}>requestRedeem</code> (not legacy placeholder names). ABI reference:{' '}
+              Contracts use <code style={{ color: '#00FFFF' }}>requestMint</code> / <code style={{ color: '#00FFFF' }}>requestRedeem</code>. ABI reference:{' '}
               <code style={{ color: '#a5d6ff' }}>frontend/lib/contracts/kashYieldABI.ts</code>.
             </p>
             <div className="code-block">
@@ -643,7 +690,9 @@ const hash = await wallet.writeContract({
             </div>
             <h2 className="section-title" style={{ marginTop: 60 }}>Python (Web3.py) — no pip SDK yet</h2>
             <p className="section-caption">
-              Drop in your own ABI JSON from the repo; there is <strong>no</strong> published <code style={{ color: '#00FFFF' }}>kash_sdk</code> package today.
+              Pass the KashYield ABI into Web3.py (same JSONABI shape as Hardhat artifacts)—copy the array from{' '}
+              <code style={{ color: '#a5d6ff' }}>frontend/lib/contracts/kashYieldABI.ts</code>, export it as JSON, or use your compiled contract artifact.
+              There is <strong>no</strong> published <code style={{ color: '#00FFFF' }}>kash_sdk</code> package today.
             </p>
             <div className="code-block">
               <div className="code-header">
@@ -675,30 +724,6 @@ w3.eth.send_raw_transaction(signed.raw_transaction)
 # Redeem: approve(kash_token, vault) then requestRedeem(kash_amount)`}
               </pre>
             </div>
-          </div>
-        </section>
-
-        <section className="for-ai" id="agent-brief">
-          <div className="container">
-            <h2 className="section-title">Built for AI agents</h2>
-            <p className="section-caption">
-              Machine-readable integration brief (addresses come from app env defaults — confirm before mainnet execution).
-            </p>
-            <p className="agent-json-caption">Copy as JSON for tools / planners</p>
-            <div className="code-block" style={{ marginBottom: 48 }}>
-              <div className="code-header">
-                <div className="dot red" /><div className="dot yellow" /><div className="dot green" />
-              </div>
-              <pre>{JSON.stringify(agentBrief, null, 2)}</pre>
-            </div>
-            <ul className="ai-list">
-              <li><strong>Contract-first</strong> — Integrate via KashYield + ERC-20 KASH; optional UI is unrelated to execution.</li>
-              <li><strong>Deterministic scheduling</strong> — Poll <code style={{ color: '#00FFFF' }}>isUserWindow</code>, submit before batch cutoff, await <code style={{ color: '#00FFFF' }}>BatchProcessed</code>.</li>
-              <li><strong>Bounded surface area</strong> — Primary flows: mint, redeem, cancel; approvals only where ERC-20 pulls apply.</li>
-              <li><strong>Composable ERC-20</strong> — Move KASH like any token; remember redeems move KASH back to the vault during requests.</li>
-              <li><strong>Ops reality</strong> — Strategy execution and NAV inputs rely on protocol operators — audit trust assumptions in docs, not buzzwords.</li>
-              <li><strong>Decision-grade reads</strong> — NAV, fee bps, pending requests, and batch tuples are exposed for monitoring / risk triggers.</li>
-            </ul>
           </div>
         </section>
 
