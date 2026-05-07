@@ -482,7 +482,7 @@ export default function Home() {
               Returns depend on funding rates and protocol risks — verify contracts and NAV before allocating capital.
             </p>
             <p className="hero-human-hint" role="note">
-              <strong>For humans:</strong> read <strong>Documentation</strong> first, then click <strong>Launch App</strong> below to begin.
+              <strong>For humans:</strong> read <strong>Documentation</strong> first, then click <strong>Launch App</strong> to begin.
             </p>
             <div>
               <Link href="/app" className="cta-button">🚀 Launch App</Link>

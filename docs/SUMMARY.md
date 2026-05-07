@@ -4,6 +4,10 @@
 
 * [What is KASH?](README.md)
 
+## Agent integration
+
+* [Agent Quickstart](agent-quickstart.md)
+
 ## Using KASH
 
 * [Getting Started](getting-started.md)
