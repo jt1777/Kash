@@ -1,12 +1,69 @@
 import Link from 'next/link';
 import { SiteFooter } from '@/components/SiteFooter';
+import {
+  ARBITRUM_ONE_BLOCK_EXPLORER,
+  ARBITRUM_ONE_CHAIN_ID,
+  CONTRACTS,
+} from '@/lib/contracts/addresses';
 
 export const metadata = {
   title: 'KASH - The Yield Token for AI Agents',
-  description: 'The first yield-bearing token designed for AI agents. Deposit ETH or wBTC to earn automated yield from decentralized funding rates.',
+  description:
+    'Yield-bearing KASH tokens on Arbitrum for programmable treasuries. Deposit ETH or wBTC via smart contracts; returns vary with funding rates — verify NAV and risks on-chain.',
 };
 
+const DOCS_BASE =
+  'https://github.com/jt1777/yieldproduct/blob/main/docs';
+
 export default function Home() {
+  const agentBrief = {
+    chainId: ARBITRUM_ONE_CHAIN_ID,
+    network: 'Arbitrum One',
+    explorerBase: ARBITRUM_ONE_BLOCK_EXPLORER,
+    products: {
+      kashEth: {
+        kashYield: CONTRACTS.kashYieldEth,
+        kashToken: CONTRACTS.kashTokenEth,
+        mintNativeEth:
+          'requestMint(0) with tx.value = depositWei (or WETH: approve + requestMint(wethWei))',
+        redeem:
+          'approve(kashYieldEth, kashWei) on KASH-ETH token, then requestRedeem(kashWei)',
+      },
+      kashBtc: {
+        kashYield: CONTRACTS.kashYieldBtc,
+        kashToken: CONTRACTS.kashTokenBtc,
+        mint:
+          'approve(kashYieldBtc, wbtcWei) on wBTC, then requestMint(wbtcWei)',
+        redeem:
+          'approve(kashYieldBtc, kashWei) on KASH-BTC token, then requestRedeem(kashWei)',
+      },
+    },
+    scheduleHint:
+      'Mint/redeem requests accepted until batch cutoff (~23:50 UTC); settles during processing — confirm timing in docs / contract.',
+    reads: [
+      'isUserWindow()',
+      'isProcessingWindow()',
+      'getNAV()',
+      'feeBps()',
+      'getCurrentBatchCycle()',
+      'getPendingMintRequest(user, batchCycle)',
+      'getPendingRedeemRequest(user, batchCycle)',
+      'getBatchInfo(batchCycle)',
+    ],
+    eventsToWatch: [
+      'MintRequested',
+      'RedeemRequested',
+      'BatchProcessed',
+      'TokensClaimed',
+    ],
+    quickstartDocs: `${DOCS_BASE}/agent-quickstart.md`,
+    riskDocs: `${DOCS_BASE}/risks.md`,
+    mechanicsDocs: `${DOCS_BASE}/how-yield-works.md`,
+  };
+
+  const ethVaultHref = `${ARBITRUM_ONE_BLOCK_EXPLORER}/address/${CONTRACTS.kashYieldEth}`;
+  const btcVaultHref = `${ARBITRUM_ONE_BLOCK_EXPLORER}/address/${CONTRACTS.kashYieldBtc}`;
+
   return (
     <>
       <style dangerouslySetInnerHTML={{ __html: `
@@ -216,6 +273,65 @@ export default function Home() {
           text-shadow: 0 0 15px rgba(0, 255, 255, 0.6);
         }
         .landing .stat-label { color: rgba(255, 255, 255, 0.7); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 2px; }
+        .landing .section-caption {
+          max-width: 720px;
+          margin: -36px auto 40px;
+          text-align: center;
+          color: rgba(255, 255, 255, 0.72);
+          font-size: clamp(0.9rem, 2vw, 1rem);
+          line-height: 1.65;
+        }
+        .landing .proof-section {
+          padding: clamp(60px, 10vw, 100px) 0;
+          border-top: 1px solid rgba(0, 255, 255, 0.15);
+          position: relative;
+          z-index: 1;
+          background: rgba(0, 20, 35, 0.35);
+        }
+        .landing .proof-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+          gap: 20px;
+          margin-top: 24px;
+        }
+        .landing .proof-card {
+          background: rgba(0, 255, 255, 0.04);
+          border: 1px solid rgba(0, 255, 255, 0.2);
+          border-radius: 8px;
+          padding: 20px;
+        }
+        .landing .proof-card h3 {
+          color: #00FFFF;
+          font-size: 1rem;
+          margin-bottom: 10px;
+          text-shadow: 0 0 8px rgba(0, 255, 255, 0.35);
+        }
+        .landing .proof-card p {
+          color: rgba(255, 255, 255, 0.82);
+          font-size: 0.88rem;
+          line-height: 1.65;
+        }
+        .landing .proof-card a {
+          color: #7DF9FF;
+          word-break: break-all;
+        }
+        .landing .verify-note {
+          margin-top: 28px;
+          padding: 16px 18px;
+          border-radius: 8px;
+          border: 1px dashed rgba(0, 255, 255, 0.35);
+          background: rgba(0, 255, 255, 0.05);
+          color: rgba(255, 255, 255, 0.78);
+          font-size: 0.88rem;
+          line-height: 1.65;
+        }
+        .landing .agent-json-caption {
+          text-align: center;
+          color: rgba(255, 255, 255, 0.65);
+          font-size: 0.85rem;
+          margin-bottom: 12px;
+          margin-top: -24px;
+        }
         .landing .for-ai {
           padding: clamp(60px, 10vw, 100px) 0;
           background: rgba(0, 0, 0, 0.35);
@@ -312,6 +428,8 @@ export default function Home() {
             <Link href="/" className="nav-logo">KASH</Link>
             <div className="nav-links">
               <a href="#features" className="nav-link">Features</a>
+              <a href="#verify" className="nav-link">Verify</a>
+              <a href="#agent-quickstart" className="nav-link">Quickstart</a>
               <a href="#integration" className="nav-link">Integration</a>
               <a href="https://github.com/jt1777/yieldproduct" className="nav-link" target="_blank" rel="noopener noreferrer">GitHub</a>
               <Link href="/app" className="nav-button">Launch App →</Link>
@@ -324,7 +442,10 @@ export default function Home() {
             <div className="badge">🤖 AI Agent Friendly</div>
             <h1>KASH<span className="cursor" /></h1>
             <h2>Enhanced Yield Protocol</h2>
-            <p className="subtitle">The first yield-bearing token designed for AI agents. Deposit ETH or wBTC to earn yield from decentralized funding rates. No humans required.</p>
+            <p className="subtitle">
+              Programmable treasury yield on Arbitrum: deposit ETH or wBTC into KashYield, receive ERC-20 KASH priced off NAV, redeem through daily batches.
+              Returns depend on funding rates and protocol risks — verify contracts and NAV before allocating capital.
+            </p>
             <div>
               <Link href="/app" className="cta-button">🚀 Launch App</Link>
               <a href="https://kash-2.gitbook.io/kash-enhanced-yield-protocol" target="_blank" rel="noopener noreferrer" className="secondary-cta">Documentation</a>
@@ -336,9 +457,9 @@ export default function Home() {
         <section className="stats">
           <div className="container">
             <div className="stats-grid">
-              <div><div className="stat-value">1.7x</div><div className="stat-label">Superior Yield</div></div>
-              <div><div className="stat-value">Δ</div><div className="stat-label">Delta Neutral</div></div>
-              <div><div className="stat-value">24/7</div><div className="stat-label">Autonomous</div></div>
+              <div><div className="stat-value">3 bps</div><div className="stat-label">Tx fee (verify)</div></div>
+              <div><div className="stat-value">Δ</div><div className="stat-label">Delta-neutral intent</div></div>
+              <div><div className="stat-value">UTC</div><div className="stat-label">Daily batch window</div></div>
             </div>
           </div>
         </section>
@@ -360,22 +481,130 @@ export default function Home() {
               <div className="feature-card">
                 <div className="feature-icon">🔋</div>
                 <h3 className="feature-title">Funding Rate Yield</h3>
-                <p className="feature-desc">Earn from perpetual exchange funding rates. When longs pay shorts, your agent gets paid.</p>
+                <p className="feature-desc">
+                  Strategy targets delta-neutral funding income; funding can be positive or negative — NAV reflects outcomes.
+                </p>
               </div>
               <div className="feature-card">
                 <div className="feature-icon">🌐</div>
                 <h3 className="feature-title">Arbitrum Native</h3>
-                <p className="feature-desc">Low gas, fast finality. Perfect for high-frequency agent operations and micro-strategies.</p>
+                <p className="feature-desc">
+                  Low gas on Arbitrum One for deposits, redemptions, and read-heavy monitoring against shared batch cadence.
+                </p>
               </div>
               <div className="feature-card">
                 <div className="feature-icon">📊</div>
                 <h3 className="feature-title">Transparent Metrics</h3>
-                <p className="feature-desc">On-chain yield tracking. Query your agent&apos;s earnings anytime with a simple view function.</p>
+                <p className="feature-desc">
+                  Read NAV and batch events on-chain (e.g. getNAV(), BatchProcessed). Understand assumptions in docs — not guaranteed APY.
+                </p>
               </div>
               <div className="feature-card">
                 <div className="feature-icon">🤖</div>
                 <h3 className="feature-title">Agent Optimized</h3>
-                <p className="feature-desc">Batch processing for gas-efficient operations - designed for automated systems.</p>
+                <p className="feature-desc">
+                  Predictable daily windows for mint/redeem requests and settlement — easy to cron without micromanaging intraday swaps.
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="proof-section" id="verify">
+          <div className="container">
+            <h2 className="section-title">Verify before you allocate</h2>
+            <p className="section-caption">
+              Nothing here updates live in real time — treat this as pointers to on-chain checks an autonomous treasury should run (RPC, Arbiscan, or your indexer).
+            </p>
+            <div className="proof-grid">
+              <div className="proof-card">
+                <h3>NAV</h3>
+                <p>
+                  Call <code style={{ color: '#00FFFF' }}>getNAV()</code> on KashYield (ETH vault{' '}
+                  <a href={ethVaultHref} target="_blank" rel="noopener noreferrer">{CONTRACTS.kashYieldEth}</a>
+                  , BTC vault{' '}
+                  <a href={btcVaultHref} target="_blank" rel="noopener noreferrer">{CONTRACTS.kashYieldBtc}</a>
+                  ). Compare reads across blocks with docs on update cadence.
+                </p>
+              </div>
+              <div className="proof-card">
+                <h3>Fee</h3>
+                <p>
+                  Read <code style={{ color: '#00FFFF' }}>feeBps()</code> on the same contracts. The app markets <strong>3 bps</strong>; confirm on-chain before sizing trades.
+                </p>
+              </div>
+              <div className="proof-card">
+                <h3>Batches &amp; settlement</h3>
+                <p>
+                  Use <code style={{ color: '#00FFFF' }}>isUserWindow()</code> / <code style={{ color: '#00FFFF' }}>isProcessingWindow()</code> and subscribe to{' '}
+                  <code style={{ color: '#00FFFF' }}>BatchProcessed</code> events to anchor automation — cutoff time is documented (~23:50 UTC); validate against deployment.
+                </p>
+              </div>
+              <div className="proof-card">
+                <h3>TVL &amp; historical performance</h3>
+                <p>
+                  Not displayed on this page. Derive exposure from total KASH supply × NAV, protocol holdings, and your own dashboards — do not infer APY from marketing copy alone.
+                </p>
+              </div>
+            </div>
+            <p className="verify-note">
+              <strong>Risks &amp; mechanics:</strong>{' '}
+              <a href={`${DOCS_BASE}/risks.md`} target="_blank" rel="noopener noreferrer">risks.md</a>
+              {' · '}
+              <a href={`${DOCS_BASE}/how-yield-works.md`} target="_blank" rel="noopener noreferrer">how-yield-works.md</a>
+              {' · '}
+              <a href="https://kash-2.gitbook.io/kash-enhanced-yield-protocol" target="_blank" rel="noopener noreferrer">GitBook</a>
+            </p>
+          </div>
+        </section>
+
+        <section className="proof-section" id="agent-quickstart">
+          <div className="container">
+            <h2 className="section-title">Agent Quickstart</h2>
+            <p className="section-caption">
+              Follow this sequence if you are an agent evaluating whether to allocate idle ETH or wBTC. The full repo version lives at{' '}
+              <a href={`${DOCS_BASE}/agent-quickstart.md`} target="_blank" rel="noopener noreferrer">docs/agent-quickstart.md</a>.
+            </p>
+            <div className="proof-grid">
+              <div className="proof-card">
+                <h3>1. Load facts</h3>
+                <p>
+                  Chain ID <strong>{ARBITRUM_ONE_CHAIN_ID}</strong>, RPC <code style={{ color: '#00FFFF' }}>https://arb1.arbitrum.io/rpc</code>, ABI from{' '}
+                  <a href="https://github.com/jt1777/yieldproduct/blob/main/frontend/lib/contracts/kashYieldABI.ts" target="_blank" rel="noopener noreferrer">kashYieldABI.ts</a>.
+                </p>
+              </div>
+              <div className="proof-card">
+                <h3>2. Preflight reads</h3>
+                <p>
+                  Before signing, read <code style={{ color: '#00FFFF' }}>paused()</code>, <code style={{ color: '#00FFFF' }}>isUserWindow()</code>,{' '}
+                  <code style={{ color: '#00FFFF' }}>getNAV()</code>, <code style={{ color: '#00FFFF' }}>feeBps()</code>, and <code style={{ color: '#00FFFF' }}>getCurrentBatchCycle()</code>.
+                </p>
+              </div>
+              <div className="proof-card">
+                <h3>3. Mint</h3>
+                <p>
+                  ETH: call <code style={{ color: '#00FFFF' }}>requestMint(0)</code> with <code style={{ color: '#00FFFF' }}>msg.value</code>. BTC: approve wBTC to the BTC vault, then call{' '}
+                  <code style={{ color: '#00FFFF' }}>requestMint(wbtcAmount)</code>.
+                </p>
+              </div>
+              <div className="proof-card">
+                <h3>4. Monitor</h3>
+                <p>
+                  Watch <code style={{ color: '#00FFFF' }}>MintRequested</code>, <code style={{ color: '#00FFFF' }}>BatchProcessed</code>, and your KASH token balance after settlement.
+                </p>
+              </div>
+              <div className="proof-card">
+                <h3>5. Redeem</h3>
+                <p>
+                  Approve the relevant KASH token to its KashYield vault, then call <code style={{ color: '#00FFFF' }}>requestRedeem(kashAmount)</code> before the batch cutoff.
+                </p>
+              </div>
+              <div className="proof-card">
+                <h3>6. Risk gate</h3>
+                <p>
+                  Do not infer yield from copy. Check NAV history, operator assumptions, portfolio exposure, batch status, and{' '}
+                  <a href={`${DOCS_BASE}/risks.md`} target="_blank" rel="noopener noreferrer">risks.md</a> before sizing capital.
+                </p>
               </div>
             </div>
           </div>
@@ -383,59 +612,92 @@ export default function Home() {
 
         <section className="code-section" id="integration">
           <div className="container">
-            <h2 className="section-title">Integration in 5 Lines</h2>
+            <h2 className="section-title">Minimal integration (matches deployed ABI)</h2>
+            <p className="section-caption">
+              Contracts use <code style={{ color: '#00FFFF' }}>requestMint</code> / <code style={{ color: '#00FFFF' }}>requestRedeem</code> (not legacy placeholder names). ABI reference:{' '}
+              <code style={{ color: '#a5d6ff' }}>frontend/lib/contracts/kashYieldABI.ts</code>.
+            </p>
             <div className="code-block">
               <div className="code-header">
                 <div className="dot red" /><div className="dot yellow" /><div className="dot green" />
               </div>
-              <pre>{`// Connect to KASH vault
-KashYield vault = KashYield(0x...);
+              <pre>{`// viem-style sketch — KASH-ETH native deposit
+const vaultEth = '${CONTRACTS.kashYieldEth}' as \`0x\${string}\`;
+const kashTokenEth = '${CONTRACTS.kashTokenEth}' as \`0x\${string}\`;
 
-// Deposit ETH and start earning
-depositETH{value: 1 ether}();
+const open = await client.readContract({ address: vaultEth, abi, functionName: 'isUserWindow' });
+if (!open) throw new Error('Outside user window');
 
-// Check accumulated yield
-int256 fees = vault.getAccumulatedFees();
+const hash = await wallet.writeContract({
+  address: vaultEth,
+  abi,
+  functionName: 'requestMint',
+  args: [0n],           // native ETH path uses msg.value
+  value: depositWei,
+});
 
-// Redeem principal + yield
-requestRedemption(kashEthBalance);`}</pre>
+// After batch: read NAV, watch BatchProcessed; to exit:
+// await wallet.writeContract({ address: kashTokenEth, abi: erc20Abi, functionName: 'approve', args: [vaultEth, kashWei] });
+// await wallet.writeContract({ address: vaultEth, abi, functionName: 'requestRedeem', args: [kashWei] });`}
+              </pre>
             </div>
-            <h2 className="section-title" style={{ marginTop: 60 }}>Python SDK Example</h2>
+            <h2 className="section-title" style={{ marginTop: 60 }}>Python (Web3.py) — no pip SDK yet</h2>
+            <p className="section-caption">
+              Drop in your own ABI JSON from the repo; there is <strong>no</strong> published <code style={{ color: '#00FFFF' }}>kash_sdk</code> package today.
+            </p>
             <div className="code-block">
               <div className="code-header">
                 <div className="dot red" /><div className="dot yellow" /><div className="dot green" />
               </div>
               <pre>{`from web3 import Web3
-from kash_sdk import KashVault
 
-# Initialize agent wallet
-agent = KashVault(private_key=AGENT_KEY)
+RPC = "https://arb1.arbitrum.io/rpc"
+w3 = Web3(Web3.HTTPProvider(RPC))
 
-# Automated yield strategy
-def autonomous_deposit(amount):
-    if agent.balance > amount:
-        tx = agent.deposit_eth(amount)
-        agent.log(f"Deposited {amount} ETH")
-        return tx
+vault_eth = Web3.to_checksum_address("${CONTRACTS.kashYieldEth}")
+# abi = json.load(open("kashYield.json"))["abi"]
+c = w3.eth.contract(address=vault_eth, abi=abi)
 
-# Check earnings every hour
-earnings = agent.get_yield_accrual()
-if earnings > 0.01:  # Threshold trigger
-    agent.auto_compound()  # Reinvest yield`}</pre>
+assert c.functions.isUserWindow().call()
+
+tx = c.functions.requestMint(0).build_transaction({
+    "from": agent_address,
+    "value": deposit_wei,
+    "nonce": w3.eth.get_transaction_count(agent_address),
+    "gas": ...,
+    "maxFeePerGas": ...,
+    "maxPriorityFeePerGas": ...,
+})
+signed = w3.eth.account.sign_transaction(tx, private_key=AGENT_KEY)
+w3.eth.send_raw_transaction(signed.raw_transaction)
+
+# KASH-BTC: approve(wbtc, vault_btc) then requestMint(wbtc_amount)
+# Redeem: approve(kash_token, vault) then requestRedeem(kash_amount)`}
+              </pre>
             </div>
           </div>
         </section>
 
-        <section className="for-ai">
+        <section className="for-ai" id="agent-brief">
           <div className="container">
-            <h2 className="section-title">Built for AI Agents</h2>
+            <h2 className="section-title">Built for AI agents</h2>
+            <p className="section-caption">
+              Machine-readable integration brief (addresses come from app env defaults — confirm before mainnet execution).
+            </p>
+            <p className="agent-json-caption">Copy as JSON for tools / planners</p>
+            <div className="code-block" style={{ marginBottom: 48 }}>
+              <div className="code-header">
+                <div className="dot red" /><div className="dot yellow" /><div className="dot green" />
+              </div>
+              <pre>{JSON.stringify(agentBrief, null, 2)}</pre>
+            </div>
             <ul className="ai-list">
-              <li><strong>API-First Design</strong> — No frontend needed. Pure smart contract interactions.</li>
-              <li><strong>Time-Batched Processing</strong> — Deposit windows optimized for automated scheduling.</li>
-              <li><strong>Gas-Efficient</strong> — Minimal operations, designed for high-frequency agent strategies.</li>
-              <li><strong>Composable</strong> — Integrate KASH into your agent&apos;s treasury management system.</li>
-              <li><strong>Autonomous Rebalancing</strong> — Delta-neutral positions maintained automatically.</li>
-              <li><strong>Queryable State</strong> — All metrics available on-chain for agent decision-making.</li>
+              <li><strong>Contract-first</strong> — Integrate via KashYield + ERC-20 KASH; optional UI is unrelated to execution.</li>
+              <li><strong>Deterministic scheduling</strong> — Poll <code style={{ color: '#00FFFF' }}>isUserWindow</code>, submit before batch cutoff, await <code style={{ color: '#00FFFF' }}>BatchProcessed</code>.</li>
+              <li><strong>Bounded surface area</strong> — Primary flows: mint, redeem, cancel; approvals only where ERC-20 pulls apply.</li>
+              <li><strong>Composable ERC-20</strong> — Move KASH like any token; remember redeems move KASH back to the vault during requests.</li>
+              <li><strong>Ops reality</strong> — Strategy execution and NAV inputs rely on protocol operators — audit trust assumptions in docs, not buzzwords.</li>
+              <li><strong>Decision-grade reads</strong> — NAV, fee bps, pending requests, and batch tuples are exposed for monitoring / risk triggers.</li>
             </ul>
           </div>
         </section>

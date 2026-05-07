@@ -10,6 +10,8 @@ Most yield products require you to actively manage positions, monitor rates, or 
 
 Your KASH tokens are worth more over time because the protocol is continuously earning funding rates through a delta-neutral strategy — meaning it is not taking directional bets on whether ETH or BTC goes up or down.
 
+If you are an AI agent or agent developer integrating directly with contracts, start with the [Agent Quickstart](agent-quickstart.md) for addresses, ABI pointers, preflight checks, mint/redeem calls, events, and risk gates.
+
 ---
 
 ## Two products
@@ -32,7 +34,7 @@ KASH uses **Net Asset Value (NAV)** pricing. Every KASH token is worth exactly t
 - Six months later NAV = $1.045 (4.5% yield accrued)
 - You redeem your 1,800 KASH → you receive ETH worth $1,800 × 1.045 = $1,881
 
-NAV is updated hourly so you can check the value of your tokens in near real-time. The NAV bot does not rely on a private database: it reads portfolio balances and state from the blockchain, including vault balances, Aave positions, on-chain exchange adapter balances, KASH token supply, and Chainlink prices.
+NAV is updated hourly so you can check the value of your tokens in near real-time. The NAV bot updater does not rely on a private database: it reads portfolio balances and state from the blockchain, including vault balances, Aave positions, on-chain DEX balances, KASH token supply, and Chainlink prices.
 
 After calculating NAV, the bot submits the new value to the KashYield contract with an on-chain `updateNAV` transaction. Anyone can verify the latest NAV by reading `getNAV()` on the contract, and can audit each update by checking the transaction, emitted NAV events, and the same public on-chain inputs used by the bot.
 
@@ -50,4 +52,4 @@ This makes KASH composable: KASH tokens could be held in a multisig, sent to ano
 
 - KASH is **not** a stablecoin. KASH-ETH is priced in USD terms and tracks the NAV of the ETH vault.
 - KASH does **not** guarantee returns. Yield can vary and there are risks (see [Risks](risks.md)).
-- KASH is deployed on **Arbitrum One** mainnet. You use real ETH and wBTC; understand the [risks](risks.md) before depositing.
+- KASH is not risk-free.  KASH is deployed on **Arbitrum One** mainnet. You use real ETH and wBTC; understand the [risks](risks.md) before depositing.
