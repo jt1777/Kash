@@ -73,10 +73,10 @@ export function StatusIndicator({ product = 'eth' }: { product?: Product }) {
           </div>
           <div className="ml-3">
             <h3 className="text-sm font-medium text-green-800">
-              Current time is {utcTime} UTC. Window open time for Users 00:00-23:50 UTC.
+              The current time is {utcTime} UTC. Window open time for Users 00:00-23:50 UTC.
             </h3>
             <p className="text-sm text-green-700 mt-1">
-              All mint and redemption requests each day will be processed at the batch time (23:50 UTC).
+              All mint and redemption requests each day will be processed at the batch processing time (23:50 UTC).
             </p>
           </div>
         </div>

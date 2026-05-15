@@ -341,6 +341,14 @@ export class BatchProcessor {
       return;
     }
 
+    const mintSkipMin = config.netMintSkipOpsMinUsd18;
+    if (scenario === 'net_mint_hl' && net < mintSkipMin) {
+      console.log(
+        `   NET_MINT net ${ethers.formatEther(net)} USD is below NET_MINT_SKIP_OPS_MIN_USDC (${ethers.formatEther(mintSkipMin)} USD) — skipping ops playbook (collateral stays on contract).\n`,
+      );
+      return;
+    }
+
     // Snapshot all on-chain state once before executing any steps
     const ctx = await snapshotOpsContext(this.kashYield, this.provider, batchCycle, phase1EraNAV);
 
@@ -722,6 +730,15 @@ export class BatchProcessor {
     const step = config.batchStep;
     console.log(`💰 Handling NET_MINT (${isBtc ? 'BTC' : 'ETH'}) - Deploying capital...`);
     console.log(`   Net amount: ${ethers.formatEther(amount)} USD${step !== 'full' ? ` [step=${step} only]` : ''}\n`);
+
+    const mintSkipMin = config.netMintSkipOpsMinUsd18;
+    if (amount < mintSkipMin) {
+      console.log(
+        `   NET_MINT ${ethers.formatEther(amount)} USD is below NET_MINT_SKIP_OPS_MIN_USDC (${ethers.formatEther(mintSkipMin)} USD) — skipping Aave/Hyperliquid (collateral stays on contract).\n`,
+      );
+      console.log('   ✅ NET_MINT complete!\n');
+      return;
+    }
 
     try {
       let extendHl = step === 'hl';
@@ -1109,7 +1126,7 @@ export class BatchProcessor {
       console.log(`   ⚠️  Hyperliquid address not set on contract. Skipping HL deposit.`);
       return;
     }
-    
+
     try {
       console.log(`   → Depositing ${amount} USDC units to Hyperliquid`);
       const tx = await this.kashYield.depositToHyperliquid(amount);

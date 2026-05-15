@@ -1,6 +1,7 @@
 import { config as dotenvConfig } from 'dotenv';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
+import { ethers } from 'ethers';
 
 // Load .env file explicitly from bot directory
 // When running from dist/, __dirname will be dist/, so we go up one level to bot/
@@ -187,6 +188,21 @@ export const config = {
    * Use --dry-run-ops or DRY_RUN_OPS=true.
    */
   dryRunOps: process.argv.includes('--dry-run-ops') || process.env.DRY_RUN_OPS === 'true',
+
+  /**
+   * NET_MINT only: if batch net mint (USD, 18 decimals — same units as `totalMintUSD − totalRedeemUSD` /
+   * ProtocolInteraction NET_MINT amount) is **strictly below** this value, skip strategy ops (no Aave/HL
+   * playbook); deposited ETH/wBTC remains on the contract until a later batch clears the threshold.
+   * Human USDC/notional (e.g. `10` = $10). Env: NET_MINT_SKIP_OPS_MIN_USDC. Default 10.
+   */
+  netMintSkipOpsMinUsd18: (() => {
+    const raw = process.env.NET_MINT_SKIP_OPS_MIN_USDC ?? '10';
+    try {
+      return ethers.parseUnits(raw.trim(), 18);
+    } catch {
+      return ethers.parseUnits('10', 18);
+    }
+  })(),
 
   // Strategy allocation (NET_MINT / NET_REDEEM)
   // Override via .env: AAVE_DEPOSIT_PCT=100, BORROW_LTV_PCT=70, SHORT_LEVERAGE=1.7

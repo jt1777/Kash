@@ -1628,6 +1628,13 @@ export async function runMintPlaybook(
   ctx: OpsContext,
   netMintUSD: bigint,
 ): Promise<void> {
+  const minUsd = config.netMintSkipOpsMinUsd18;
+  if (netMintUSD < minUsd) {
+    console.log(
+      `\n💰 NET_MINT (${ctx.assetSymbol}) — net ${fmtUsd(netMintUSD)} is below NET_MINT_SKIP_OPS_MIN_USDC (${fmtUsd(minUsd)}); skipping mint playbook (collateral stays on contract).\n`,
+    );
+    return;
+  }
   console.log(`\n💰 NET_MINT (${ctx.assetSymbol}) — deploying ${fmtUsd(netMintUSD)} net capital\n`);
   const steps = buildMintPlaybook(netMintUSD);
   await runPlaybook(steps, ctx);
