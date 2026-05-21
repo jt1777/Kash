@@ -11,7 +11,8 @@ import {
   readHyperliquidAdapterAddress,
 } from './opsContext';
 import { classifyScenario, scenarioLabel } from './opsClassifier';
-import { runMintPlaybook, runRedeemPlaybook, runTestAaveLoopPlaybook } from './opsPlaybooks';
+import { runTargetStateEngine } from './targetStateEngine';
+import { runTestAaveLoopPlaybook } from './opsTestPlaybook';
 
 const TOKEN_ADDRESSES = {
   USDC: config.tokens.USDC,
@@ -352,11 +353,8 @@ export class BatchProcessor {
     // Snapshot all on-chain state once before executing any steps
     const ctx = await snapshotOpsContext(this.kashYield, this.provider, batchCycle, phase1EraNAV);
 
-    if (scenario === 'net_mint_hl') {
-      await runMintPlaybook(ctx, net);
-    } else if (scenario === 'redeem_hl') {
-      // Reactive tail classification happens inside runRedeemPlaybook
-      await runRedeemPlaybook(ctx, phase1EraNAV);
+    if (scenario === 'net_mint_hl' || scenario === 'redeem_hl') {
+      await runTargetStateEngine(ctx, scenario, net, phase1EraNAV);
     } else if (scenario === 'test_aave_loop') {
       await runTestAaveLoopPlaybook(ctx);
     }

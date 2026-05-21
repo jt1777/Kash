@@ -6,7 +6,7 @@ import {
   readHyperliquidAdapterAddress,
   type OpsContext,
 } from './opsContext';
-import { classifyRedeemTail, tailLabel, type RedeemTail } from './opsClassifier';
+import { strategyAaveDebtToRepay, strategyAaveDebtFloor } from './opsClassifier';
 
 // ---------------------------------------------------------------------------
 // OpStep interface
@@ -40,7 +40,8 @@ export interface OpStep {
  * - Respects --step=hl / --step=aave sub-step filtering.
  * - Calls canSkip() before each step; logs and skips if already done.
  * - Re-snapshots OpsContext after steps with refreshCtx=true.
- * - In dry-run mode (--dry-run-ops), prints the plan without executing.
+ * - In dry-run mode (--dry-run-ops / DRY_RUN_OPS), prints each playbook plan without executing steps.
+ *   Redeem flows also skip HL settlement wait (withdraw3 / withdrawFromHyperliquid / sweeps / sync).
  */
 export async function runPlaybook(
   steps: OpStep[],
@@ -275,20 +276,6 @@ function getSmallSwapSkipMaxUsdc6(): bigint {
   }
 }
 
-function strategyAaveDebtToRepay(ctx: OpsContext): bigint {
-  if (ctx.aaveDebtFloor != null) {
-    return ctx.aaveDebt > ctx.aaveDebtFloor ? ctx.aaveDebt - ctx.aaveDebtFloor : 0n;
-  }
-  if (ctx.strategyRedeemFraction >= WAD) return ctx.aaveDebt;
-  if (ctx.strategyRedeemFraction === 0n || ctx.aaveDebt === 0n) return 0n;
-  return (ctx.aaveDebt * ctx.strategyRedeemFraction + WAD - 1n) / WAD;
-}
-
-function strategyAaveDebtFloor(ctx: OpsContext): bigint {
-  const repay = strategyAaveDebtToRepay(ctx);
-  return ctx.aaveDebt > repay ? ctx.aaveDebt - repay : 0n;
-}
-
 function usdcShortfallVsContract(ctx: OpsContext): bigint {
   const debtToRepay = strategyAaveDebtToRepay(ctx);
   return debtToRepay > ctx.contractUsdc ? debtToRepay - ctx.contractUsdc : 0n;
@@ -340,7 +327,7 @@ async function getAaveAvailableBorrowUsdc6(ctx: OpsContext): Promise<bigint> {
  * refreshCtx=true: aave_borrow reads ctx.aaveSupplied, which must reflect the
  * just-executed deposit or it will compute targetUsdc=0 and skip the borrow.
  */
-const aaveDeposit: OpStep = {
+export const aaveDeposit: OpStep = {
   id: 'aave_deposit',
   substep: 'aave',
   refreshCtx: true,
@@ -370,7 +357,7 @@ const aaveDeposit: OpStep = {
   },
 };
 
-async function readBatchMintDeployedToAave(ctx: OpsContext): Promise<bigint> {
+export async function readBatchMintDeployedToAave(ctx: OpsContext): Promise<bigint> {
   try {
     const raw = ctx.isBtc
       ? await ctx.kashYield.batchMintBtcDeployedToAave(ctx.batchCycle)
@@ -381,7 +368,7 @@ async function readBatchMintDeployedToAave(ctx: OpsContext): Promise<bigint> {
   }
 }
 
-async function computeDeployableNetMintUsd(ctx: OpsContext, fallbackNetMintUSD: bigint): Promise<bigint> {
+export async function computeDeployableNetMintUsd(ctx: OpsContext, fallbackNetMintUSD: bigint): Promise<bigint> {
   try {
     const info = await ctx.kashYield.getBatchInfo(ctx.batchCycle);
     const totalMintUSD = BigInt(info.totalMintUSD.toString());
@@ -412,7 +399,7 @@ async function markBatchMintDeployedToAave(ctx: OpsContext, amount: bigint): Pro
   }
 }
 
-async function computeNetMintAaveDepositAmount(ctx: OpsContext, netMintUSD: bigint): Promise<bigint> {
+export async function computeNetMintAaveDepositAmount(ctx: OpsContext, netMintUSD: bigint): Promise<bigint> {
   if (ctx.contractAsset === 0n || netMintUSD <= 0n) return 0n;
   const pct = BigInt(config.strategy.aaveDepositPct);
   const deployableNetMintAsset = await computeDeployableNetMintAsset(ctx, netMintUSD);
@@ -446,7 +433,7 @@ const aaveDepositNetMint = (netMintUSD: bigint): OpStep => ({
  * refreshCtx=true: hl_deposit_usdc (and any subsequent step) reads ctx.contractUsdc,
  * which must reflect the just-borrowed USDC or it will see 0 and skip the HL deposit.
  */
-const aaveBorrow: OpStep = {
+export const aaveBorrow: OpStep = {
   id: 'aave_borrow',
   substep: 'aave',
   refreshCtx: true,
@@ -520,6 +507,21 @@ const hlDepositUsdc: OpStep = {
   execute: async (ctx) => {
     const amount = hlDepositUsdcAmount(ctx);
     if (amount === 0n) return;
+    const hlMinUsdc = (() => {
+      try {
+        const raw = (process.env.HL_MIN_DEPOSIT_USDC || '10').trim();
+        const p = ethers.parseUnits(raw, 6);
+        return p > 0n ? p : 10_000_000n;
+      } catch {
+        return 10_000_000n;
+      }
+    })();
+    if (amount < hlMinUsdc) {
+      console.warn(
+        `         ⚠️  Skipping HL deposit: ${fmtUsdc(amount)} below HL_MIN_DEPOSIT_USDC (${fmtUsdc(hlMinUsdc)}) — USDC stays on KashYield.`,
+      );
+      return;
+    }
     const c = ctx.contractUsdc;
     if (c > amount) {
       console.log(`         ${fmtUsdc(amount)} (keeping ${fmtUsdc(c - amount)} USDC on contract — not part of Aave borrow)`);
@@ -1550,133 +1552,6 @@ async function maybeInitiateHlOffchainWithdraw(ctx: OpsContext, amountUsdc6: big
   await exchange.withdraw3({ destination, amount: amountStr }, opts);
 }
 
-// ---------------------------------------------------------------------------
-// Playbook builders
-// ---------------------------------------------------------------------------
-
-/**
- * Build mint playbook: 01 → 02 → 03 → 05 (no spot buy step 04).
- * USDC deposited in step 03 is already the HL short collateral.
- */
-export function buildMintPlaybook(netMintUSD: bigint): OpStep[] {
-  return [
-    aaveDepositNetMint(netMintUSD),
-    aaveBorrow,
-    hlDepositUsdc,
-    hlOpenShort(netMintUSD),
-  ];
-}
-
-/**
- * Build redeem core playbook (steps 06 + 08, no step 07).
- * The tail steps (falling/rising/balanced) are appended dynamically in runRedeemPlaybook
- * after the context is refreshed post-HL-close, so the tail classification uses actual
- * USDC proceeds rather than a pre-flight estimate.
- */
-export function buildRedeemCore(): OpStep[] {
-  return [hlCloseShort, hlWithdrawUsdc];
-}
-
-/**
- * Build the tail steps based on the tail classification.
- * Called after ctx has been refreshed to reflect post-HL-close USDC balance.
- */
-export function buildRedeemTail(tail: RedeemTail, lockedNAV: bigint | undefined): OpStep[] {
-  switch (tail) {
-    case 'falling':
-      // Repay in full → sweep residual Aave debt dust → swap excess USDC to asset (11b) → proportional Aave withdraw
-      return [
-        aaveRepay,
-        aaveRepayResidualDebtFromOwnerReserve,
-        dexSwapFromUsdc(lockedNAV),
-        aaveWithdraw('proportional'),
-      ];
-
-    case 'rising':
-      // Repay with all contract USDC first (idle USDC + HL proceeds) to shrink HL-fee / bridge gaps,
-      // then partial Aave withdraw → swap asset to USDC (11a) → owner reserve cover if 11a skipped →
-      // repay remainder → remaining Aave withdraw
-      return [
-        aaveRepayContractFirst,
-        aaveWithdrawPartial,
-        dexSwapForUsdc,
-        risingTailCoverOwnerUsdc,
-        aaveRepayRisingFinal,
-        aaveRepayResidualDebtFromOwnerReserve,
-        aaveWithdraw('remaining'),
-      ];
-
-    case 'balanced':
-      // Repay fully → sweep residual Aave debt dust → proportional Aave withdraw
-      return [
-        aaveRepay,
-        aaveRepayResidualDebtFromOwnerReserve,
-        aaveWithdraw('proportional'),
-      ];
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Top-level mint/redeem runners used by batchProcessor
-// ---------------------------------------------------------------------------
-
-/**
- * Execute the full mint playbook.
- * Logs the scenario, runs the executor, verifies no USDC remains (sanity check).
- */
-export async function runMintPlaybook(
-  ctx: OpsContext,
-  netMintUSD: bigint,
-): Promise<void> {
-  const minUsd = config.netMintSkipOpsMinUsd18;
-  if (netMintUSD < minUsd) {
-    console.log(
-      `\n💰 NET_MINT (${ctx.assetSymbol}) — net ${fmtUsd(netMintUSD)} is below NET_MINT_SKIP_OPS_MIN_USDC (${fmtUsd(minUsd)}); skipping mint playbook (collateral stays on contract).\n`,
-    );
-    return;
-  }
-  console.log(`\n💰 NET_MINT (${ctx.assetSymbol}) — deploying ${fmtUsd(netMintUSD)} net capital\n`);
-  const steps = buildMintPlaybook(netMintUSD);
-  await runPlaybook(steps, ctx);
-}
-
-/**
- * Execute the full redeem playbook with reactive tail selection.
- * 1. Run core (close short + withdraw HL USDC) — refreshCtx after each.
- * 2. Classify redeem tail from fresh context.
- * 3. Run tail steps.
- */
-export async function runRedeemPlaybook(
-  ctx: OpsContext,
-  lockedNAV: bigint | undefined,
-): Promise<void> {
-  console.log(
-    `\n💸 NET_REDEEM (${ctx.assetSymbol}) — gross redeem ${(Number(ctx.redeemFraction) / 1e16).toFixed(2)}%, ` +
-      `strategy unwind ${(Number(ctx.strategyRedeemFraction) / 1e16).toFixed(2)}%\n`,
-  );
-
-  // Step 1: Run core steps (close short + withdraw USDC from HL).
-  // Each step has refreshCtx=true so ctx is up-to-date for canSkip checks.
-  const coreSteps = buildRedeemCore();
-  await runPlaybook(coreSteps, ctx);
-
-  // Step 2: Refresh context to read the actual USDC balance now in the contract.
-  let freshCtx = await snapshotOpsContext(ctx.kashYield, ctx.provider, ctx.batchCycle, lockedNAV);
-  freshCtx.aaveDebtFloor = strategyAaveDebtFloor(freshCtx);
-  freshCtx = await waitForHlWithdrawSettlementIfNeeded(freshCtx, lockedNAV);
-
-  // Step 3: Classify tail from freshCtx (contractUsdc vs strategy debt target) and run tail steps.
-  const tail: RedeemTail = classifyRedeemTail(freshCtx);
-  console.log(`   📊 Redeem tail: ${tailLabel(tail)}`);
-  console.log(
-    `      contractUsdc=${fmtUsdc(freshCtx.contractUsdc)}, ` +
-      `strategyDebt=${fmtUsdc(strategyAaveDebtToRepay(freshCtx))}, totalDebt=${fmtUsdc(freshCtx.aaveDebt)}\n`,
-  );
-
-  const tailSteps = buildRedeemTail(tail, lockedNAV);
-  await runPlaybook(tailSteps, freshCtx);
-}
-
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -1760,10 +1635,18 @@ async function sweepRemainingHlUsdcAfterFullRedeem(
   return fresh;
 }
 
-async function waitForHlWithdrawSettlementIfNeeded(
+export async function waitForHlWithdrawSettlementIfNeeded(
   ctx: OpsContext,
   lockedNAV: bigint | undefined,
 ): Promise<OpsContext> {
+  if (config.dryRunOps) {
+    console.log(
+      '   [DRY-RUN] Skipping HL withdraw settlement wait (withdraw3), on-chain adapter pulls, HL sweeps, and adapter sync — ' +
+        'would run after core redeem steps when DRY_RUN_OPS is off.',
+    );
+    return ctx;
+  }
+
   const enabled = (process.env.HL_WITHDRAW_WAIT_ENABLED || 'true').toLowerCase() !== 'false';
   const feeTolerance = getHlWithdrawFeeToleranceUsdc6();
 
@@ -1857,111 +1740,44 @@ async function waitForHlWithdrawSettlementIfNeeded(
   return sweepRemainingHlUsdcAfterFullRedeem(fresh, lockedNAV);
 }
 
-// ---------------------------------------------------------------------------
-// ─── TEST PLAYBOOK: Aave leverage loop ──────────────────────────────────────
-// ---------------------------------------------------------------------------
+/** Ordered mint OpSteps — deposit → borrow → HL USDC collateral → open short (parity with legacy playbook). */
+export function buildMintOpSteps(netMintUSD: bigint): OpStep[] {
+  return [aaveDepositNetMint(netMintUSD), aaveBorrow, hlDepositUsdc, hlOpenShort(netMintUSD)];
+}
 
-/**
- * Swap ALL contract USDC back to ETH/wBTC via the spot DEX.
- * Used in the test loop between the two Aave deposit+borrow rounds.
- * refreshCtx=true so the second aave_deposit sees the freshly acquired ETH.
- */
-const dexSwapAllUsdcToAsset: OpStep = {
-  id: 'dex_swap_usdc_to_asset',
-  substep: 'aave',
-  refreshCtx: true,
-  describe: (ctx) => `swap all ${fmtUsdc(ctx.contractUsdc)} USDC → ${ctx.assetSymbol} (test loop)`,
-  canSkip: async (ctx) => {
-    if (ctx.contractUsdc === 0n) return true;
-    const spotDex = await ctx.kashYield.spotDexAddress().catch(() => null);
-    if (!spotDex || spotDex === ethers.ZeroAddress) {
-      console.warn('         ⚠️  spotDexAddress not configured — skipping test-loop swap');
-      return true;
-    }
-    return false;
-  },
-  execute: async (ctx) => {
-    const amount = ctx.contractUsdc;
-    if (amount === 0n) return;
-    console.log(`         swap ${fmtUsdc(amount)} → ${ctx.assetSymbol}`);
-    await execTx('swapFromUsdc', ctx.kashYield.swapFromUsdc(amount));
-  },
-};
+/** Redeem core: proportional HL close + withdraw USDC to vault. */
+export function buildRedeemCoreOpSteps(): OpStep[] {
+  return [hlCloseShort, hlWithdrawUsdc];
+}
 
-/**
- * Build the test Aave leverage-loop playbook:
- *
- *   Round 1: deposit ETH → borrow 70% USDC
- *   Bridge:  swap all USDC → ETH (Uniswap)
- *   Round 2: deposit new ETH → borrow 70% of that as USDC
- *
- * Example with 1 ETH @ $2,000:
- *   1. deposit 1 ETH to Aave
- *   2. borrow $1,400 USDC (70% LTV)
- *   3. swap $1,400 → 0.7 ETH
- *   4. deposit 0.7 ETH to Aave (total supplied = 1.7 ETH)
- *   5. borrow 70% of 0.7 ETH = $980 USDC (total debt = $2,380)
- *
- * All steps carry refreshCtx=true — each step must see the state left by the previous one.
- * Steps are cloned with unique IDs so the log clearly shows "round 1" vs "round 2".
- *
- * WHY a simplified canSkip for deposit steps:
- * The default aave_deposit.canSkip checks `aaveSupplied >= contractAsset × depositPct`.
- * After round 1 deposits 1 ETH, aaveSupplied = 1 ETH. After the bridge swap, contractAsset = 0.7 ETH.
- * The default check would see `1 ETH >= 0.7 ETH` → skip — round 2 never deposits.
- * The loop-specific canSkip only checks whether there is new asset in the contract to deposit.
- *
- * Activate with:  OPS_SCENARIO=test_aave_loop  or  --ops-scenario=test_aave_loop
- */
-export function buildAaveLoopPlaybook(): OpStep[] {
-  // Loop deposit: only skip when there is literally nothing in the contract to deposit.
-  const depositForLoop = (id: string): OpStep => ({
-    ...aaveDeposit,
-    id,
-    refreshCtx: true,
-    canSkip: async (ctx) => ctx.contractAsset === 0n,
-  });
+export function buildRedeemTailOpStepsBalanced(): OpStep[] {
+  return [aaveRepay, aaveRepayResidualDebtFromOwnerReserve, aaveWithdraw('proportional')];
+}
 
+/** Falling tail: repay → Aave withdraw → residual USDC→asset swap (target-state ordering fix). */
+export function buildRedeemTailOpStepsFalling(lockedNAV: bigint | undefined): OpStep[] {
   return [
-    depositForLoop('aave_deposit_round1'),
-    { ...aaveBorrow, id: 'aave_borrow_round1', refreshCtx: true },
-    dexSwapAllUsdcToAsset,
-    depositForLoop('aave_deposit_round2'),
-    { ...aaveBorrow, id: 'aave_borrow_round2', refreshCtx: true },
+    aaveRepay,
+    aaveRepayResidualDebtFromOwnerReserve,
+    aaveWithdraw('proportional'),
+    dexSwapFromUsdc(lockedNAV),
   ];
 }
 
-/** Execute the test Aave loop playbook with a clear header and summary. */
-export async function runTestAaveLoopPlaybook(ctx: OpsContext): Promise<void> {
-  const price = ctx.price;
-  const assetStr = fmtAsset(ctx.contractAsset, ctx);
-  const usdStr = fmtUsd((ctx.contractAsset * price) / (10n ** ctx.assetDecimals));
-  const ltv = config.strategy.borrowLtvPct;
-  const round1BorrowUsdc = (ctx.contractAsset * price * BigInt(ltv)) / (100n * (10n ** ctx.assetDecimals) * (10n ** 12n));
-  const round1SwapEth = (round1BorrowUsdc * (10n ** 12n) * (10n ** ctx.assetDecimals)) / price;
-  const round2BorrowUsdc = (round1SwapEth * price * BigInt(ltv)) / (100n * (10n ** ctx.assetDecimals) * (10n ** 12n));
-
-  console.log(`\n🧪 TEST: Aave leverage loop — starting with ${assetStr} (${usdStr})\n`);
-  console.log(`   Round 1: deposit ${assetStr} → borrow ${ltv}% LTV = ~${fmtUsdc(round1BorrowUsdc)}`);
-  console.log(`   Bridge:  swap ~${fmtUsdc(round1BorrowUsdc)} → ~${fmtAsset(round1SwapEth, ctx)}`);
-  console.log(`   Round 2: deposit ~${fmtAsset(round1SwapEth, ctx)} → borrow ${ltv}% = ~${fmtUsdc(round2BorrowUsdc)}`);
-
-  if (config.dryRunOps) {
-    console.log('\n   ⚠️  Dry-run note: step descriptions below use the initial snapshot.');
-    console.log('      Steps 2-5 show stale USDC/ETH amounts because each step refreshes');
-    console.log('      context at execution time. The estimates above (this header) are accurate.\n');
-  } else {
-    console.log();
-  }
-
-  const steps = buildAaveLoopPlaybook();
-  await runPlaybook(steps, ctx);
-
-  console.log('\n🧪 Test loop complete. Final state will be snapshotted on next run.\n');
+export function buildRedeemTailOpStepsRising(): OpStep[] {
+  return [
+    aaveRepayContractFirst,
+    aaveWithdrawPartial,
+    dexSwapForUsdc,
+    risingTailCoverOwnerUsdc,
+    aaveRepayRisingFinal,
+    aaveRepayResidualDebtFromOwnerReserve,
+    aaveWithdraw('remaining'),
+  ];
 }
 
 // ---------------------------------------------------------------------------
-// Internal sizing helper
+// Internal sizing helper (exported for target-state diagnostics)
 // ---------------------------------------------------------------------------
 
 /**

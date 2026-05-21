@@ -35,13 +35,20 @@ export type RedeemTail =
 const BALANCED_TOLERANCE_BPS = 10n;
 const WAD = 10n ** 18n;
 
-function strategyAaveDebtToRepay(ctx: OpsContext): bigint {
+/** Slice of variable debt this batch unwinds (ceil partial repay); shared by classifier + ops execution. */
+export function strategyAaveDebtToRepay(ctx: OpsContext): bigint {
   if (ctx.aaveDebtFloor != null) {
     return ctx.aaveDebt > ctx.aaveDebtFloor ? ctx.aaveDebt - ctx.aaveDebtFloor : 0n;
   }
   if (ctx.strategyRedeemFraction >= WAD) return ctx.aaveDebt;
   if (ctx.strategyRedeemFraction === 0n || ctx.aaveDebt === 0n) return 0n;
   return (ctx.aaveDebt * ctx.strategyRedeemFraction + WAD - 1n) / WAD;
+}
+
+/** Debt retained after unwinding `strategyAaveDebtToRepay` from total `ctx.aaveDebt`. */
+export function strategyAaveDebtFloor(ctx: OpsContext): bigint {
+  const repay = strategyAaveDebtToRepay(ctx);
+  return ctx.aaveDebt > repay ? ctx.aaveDebt - repay : 0n;
 }
 
 // ---------------------------------------------------------------------------

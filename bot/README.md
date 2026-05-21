@@ -104,7 +104,7 @@ See `.env.example` for all required variables. Key ones:
 
 ### Redeem tail / spot dust thresholds
 
-Used by [`opsPlaybooks.ts`](src/batch/opsPlaybooks.ts) so the **rising** tail can skip tiny **11a** legs. Values are **human USDC amounts** (6 decimals), e.g. `2` means **$2.00`.
+Used by [`opsExec.ts`](src/batch/opsExec.ts) / [`targetStateEngine.ts`](src/batch/targetStateEngine.ts) so the **rising** tail can skip tiny **11a** legs. Values are **human USDC amounts** (6 decimals), e.g. `2` means **$2.00`.
 
 | Variable | When it applies | Behavior |
 |----------|-----------------|----------|
