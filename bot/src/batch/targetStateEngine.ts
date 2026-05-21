@@ -141,18 +141,6 @@ export async function computeMintDeltas(
     hlDepositUsdcEstimate = dPost === 0n ? cPost : cPost < dPost ? cPost : dPost;
   }
 
-  let hlMinUsdc = 10_000_000n;
-  try {
-    const raw = (process.env.HL_MIN_DEPOSIT_USDC || '10').trim();
-    const p = ethers.parseUnits(raw, 6);
-    hlMinUsdc = p > 0n ? p : hlMinUsdc;
-  } catch {
-    /* keep default */
-  }
-  if (hlDepositUsdcEstimate > 0n && hlDepositUsdcEstimate < hlMinUsdc) {
-    hlDepositUsdcEstimate = 0n;
-  }
-
   const openShortAssetEstimate = openShortAssetEstimateFromTargets(ctx, targets);
 
   return {

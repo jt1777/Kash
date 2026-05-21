@@ -363,21 +363,6 @@ export function openShortAssetEstimateFromTargets(ctx: OpsContext, targets: Mint
   return hlOpenShortContractSize(ctx, hlOpenShortDeltaInternal(ctx, targets));
 }
 
-function getHlCloseShortMinNotionalUsd18(): bigint {
-  const raw = process.env.HL_CLOSE_SHORT_MIN_NOTIONAL_USD || '11';
-  try {
-    const parsed = ethers.parseEther(raw);
-    return parsed > 0n ? parsed : 11n * WAD;
-  } catch {
-    return 11n * WAD;
-  }
-}
-
-function ceilDiv(a: bigint, b: bigint): bigint {
-  if (b <= 0n) throw new Error('ceilDiv divisor must be positive');
-  return (a + b - 1n) / b;
-}
-
 function getHlWithdrawFeeToleranceUsdc6(): bigint {
   const raw = process.env.HL_WITHDRAW_FEE_TOLERANCE_USDC || '1';
   try {
@@ -647,21 +632,6 @@ const hlDepositUsdc: OpStep = {
   execute: async (ctx) => {
     const amount = hlDepositUsdcAmount(ctx);
     if (amount === 0n) return;
-    const hlMinUsdc = (() => {
-      try {
-        const raw = (process.env.HL_MIN_DEPOSIT_USDC || '10').trim();
-        const p = ethers.parseUnits(raw, 6);
-        return p > 0n ? p : 10_000_000n;
-      } catch {
-        return 10_000_000n;
-      }
-    })();
-    if (amount < hlMinUsdc) {
-      console.warn(
-        `         ⚠️  Skipping HL deposit: ${fmtUsdc(amount)} below HL_MIN_DEPOSIT_USDC (${fmtUsdc(hlMinUsdc)}) — USDC stays on KashYield.`,
-      );
-      return;
-    }
     const c = ctx.contractUsdc;
     if (c > amount) {
       console.log(`         ${fmtUsdc(amount)} (keeping ${fmtUsdc(c - amount)} USDC on contract — not part of Aave borrow)`);
@@ -767,26 +737,6 @@ const hlCloseShort: OpStep = {
     if (closeSize === 0n) {
       console.log(`         strategy unwind is 0; no ${symbol} short close needed`);
       return;
-    }
-    const closeNotionalUsd18 = (closeSize * ctx.price) / WAD;
-    const minCloseNotionalUsd18 = getHlCloseShortMinNotionalUsd18();
-    if (closeNotionalUsd18 < minCloseNotionalUsd18) {
-      const halfMinCloseNotionalUsd18 = minCloseNotionalUsd18 / 2n;
-      if (closeNotionalUsd18 < halfMinCloseNotionalUsd18) {
-        console.log(
-          `         skip ${symbol} short close: ${fmtUsd(closeNotionalUsd18)} notional is below half of ` +
-            `${fmtUsd(minCloseNotionalUsd18)} HL_CLOSE_SHORT_MIN_NOTIONAL_USD`,
-        );
-        return;
-      }
-
-      const minCloseSize = ceilDiv(minCloseNotionalUsd18 * WAD, ctx.price);
-      const adjustedCloseSize = minCloseSize < fullSize ? minCloseSize : fullSize;
-      console.log(
-        `         round ${symbol} short close up from ${fmtUsd(closeNotionalUsd18)} to ` +
-          `${fmtUsd((adjustedCloseSize * ctx.price) / WAD)} notional to satisfy HL_CLOSE_SHORT_MIN_NOTIONAL_USD`,
-      );
-      closeSize = adjustedCloseSize;
     }
     if (closeSize >= fullSize) {
       console.log(`         closing full ${symbol} short`);
@@ -1714,37 +1664,97 @@ function hlUsdcPullBudget(ctx: OpsContext): bigint {
   return ctx.hlUsdcBalance > ctx.adapterUsdcErc20 ? ctx.hlUsdcBalance : ctx.adapterUsdcErc20;
 }
 
-/**
- * How much USDC to pull from HL during settlement retries. Partial redeems only pull up to the Aave
- * debt gap so we do not strand strategy collateral on HL incorrectly. Full redeems always pull the
- * full reported HL spot balance so pre-funded vault USDC cannot leave HL USDC behind.
- */
-function hlSettlementWithdrawAmount(ctx: OpsContext, debtRemaining: bigint): bigint {
-  const pullBudget = hlUsdcPullBudget(ctx);
-  if (pullBudget === 0n) return 0n;
-  if (isFullRedeemForHlSweep(ctx)) return pullBudget;
-  if (debtRemaining <= 0n) return 0n;
-  return pullBudget < debtRemaining ? pullBudget : debtRemaining;
+/** Ideal HL spot USDC after this batch's strategy unwind (fixed from HL balance at settlement start). */
+function targetHlUsdc6(initialHlUsdc: bigint, strategyRedeemFraction: bigint): bigint {
+  if (strategyRedeemFraction >= WAD) return 0n;
+  return (initialHlUsdc * (WAD - strategyRedeemFraction)) / WAD;
+}
+
+/** USDC on HL above ideal target — Δ toward target state (4). */
+function hlUsdcAboveTarget(ctx: OpsContext, targetHlUsdc: bigint): bigint {
+  return ctx.hlUsdcBalance > targetHlUsdc ? ctx.hlUsdcBalance - targetHlUsdc : 0n;
+}
+
+function hlUsdcAtTarget(
+  ctx: OpsContext,
+  targetHlUsdc: bigint,
+  dust: bigint,
+  feeTolerance: bigint,
+): boolean {
+  const above = hlUsdcAboveTarget(ctx, targetHlUsdc);
+  return above <= dust || above <= feeTolerance;
+}
+
+async function readRawContractUsdc6(ctx: OpsContext): Promise<bigint> {
+  if (!ctx.usdcAddress || ctx.usdcAddress === ethers.ZeroAddress) return 0n;
+  const contractAddr = config.kashYieldAddress || (await ctx.kashYield.getAddress());
+  const usdc = new ethers.Contract(
+    ctx.usdcAddress,
+    ['function balanceOf(address) view returns (uint256)'],
+    ctx.provider,
+  );
+  return BigInt((await usdc.balanceOf(contractAddr)).toString());
 }
 
 /**
- * HL API withdraw3 (L1→Arbitrum): request debt gap + ~$1 fee so net delivery ≈ gap after HL withdrawal fee.
+ * On-chain adapter pull toward ideal HL USDC (target state 4). Pulls min(adapter budget, HL excess above target).
+ */
+function hlSettlementWithdrawAmount(ctx: OpsContext, targetHlUsdc: bigint): bigint {
+  const pullBudget = hlUsdcPullBudget(ctx);
+  if (pullBudget === 0n) return 0n;
+  const above = hlUsdcAboveTarget(ctx, targetHlUsdc);
+  if (above === 0n) return 0n;
+  return pullBudget < above ? pullBudget : above;
+}
+
+/**
+ * HL API withdraw3 (L1→Arbitrum): bridge gross = HL excess above target + fee tolerance so ~$1 HL withdraw
+ * fee does not strand USDC or block “at target” detection.
  */
 function hlOffchainWithdraw3Amount(
   ctx: OpsContext,
-  debtRemaining: bigint,
+  targetHlUsdc: bigint,
   feeTolerance: bigint,
 ): bigint {
-  if (debtRemaining <= feeTolerance) return 0n;
-  const budget = debtRemaining + feeTolerance;
+  const above = hlUsdcAboveTarget(ctx, targetHlUsdc);
+  if (above <= feeTolerance) return 0n;
   const hl = ctx.hlUsdcBalance;
   if (hl === 0n) return 0n;
-  return budget < hl ? budget : hl;
+  const gross = above + feeTolerance;
+  return gross < hl ? gross : hl;
 }
 
-/** True when strategy debt shortfall is within HL withdraw fee tolerance (rising tail / coverUsdcShortfall handles dust). */
-function hlSettlementWithinFeeTolerance(ctx: OpsContext, feeTolerance: bigint): boolean {
-  return usdcShortfallVsContract(ctx) <= feeTolerance;
+/**
+ * When raw vault USDC covers strategy Aave repay but ownerUsdcReserve masks ops float, release reserve
+ * before tail repay/swap (accounting-only; tokens already on vault).
+ */
+async function ensureOpsUsdcCoverFromOwnerReserve(ctx: OpsContext): Promise<OpsContext> {
+  const debt = strategyAaveDebtToRepay(ctx);
+  if (debt === 0n || ctx.contractUsdc >= debt) return ctx;
+
+  const raw = await readRawContractUsdc6(ctx);
+  if (raw < debt) return ctx;
+
+  let reserve = 0n;
+  try {
+    reserve = BigInt((await ctx.kashYield.ownerUsdcReserve()).toString());
+  } catch {
+    return ctx;
+  }
+  if (reserve === 0n) return ctx;
+
+  const needCover = debt - ctx.contractUsdc;
+  const cover = needCover < reserve ? needCover : reserve;
+  if (cover <= 0n) return ctx;
+
+  console.log(
+    `   ↪ coverUsdcShortfall ${fmtUsdc(cover)} (raw ${fmtUsdc(raw)} on vault, strategy debt ${fmtUsdc(debt)}, ` +
+      `ops float was ${fmtUsdc(ctx.contractUsdc)})`,
+  );
+  await execTx('coverUsdcShortfall(settlement)', ctx.kashYield.coverUsdcShortfall(cover));
+  const next = await snapshotOpsContext(ctx.kashYield, ctx.provider, ctx.batchCycle, ctx.lockedNAV);
+  next.aaveDebtFloor = ctx.aaveDebtFloor;
+  return next;
 }
 
 function getHlSweepDustUsdc6(): bigint {
@@ -1817,58 +1827,75 @@ export async function waitForHlWithdrawSettlementIfNeeded(
 
   const enabled = (process.env.HL_WITHDRAW_WAIT_ENABLED || 'true').toLowerCase() !== 'false';
   const feeTolerance = getHlWithdrawFeeToleranceUsdc6();
+  const dust = getHlSweepDustUsdc6();
 
   if (!enabled) {
     return sweepRemainingHlUsdcAfterFullRedeem(ctx, lockedNAV);
   }
 
   let fresh = ctx;
+  const initialHlUsdc = fresh.hlUsdcBalance;
+  const targetHlUsdc = targetHlUsdc6(initialHlUsdc, fresh.strategyRedeemFraction);
 
-  if (fresh.aaveDebt === 0n) {
+  if (fresh.aaveDebt === 0n && hlUsdcAtTarget(fresh, targetHlUsdc, dust, feeTolerance)) {
     return sweepRemainingHlUsdcAfterFullRedeem(fresh, lockedNAV);
   }
 
-  const debtGap0 = usdcShortfallVsContract(fresh);
-  if (debtGap0 <= feeTolerance) {
-    // Debt already covered (e.g. pre-funded vault USDC) — still sweep HL so USDC is not stranded.
-    return sweepRemainingHlUsdcAfterFullRedeem(fresh, lockedNAV);
+  if (hlUsdcAtTarget(fresh, targetHlUsdc, dust, feeTolerance)) {
+    fresh = await ensureOpsUsdcCoverFromOwnerReserve(fresh);
+    const debtGap = usdcShortfallVsContract(fresh);
+    if (debtGap <= feeTolerance || fresh.aaveDebt === 0n) {
+      return sweepRemainingHlUsdcAfterFullRedeem(fresh, lockedNAV);
+    }
   }
 
   const maxMs = Math.max(0, parseInt(process.env.HL_WITHDRAW_WAIT_MAX_MS || '360000', 10)); // default 6 min
   const pollMs = Math.max(1000, parseInt(process.env.HL_WITHDRAW_WAIT_POLL_MS || '20000', 10)); // default 20s
   if (maxMs === 0) {
+    fresh = await ensureOpsUsdcCoverFromOwnerReserve(fresh);
     return sweepRemainingHlUsdcAfterFullRedeem(fresh, lockedNAV);
   }
 
   console.log(
-    `   ⏳ Waiting for HL withdrawal settlement (up to ${(maxMs / 1000).toFixed(0)}s, poll ${(pollMs / 1000).toFixed(0)}s)` +
-    ` — strategyDebt=${fmtUsdc(strategyAaveDebtToRepay(fresh))}, totalDebt=${fmtUsdc(fresh.aaveDebt)}, contractUsdc=${fmtUsdc(fresh.contractUsdc)}, ` +
-    `adapterUsdc=${fmtUsdc(fresh.adapterUsdcErc20)}, hlUsdc=${fmtUsdc(fresh.hlUsdcBalance)}`,
+    `   ⏳ Waiting for HL USDC → target ${fmtUsdc(targetHlUsdc)} (Δ from ${fmtUsdc(initialHlUsdc)} HL spot, ` +
+      `fee tolerance ${fmtUsdc(feeTolerance)}, up to ${(maxMs / 1000).toFixed(0)}s, poll ${(pollMs / 1000).toFixed(0)}s)`,
+  );
+  console.log(
+    `      strategyDebt=${fmtUsdc(strategyAaveDebtToRepay(fresh))}, totalDebt=${fmtUsdc(fresh.aaveDebt)}, ` +
+      `contractUsdc=${fmtUsdc(fresh.contractUsdc)}, adapterUsdc=${fmtUsdc(fresh.adapterUsdcErc20)}, ` +
+      `hlUsdc=${fmtUsdc(fresh.hlUsdcBalance)}`,
   );
 
   const started = Date.now();
   let attempts = 0;
-  let withdrawInitiated = false;
+  let lastWithdraw3Above = 0n;
 
   while (Date.now() - started < maxMs) {
-    const debtRemaining = usdcShortfallVsContract(fresh);
-    if (debtRemaining <= feeTolerance) break;
+    const above = hlUsdcAboveTarget(fresh, targetHlUsdc);
+    if (hlUsdcAtTarget(fresh, targetHlUsdc, dust, feeTolerance)) {
+      break;
+    }
 
-    const pullAmt = hlSettlementWithdrawAmount(fresh, debtRemaining);
-    const withdraw3Amt = hlOffchainWithdraw3Amount(fresh, debtRemaining, feeTolerance);
-
-    if (!withdrawInitiated && withdraw3Amt > 0n && fresh.hlUsdcBalance > 0n) {
-      try {
-        await maybeInitiateHlOffchainWithdraw(fresh, withdraw3Amt);
-        withdrawInitiated = true;
-      } catch (e: any) {
-        console.warn(`      ⚠️  HL off-chain withdraw initiation failed: ${e?.message ?? e}`);
+    const withdraw3Amt = hlOffchainWithdraw3Amount(fresh, targetHlUsdc, feeTolerance);
+    if (withdraw3Amt > 0n && fresh.hlUsdcBalance > 0n) {
+      const shouldBridge = lastWithdraw3Above === 0n || above < lastWithdraw3Above;
+      if (shouldBridge) {
+        try {
+          await maybeInitiateHlOffchainWithdraw(fresh, withdraw3Amt);
+          lastWithdraw3Above = above;
+        } catch (e: any) {
+          console.warn(`      ⚠️  HL off-chain withdraw initiation failed: ${e?.message ?? e}`);
+        }
       }
     }
 
+    const pullAmt = hlSettlementWithdrawAmount(fresh, targetHlUsdc);
     if (pullAmt > 0n) {
       attempts++;
-      console.log(`      ↪ settlement retry #${attempts}: withdraw ${fmtUsdc(pullAmt)} from HL`);
+      console.log(
+        `      ↪ settlement retry #${attempts}: withdraw ${fmtUsdc(pullAmt)} from HL ` +
+          `(excess above target ${fmtUsdc(above)})`,
+      );
       try {
         const { received } = await execHlWithdrawToKashYield(fresh, `withdrawFromHyperliquid(retry#${attempts})`, pullAmt);
         await syncHlAdapterFromHyperliquidApi(fresh, true);
@@ -1876,14 +1903,13 @@ export async function waitForHlWithdrawSettlementIfNeeded(
           const nextFresh = await snapshotOpsContext(fresh.kashYield, fresh.provider, fresh.batchCycle, lockedNAV);
           nextFresh.aaveDebtFloor = fresh.aaveDebtFloor;
           fresh = nextFresh;
-          const shortfallAfterDelivery = usdcShortfallVsContract(fresh);
           console.log(
             `      ↪ settlement post-delivery: contractUsdc=${fmtUsdc(fresh.contractUsdc)}, ` +
-              `strategyDebt=${fmtUsdc(strategyAaveDebtToRepay(fresh))}, shortfall=${fmtUsdc(shortfallAfterDelivery)}`,
+              `hlUsdc=${fmtUsdc(fresh.hlUsdcBalance)}, excessAboveTarget=${fmtUsdc(hlUsdcAboveTarget(fresh, targetHlUsdc))}`,
           );
-          if (hlSettlementWithinFeeTolerance(fresh, feeTolerance)) {
+          if (hlUsdcAtTarget(fresh, targetHlUsdc, dust, feeTolerance)) {
             console.log(
-              `      ↪ shortfall within HL fee tolerance after delivery — stopping settlement (remaining dust → tail / coverUsdcShortfall)`,
+              `      ↪ HL USDC at target ${fmtUsdc(targetHlUsdc)} (±${fmtUsdc(dust)} after fee tolerance)`,
             );
             break;
           }
@@ -1898,29 +1924,42 @@ export async function waitForHlWithdrawSettlementIfNeeded(
     nextFresh.aaveDebtFloor = fresh.aaveDebtFloor;
     fresh = nextFresh;
     console.log(
-      `      ↪ settlement status: contractUsdc=${fmtUsdc(fresh.contractUsdc)}, strategyDebt=${fmtUsdc(strategyAaveDebtToRepay(fresh))}, totalDebt=${fmtUsdc(fresh.aaveDebt)}, ` +
-        `hlUsdc=${fmtUsdc(fresh.hlUsdcBalance)}, adapterUsdc=${fmtUsdc(fresh.adapterUsdcErc20)}`,
+      `      ↪ settlement status: hlUsdc=${fmtUsdc(fresh.hlUsdcBalance)}, target=${fmtUsdc(targetHlUsdc)}, ` +
+        `excess=${fmtUsdc(hlUsdcAboveTarget(fresh, targetHlUsdc))}, contractUsdc=${fmtUsdc(fresh.contractUsdc)}, ` +
+        `adapterUsdc=${fmtUsdc(fresh.adapterUsdcErc20)}`,
     );
-    if (hlSettlementWithinFeeTolerance(fresh, feeTolerance)) {
+    if (hlUsdcAtTarget(fresh, targetHlUsdc, dust, feeTolerance)) {
       break;
     }
   }
 
-  const finalShortfall = usdcShortfallVsContract(fresh);
-  if (finalShortfall > feeTolerance && hlUsdcPullBudget(fresh) > feeTolerance) {
+  fresh = await ensureOpsUsdcCoverFromOwnerReserve(fresh);
+
+  const aboveFinal = hlUsdcAboveTarget(fresh, targetHlUsdc);
+  const pullBudgetFinal = hlUsdcPullBudget(fresh);
+  if (
+    aboveFinal > feeTolerance &&
+    (fresh.hlUsdcBalance > targetHlUsdc + feeTolerance || pullBudgetFinal > feeTolerance)
+  ) {
     throw new Error(
-      `HL withdraw settlement incomplete: contract USDC ${fmtUsdc(fresh.contractUsdc)} < strategy Aave debt target ${fmtUsdc(strategyAaveDebtToRepay(fresh))} ` +
-        `(shortfall ${fmtUsdc(finalShortfall)}, total Aave debt ${fmtUsdc(fresh.aaveDebt)}). Stopping before tail classification; wait for HL USDC to arrive, then re-run ops.`,
+      `HL USDC settlement incomplete: HL spot ${fmtUsdc(fresh.hlUsdcBalance)} still ${fmtUsdc(aboveFinal)} above ` +
+        `target ${fmtUsdc(targetHlUsdc)} (adapter/HL pull budget ${fmtUsdc(pullBudgetFinal)}). ` +
+        'Wait for HL bridge delivery or re-run ops.',
     );
   }
+
+  const finalShortfall = usdcShortfallVsContract(fresh);
   if (finalShortfall > feeTolerance) {
     console.log(
-      `   ↪ HL settlement has no remaining pull budget; proceeding to rising tail with strategy debt shortfall=${fmtUsdc(finalShortfall)}`,
+      `   ↪ HL USDC at target; proceeding to tail with strategy repay shortfall ${fmtUsdc(finalShortfall)} ` +
+        '(rising tail / coverUsdcShortfall may apply)',
     );
   } else if (finalShortfall > 0n) {
-    console.log(`   ✅ HL settlement wait complete within fee tolerance: shortfall=${fmtUsdc(finalShortfall)} (tolerance ${fmtUsdc(feeTolerance)})`);
+    console.log(
+      `   ✅ HL settlement complete: USDC at target within fee tolerance (repay shortfall ${fmtUsdc(finalShortfall)})`,
+    );
   } else {
-    console.log('   ✅ HL settlement wait complete: contract USDC now covers strategy Aave debt target');
+    console.log('   ✅ HL settlement complete: HL USDC at target and strategy debt covered by ops float');
   }
 
   return sweepRemainingHlUsdcAfterFullRedeem(fresh, lockedNAV);
