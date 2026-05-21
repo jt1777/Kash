@@ -1727,6 +1727,26 @@ function hlSettlementWithdrawAmount(ctx: OpsContext, debtRemaining: bigint): big
   return pullBudget < debtRemaining ? pullBudget : debtRemaining;
 }
 
+/**
+ * HL API withdraw3 (L1→Arbitrum): request debt gap + ~$1 fee so net delivery ≈ gap after HL withdrawal fee.
+ */
+function hlOffchainWithdraw3Amount(
+  ctx: OpsContext,
+  debtRemaining: bigint,
+  feeTolerance: bigint,
+): bigint {
+  if (debtRemaining <= feeTolerance) return 0n;
+  const budget = debtRemaining + feeTolerance;
+  const hl = ctx.hlUsdcBalance;
+  if (hl === 0n) return 0n;
+  return budget < hl ? budget : hl;
+}
+
+/** True when strategy debt shortfall is within HL withdraw fee tolerance (rising tail / coverUsdcShortfall handles dust). */
+function hlSettlementWithinFeeTolerance(ctx: OpsContext, feeTolerance: bigint): boolean {
+  return usdcShortfallVsContract(ctx) <= feeTolerance;
+}
+
 function getHlSweepDustUsdc6(): bigint {
   try {
     const u = process.env.HL_SWEEP_DUST_USDC || '0.01';
@@ -1835,10 +1855,11 @@ export async function waitForHlWithdrawSettlementIfNeeded(
     if (debtRemaining <= feeTolerance) break;
 
     const pullAmt = hlSettlementWithdrawAmount(fresh, debtRemaining);
+    const withdraw3Amt = hlOffchainWithdraw3Amount(fresh, debtRemaining, feeTolerance);
 
-    if (!withdrawInitiated && pullAmt > 0n && fresh.hlUsdcBalance > 0n) {
+    if (!withdrawInitiated && withdraw3Amt > 0n && fresh.hlUsdcBalance > 0n) {
       try {
-        await maybeInitiateHlOffchainWithdraw(fresh, pullAmt);
+        await maybeInitiateHlOffchainWithdraw(fresh, withdraw3Amt);
         withdrawInitiated = true;
       } catch (e: any) {
         console.warn(`      ⚠️  HL off-chain withdraw initiation failed: ${e?.message ?? e}`);
@@ -1849,8 +1870,24 @@ export async function waitForHlWithdrawSettlementIfNeeded(
       attempts++;
       console.log(`      ↪ settlement retry #${attempts}: withdraw ${fmtUsdc(pullAmt)} from HL`);
       try {
-        await execHlWithdrawToKashYield(fresh, `withdrawFromHyperliquid(retry#${attempts})`, pullAmt);
+        const { received } = await execHlWithdrawToKashYield(fresh, `withdrawFromHyperliquid(retry#${attempts})`, pullAmt);
         await syncHlAdapterFromHyperliquidApi(fresh, true);
+        if (received > 0n) {
+          const nextFresh = await snapshotOpsContext(fresh.kashYield, fresh.provider, fresh.batchCycle, lockedNAV);
+          nextFresh.aaveDebtFloor = fresh.aaveDebtFloor;
+          fresh = nextFresh;
+          const shortfallAfterDelivery = usdcShortfallVsContract(fresh);
+          console.log(
+            `      ↪ settlement post-delivery: contractUsdc=${fmtUsdc(fresh.contractUsdc)}, ` +
+              `strategyDebt=${fmtUsdc(strategyAaveDebtToRepay(fresh))}, shortfall=${fmtUsdc(shortfallAfterDelivery)}`,
+          );
+          if (hlSettlementWithinFeeTolerance(fresh, feeTolerance)) {
+            console.log(
+              `      ↪ shortfall within HL fee tolerance after delivery — stopping settlement (remaining dust → tail / coverUsdcShortfall)`,
+            );
+            break;
+          }
+        }
       } catch (e: any) {
         console.warn(`      ⚠️  settlement retry #${attempts} failed: ${e?.message ?? e}`);
       }
@@ -1864,8 +1901,9 @@ export async function waitForHlWithdrawSettlementIfNeeded(
       `      ↪ settlement status: contractUsdc=${fmtUsdc(fresh.contractUsdc)}, strategyDebt=${fmtUsdc(strategyAaveDebtToRepay(fresh))}, totalDebt=${fmtUsdc(fresh.aaveDebt)}, ` +
         `hlUsdc=${fmtUsdc(fresh.hlUsdcBalance)}, adapterUsdc=${fmtUsdc(fresh.adapterUsdcErc20)}`,
     );
-    const shortfallNow = usdcShortfallVsContract(fresh);
-    if (shortfallNow <= feeTolerance) break;
+    if (hlSettlementWithinFeeTolerance(fresh, feeTolerance)) {
+      break;
+    }
   }
 
   const finalShortfall = usdcShortfallVsContract(fresh);

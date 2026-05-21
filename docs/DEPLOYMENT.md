@@ -91,7 +91,7 @@ Hyperliquid bridges USDC to **whichever Arbitrum address you specify** (HL API `
 **Operational rules**
 
 - **Always** set the HL withdrawal **destination** to your deployed **HyperliquidAdapter** address for protocol float—not the KashYield vault by default unless your runbook explicitly allows it, and **not** an operator EOA unless you intend temporary custody outside the adapter.
-- Prefer **automated** withdrawals: bot `withdraw3` with `destination =` adapter (same pattern as `maybeInitiateHlOffchainWithdraw` in `bot/src/batch/opsPlaybooks.ts`). If you use the **HL web app**, open the destination field and **paste the adapter address**; do **not** assume the default “linked wallet” is correct.
+- Prefer **automated** withdrawals: bot `withdraw3` with `destination =` adapter (same pattern as `maybeInitiateHlOffchainWithdraw` in `bot/src/batch/opsExec.ts`). If you use the **HL web app**, open the destination field and **paste the adapter address**; do **not** assume the default “linked wallet” is correct.
 - After USDC lands on Arbitrum, confirm **`USDC.balanceOf(adapter)`** (script `08-withdraw-usdc-from-perp.js` prints this) before expecting `08` to move meaningful balances.
 
 **`directDepositMode` and why the bot EOA is risky**
