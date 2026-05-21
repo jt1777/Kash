@@ -134,14 +134,18 @@ export async function executeDeltaPipeline(
   return ctx;
 }
 
-/** NET_MINT: collateral deposit → borrow → HL USDC collateral → extend short. */
-export async function executeMintDeltaPipeline(ctx: OpsContext, netMintUSD: bigint): Promise<OpsContext> {
+/** NET_MINT: collateral deposit → borrow → HL USDC collateral → extend short (Δ derived at execute from targets + fresh ctx). */
+export async function executeMintDeltaPipeline(
+  ctx: OpsContext,
+  netMintUSD: bigint,
+  shortTargets: MintHlShortTargets,
+): Promise<OpsContext> {
   return executeDeltaPipeline(
     [
       { deltaId: 'Δmint deposit→Aave', step: aaveDepositNetMint(netMintUSD) },
       { deltaId: 'Δmint borrow→LTV', step: aaveBorrow },
       { deltaId: 'Δmint USDC→HL', step: hlDepositUsdc },
-      { deltaId: 'Δmint openShort', step: hlOpenShort(netMintUSD) },
+      { deltaId: 'Δmint openShort', step: hlOpenShort(shortTargets) },
     ],
     ctx,
   );
@@ -336,6 +340,28 @@ function fmtHlPerpSize(v: bigint, ctx: OpsContext): string {
 }
 function fmtUsd(v: bigint): string { return '$' + ethers.formatEther(v); }
 const WAD = 10n ** 18n;
+
+/** Target HL short from `computeTargets` (18-dec internal perp units, same basis as `ctx.shortSize`). */
+export interface MintHlShortTargets {
+  targetHlShortInternal18: bigint;
+}
+
+export function hlOpenShortDeltaInternal(ctx: OpsContext, targets: MintHlShortTargets): bigint {
+  return targets.targetHlShortInternal18 > ctx.shortSize
+    ? targets.targetHlShortInternal18 - ctx.shortSize
+    : 0n;
+}
+
+/** KashYield `openShort` size from internal perp Δ (wBTC 8 dec; ETH 18 dec). */
+export function hlOpenShortContractSize(ctx: OpsContext, deltaInternal: bigint): bigint {
+  if (deltaInternal <= 0n) return 0n;
+  return ctx.isBtc ? (deltaInternal * (10n ** 8n)) / WAD : deltaInternal;
+}
+
+/** Pre-flight log sizing — same conversion as {@link hlOpenShort} at execution time. */
+export function openShortAssetEstimateFromTargets(ctx: OpsContext, targets: MintHlShortTargets): bigint {
+  return hlOpenShortContractSize(ctx, hlOpenShortDeltaInternal(ctx, targets));
+}
 
 function getHlCloseShortMinNotionalUsd18(): bigint {
   const raw = process.env.HL_CLOSE_SHORT_MIN_NOTIONAL_USD || '11';
@@ -659,32 +685,40 @@ const hlDepositUsdc: OpStep = {
   },
 };
 
-/** 05 — Open or extend short on Hyperliquid */
-const hlOpenShort = (netMintUSD: bigint): OpStep => ({
+/**
+ * 05 — Open or extend short: incremental size from target-state Δ recomputed at canSkip/execute
+ * (after borrow + HL deposit refresh) so idempotent re-runs see updated ctx.shortSize.
+ *
+ * Known edge case (wBTC): a positive internal Δ can round to 0 contract units
+ * `(Δ * 10^8) / 10^18` — sub-satoshi, no economic impact; step is a no-op.
+ */
+const hlOpenShort = (shortTargets: MintHlShortTargets): OpStep => ({
   id: 'hl_open_short',
   substep: 'hl',
   describe: (ctx) => {
-    const leverage = config.strategy.shortLeverage;
-    const leverageScaled = BigInt(Math.round(leverage * 100));
-    const deployableNetMintUSD = netMintUSD; // exact after-fee size is recomputed at execution time
-    const shortSizeUSD = (deployableNetMintUSD * leverageScaled) / 100n;
-    const shortSizeAsset = (shortSizeUSD * (10n ** ctx.assetDecimals)) / ctx.price;
-    return `open/extend ${leverage}x ${ctx.assetSymbol} short — after-fee notional up to ${fmtAsset(shortSizeAsset, ctx)}`;
+    const deltaInternal = hlOpenShortDeltaInternal(ctx, shortTargets);
+    const sizeOpen = hlOpenShortContractSize(ctx, deltaInternal);
+    if (sizeOpen === 0n) {
+      return deltaInternal > 0n
+        ? `no openShort (internal Δ ${fmtHlPerpSize(deltaInternal, ctx)} rounds to 0 ${ctx.assetSymbol} — sub-dust)`
+        : `no openShort increment (already at target short)`;
+    }
+    return `open/extend short by +${fmtAsset(sizeOpen, ctx)} (target-state Δ; internal ${fmtHlPerpSize(deltaInternal, ctx)})`;
   },
-  canSkip: async (ctx) => {
-    // Only skip if short exists AND we didn't deposit new USDC collateral this run
-    // (extendShort=true if new USDC was deposited; checked via aave borrow delta elsewhere)
-    // Safe fallback: never skip if no short exists yet
-    return false;
-  },
+  canSkip: async (ctx) => hlOpenShortContractSize(ctx, hlOpenShortDeltaInternal(ctx, shortTargets)) === 0n,
   execute: async (ctx) => {
-    const leverageScaled = BigInt(Math.round(config.strategy.shortLeverage * 100));
-    const deployableNetMintUSD = await computeDeployableNetMintUsd(ctx, netMintUSD);
-    const shortSizeUSD = (deployableNetMintUSD * leverageScaled) / 100n;
-    if (shortSizeUSD === 0n) return;
-    const size = (shortSizeUSD * (10n ** ctx.assetDecimals)) / ctx.price;
+    const deltaInternal = hlOpenShortDeltaInternal(ctx, shortTargets);
+    const size = hlOpenShortContractSize(ctx, deltaInternal);
+    if (size === 0n) {
+      if (deltaInternal > 0n) {
+        console.log(
+          `         skip openShort: internal Δ ${fmtHlPerpSize(deltaInternal, ctx)} rounds to 0 on-chain size (sub-dust; no economic impact)`,
+        );
+      }
+      return;
+    }
     const symbol = ctx.assetSymbol;
-    console.log(`         open/extend ${ctx.assetSymbol} short: notional=${fmtAsset(size, ctx)}`);
+    console.log(`         open/extend ${ctx.assetSymbol} short: incremental notional=${fmtAsset(size, ctx)}`);
     const tx = await ctx.kashYield.openShort(symbol, size);
     await tx.wait();
     console.log('      → openShort confirmed');
@@ -1855,8 +1889,8 @@ export async function waitForHlWithdrawSettlementIfNeeded(
 }
 
 /** Ordered mint OpSteps — deposit → borrow → HL USDC collateral → open short (parity with legacy playbook). */
-export function buildMintOpSteps(netMintUSD: bigint): OpStep[] {
-  return [aaveDepositNetMint(netMintUSD), aaveBorrow, hlDepositUsdc, hlOpenShort(netMintUSD)];
+export function buildMintOpSteps(netMintUSD: bigint, shortTargets: MintHlShortTargets): OpStep[] {
+  return [aaveDepositNetMint(netMintUSD), aaveBorrow, hlDepositUsdc, hlOpenShort(shortTargets)];
 }
 
 /** Redeem core: proportional HL close + withdraw USDC to vault. */

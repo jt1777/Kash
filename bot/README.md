@@ -114,6 +114,8 @@ Used by [`opsExec.ts`](src/batch/opsExec.ts) / [`targetStateEngine.ts`](src/batc
 
 Swaps **above** the rising-tail threshold still use on-chain **`minOut`** from Chainlink + slippage settings in the vault; **`SMALL_SWAP_SKIP_MAX_USDC`** only gates **whether** the bot submits **11a** for small USDC shortfalls.
 
+**Mint `openShort` (wBTC):** internal target short Δ is stored in 18-dec perp units; on-chain `openShort` uses 8-dec wBTC. If `(Δ * 10^8) / 10^18` rounds to **0**, the step is a deliberate no-op (sub-satoshi — no economic impact).
+
 ## Bot Components
 
 ### Batch Processor

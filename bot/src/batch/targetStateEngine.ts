@@ -26,6 +26,8 @@ import {
   executeMintDeltaPipeline,
   executeRedeemCoreDeltaPipeline,
   executeRedeemTailDeltaPipeline,
+  hlOpenShortDeltaInternal,
+  openShortAssetEstimateFromTargets,
 } from './opsExec';
 
 const WAD = 10n ** 18n;
@@ -110,8 +112,13 @@ export async function computeTargets(
 
 /**
  * Structured mint deltas after deposit+borrow estimates (matches `hlDepositUsdcAmount` intent post-borrow).
+ * `openShortAssetEstimate` uses the same target-short − current formula as {@link hlOpenShort} at execute time.
  */
-export async function computeMintDeltas(ctx: OpsContext, netMintUSD: bigint): Promise<MintDeltas> {
+export async function computeMintDeltas(
+  ctx: OpsContext,
+  netMintUSD: bigint,
+  targets: Targets,
+): Promise<MintDeltas> {
   const depositAsset = await computeNetMintAaveDepositAmount(ctx, netMintUSD);
   const addUsd =
     ctx.isBtc
@@ -146,11 +153,7 @@ export async function computeMintDeltas(ctx: OpsContext, netMintUSD: bigint): Pr
     hlDepositUsdcEstimate = 0n;
   }
 
-  const deployUsd = await computeDeployableNetMintUsd(ctx, netMintUSD);
-  const levScaled = BigInt(Math.round(config.strategy.shortLeverage * 100));
-  const shortUsdInc = (deployUsd * levScaled) / 100n;
-  const openShortAssetEstimate =
-    shortUsdInc === 0n ? 0n : (shortUsdInc * (10n ** ctx.assetDecimals)) / ctx.price;
+  const openShortAssetEstimate = openShortAssetEstimateFromTargets(ctx, targets);
 
   return {
     depositAsset,
@@ -197,7 +200,9 @@ export async function runTargetStateEngine(
     console.log(`\n💰 NET_MINT (${ctx.assetSymbol}) — deploying ${fmtUsd(netMintUSD)} net capital (delta engine phase 2)\n`);
 
     const targets = await computeTargets(ctx, scenario, netMintUSD);
-    const mintDeltas = await computeMintDeltas(ctx, netMintUSD);
+    const mintDeltas = await computeMintDeltas(ctx, netMintUSD, targets);
+
+    const deltaShortInternal = hlOpenShortDeltaInternal(ctx, targets);
 
     console.log('   ─── Mint targets (batch sizing vs snapshot) ───');
     console.log(
@@ -210,9 +215,12 @@ export async function runTargetStateEngine(
       `   Δdeposit(asset)=${ethers.formatUnits(mintDeltas.depositAsset, Number(ctx.assetDecimals))} ${ctx.assetSymbol}`,
     );
     logMintDeltas(mintDeltas, ctx);
+    console.log(
+      `   Δshort(internal)=${ethers.formatUnits(deltaShortInternal, 18)} (targetHlShort − current at snapshot; openShort recomputes after borrow/deposit)`,
+    );
     console.log('');
 
-    await executeMintDeltaPipeline(ctx, netMintUSD);
+    await executeMintDeltaPipeline(ctx, netMintUSD, targets);
     return;
   }
 
