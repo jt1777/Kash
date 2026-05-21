@@ -1,9 +1,9 @@
 /**
- * Target-state ops engine — batches Hyperliquid + Aave flows via shared OpSteps (`opsExec`).
+ * Target-state ops engine (phase 2): **computed mint deltas** for pre-flight logs +
+ * **delta pipelines** (`execute*DeltaPipeline` in `opsExec`) instead of generic `runPlaybook`
+ * for NET_MINT / NET_REDEEM batch ops.
  *
- * Computes an illustrative target snapshot (deposit / borrow / short) for logs and dry-run,
- * then executes the same battle-tested txs as the legacy playbook with corrected **falling**
- * tail ordering: repay → Aave withdraw → USDC→asset swap for redeem gaps.
+ * Redeem **falling** tail order remains: repay → Aave withdraw → 11b swap.
  */
 
 import { ethers } from 'ethers';
@@ -16,19 +16,16 @@ import {
   tailLabel,
   strategyAaveDebtToRepay,
   strategyAaveDebtFloor,
-  type RedeemTail,
 } from './opsClassifier';
 import {
-  runPlaybook,
-  buildMintOpSteps,
-  buildRedeemCoreOpSteps,
-  buildRedeemTailOpStepsBalanced,
-  buildRedeemTailOpStepsFalling,
-  buildRedeemTailOpStepsRising,
   waitForHlWithdrawSettlementIfNeeded,
   computeDeployableNetMintUsd,
   computeNetMintAaveDepositAmount,
   readBatchMintDeployedToAave,
+  getAaveAvailableBorrowUsdc6,
+  executeMintDeltaPipeline,
+  executeRedeemCoreDeltaPipeline,
+  executeRedeemTailDeltaPipeline,
 } from './opsExec';
 
 const WAD = 10n ** 18n;
@@ -40,6 +37,14 @@ export interface Targets {
   targetHlShortInternal18: bigint;
   /** Target USDC debt if collateral matched ideal deposit × LTV (6 dec). */
   targetAaveBorrowUsdc: bigint;
+}
+
+/** Pre-execution mint Δ estimates (snapshot-time; refreshed on-chain state may differ slightly). */
+export interface MintDeltas {
+  depositAsset: bigint;
+  borrowDeltaUsdcEstimate: bigint;
+  hlDepositUsdcEstimate: bigint;
+  openShortAssetEstimate: bigint;
 }
 
 function fmtUsd(v: bigint): string {
@@ -103,6 +108,58 @@ export async function computeTargets(
   };
 }
 
+/**
+ * Structured mint deltas after deposit+borrow estimates (matches `hlDepositUsdcAmount` intent post-borrow).
+ */
+export async function computeMintDeltas(ctx: OpsContext, netMintUSD: bigint): Promise<MintDeltas> {
+  const depositAsset = await computeNetMintAaveDepositAmount(ctx, netMintUSD);
+  const addUsd =
+    ctx.isBtc
+      ? (depositAsset * ctx.price) / (10n ** 8n)
+      : (depositAsset * ctx.price) / (10n ** 18n);
+  const supAfterUsd = suppliedUsd(ctx) + addUsd;
+  const ltv = BigInt(config.strategy.borrowLtvPct);
+  const targetDebtUsdc = (supAfterUsd * ltv) / 100n / (10n ** 12n);
+  let borrowDeltaUsdcEstimate =
+    targetDebtUsdc > ctx.aaveDebt ? targetDebtUsdc - ctx.aaveDebt : 0n;
+  const avail = await getAaveAvailableBorrowUsdc6(ctx);
+  if (borrowDeltaUsdcEstimate > avail) {
+    borrowDeltaUsdcEstimate = avail;
+  }
+
+  const cPost = ctx.contractUsdc + borrowDeltaUsdcEstimate;
+  const dPost = ctx.aaveDebt + borrowDeltaUsdcEstimate;
+  let hlDepositUsdcEstimate = 0n;
+  if (cPost > 0n) {
+    hlDepositUsdcEstimate = dPost === 0n ? cPost : cPost < dPost ? cPost : dPost;
+  }
+
+  let hlMinUsdc = 10_000_000n;
+  try {
+    const raw = (process.env.HL_MIN_DEPOSIT_USDC || '10').trim();
+    const p = ethers.parseUnits(raw, 6);
+    hlMinUsdc = p > 0n ? p : hlMinUsdc;
+  } catch {
+    /* keep default */
+  }
+  if (hlDepositUsdcEstimate > 0n && hlDepositUsdcEstimate < hlMinUsdc) {
+    hlDepositUsdcEstimate = 0n;
+  }
+
+  const deployUsd = await computeDeployableNetMintUsd(ctx, netMintUSD);
+  const levScaled = BigInt(Math.round(config.strategy.shortLeverage * 100));
+  const shortUsdInc = (deployUsd * levScaled) / 100n;
+  const openShortAssetEstimate =
+    shortUsdInc === 0n ? 0n : (shortUsdInc * (10n ** ctx.assetDecimals)) / ctx.price;
+
+  return {
+    depositAsset,
+    borrowDeltaUsdcEstimate,
+    hlDepositUsdcEstimate,
+    openShortAssetEstimate,
+  };
+}
+
 function logTargets(label: string, t: Targets, ctx: OpsContext): void {
   console.log(`   ${label} Δdeposit(asset)=${ethers.formatUnits(t.deltaAaveDepositAsset, Number(ctx.assetDecimals))} ${ctx.assetSymbol}`);
   console.log(
@@ -111,15 +168,14 @@ function logTargets(label: string, t: Targets, ctx: OpsContext): void {
   console.log(`   ${label} ideal Aave borrow≈${ethers.formatUnits(t.targetAaveBorrowUsdc, 6)} USDC @ ${config.strategy.borrowLtvPct}% LTV`);
 }
 
-function redeemTailSteps(tail: RedeemTail, lockedNAV: bigint | undefined) {
-  switch (tail) {
-    case 'falling':
-      return buildRedeemTailOpStepsFalling(lockedNAV);
-    case 'rising':
-      return buildRedeemTailOpStepsRising();
-    case 'balanced':
-      return buildRedeemTailOpStepsBalanced();
-  }
+function logMintDeltas(d: MintDeltas, ctx: OpsContext): void {
+  console.log(
+    `   Δborrow(usdc, est)=${ethers.formatUnits(d.borrowDeltaUsdcEstimate, 6)} USDC ` +
+      `(Aave headroom-capped); ΔhlDeposit(usdc, est)=${ethers.formatUnits(d.hlDepositUsdcEstimate, 6)} USDC`,
+  );
+  console.log(
+    `   ΔopenShort(asset, est)=${ethers.formatUnits(d.openShortAssetEstimate, Number(ctx.assetDecimals))} ${ctx.assetSymbol}`,
+  );
 }
 
 /** Primary batch ops entry — replaces legacy `runMintPlaybook` / `runRedeemPlaybook`. */
@@ -138,33 +194,42 @@ export async function runTargetStateEngine(
       return;
     }
 
-    console.log(`\n💰 NET_MINT (${ctx.assetSymbol}) — deploying ${fmtUsd(netMintUSD)} net capital (target-state engine)\n`);
+    console.log(`\n💰 NET_MINT (${ctx.assetSymbol}) — deploying ${fmtUsd(netMintUSD)} net capital (delta engine phase 2)\n`);
 
     const targets = await computeTargets(ctx, scenario, netMintUSD);
+    const mintDeltas = await computeMintDeltas(ctx, netMintUSD);
+
     console.log('   ─── Mint targets (batch sizing vs snapshot) ───');
     console.log(
       `   deployUSD(after fee − redeem USD)=${fmtUsd(await computeDeployableNetMintUsd(ctx, netMintUSD))}, ` +
         `batchDepositTracked=${ethers.formatUnits(await readBatchMintDeployedToAave(ctx), Number(ctx.assetDecimals))} ${ctx.assetSymbol}`,
     );
     logTargets('mint', targets, ctx);
+    console.log('   ─── Mint deltas (estimated, pre-run) ───');
+    console.log(
+      `   Δdeposit(asset)=${ethers.formatUnits(mintDeltas.depositAsset, Number(ctx.assetDecimals))} ${ctx.assetSymbol}`,
+    );
+    logMintDeltas(mintDeltas, ctx);
     console.log('');
 
-    await runPlaybook(buildMintOpSteps(netMintUSD), ctx);
+    await executeMintDeltaPipeline(ctx, netMintUSD);
     return;
   }
 
   if (scenario === 'redeem_hl') {
     console.log(
       `\n💸 NET_REDEEM (${ctx.assetSymbol}) — gross redeem ${(Number(ctx.redeemFraction) / 1e16).toFixed(2)}%, ` +
-        `strategy unwind ${(Number(ctx.strategyRedeemFraction) / 1e16).toFixed(2)}% (target-state engine)\n`,
+        `strategy unwind ${(Number(ctx.strategyRedeemFraction) / 1e16).toFixed(2)}% (delta engine phase 2)\n`,
     );
 
     const targets = await computeTargets(ctx, scenario, netMintUSD);
     console.log('   ─── Redeem targets (illustrative unwind vs snapshot) ───');
     logTargets('redeem', targets, ctx);
-    console.log('');
+    console.log(
+      '   ─── Redeem deltas (execution order: Δredeem hl_close_short → hl_withdraw_usdc → settlement → tail phases) ───\n',
+    );
 
-    await runPlaybook(buildRedeemCoreOpSteps(), ctx);
+    await executeRedeemCoreDeltaPipeline(ctx);
 
     let freshCtx = await snapshotOpsContext(ctx.kashYield, ctx.provider, ctx.batchCycle, lockedNAV);
     freshCtx.aaveDebtFloor = strategyAaveDebtFloor(freshCtx);
@@ -178,6 +243,6 @@ export async function runTargetStateEngine(
         `totalDebt=${ethers.formatUnits(freshCtx.aaveDebt, 6)} USDC\n`,
     );
 
-    await runPlaybook(redeemTailSteps(tail, lockedNAV), freshCtx);
+    await executeRedeemTailDeltaPipeline(freshCtx, tail, lockedNAV);
   }
 }

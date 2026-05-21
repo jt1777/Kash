@@ -6,7 +6,7 @@ import {
   readHyperliquidAdapterAddress,
   type OpsContext,
 } from './opsContext';
-import { strategyAaveDebtToRepay, strategyAaveDebtFloor } from './opsClassifier';
+import { strategyAaveDebtToRepay, strategyAaveDebtFloor, type RedeemTail } from './opsClassifier';
 
 // ---------------------------------------------------------------------------
 // OpStep interface
@@ -84,6 +84,120 @@ export async function runPlaybook(
       ctx = nextCtx;
     }
   }
+}
+
+/**
+ * Phase 2 — delta pipeline: same semantics as {@link runPlaybook}, but logs explicit **Δ** phases,
+ * returns the final refreshed `OpsContext`, and is the execution path used by `targetStateEngine`.
+ */
+export async function executeDeltaPipeline(
+  phases: ReadonlyArray<{ deltaId: string; step: OpStep }>,
+  initialCtx: OpsContext,
+): Promise<OpsContext> {
+  const stepFilter = config.batchStep;
+  const dryRun = config.dryRunOps;
+
+  if (dryRun) {
+    console.log('\n[DRY-RUN] Delta pipeline (phase 2):');
+    for (let i = 0; i < phases.length; i++) {
+      const { deltaId, step } = phases[i];
+      if (!shouldRunStep(step, stepFilter)) continue;
+      console.log(`  ${deltaId.padEnd(38)} ${step.describe(initialCtx)}`);
+    }
+    console.log('  Add --confirm to execute (dry-run mode active — no transactions sent).\n');
+    return initialCtx;
+  }
+
+  let ctx = initialCtx;
+  for (const { deltaId, step } of phases) {
+    if (!shouldRunStep(step, stepFilter)) {
+      console.log(`   [Δ skip] ${deltaId} (not in --step=${stepFilter})`);
+      continue;
+    }
+
+    const skip = await step.canSkip(ctx);
+    if (skip) {
+      console.log(`   [Δ skip] ${deltaId} — already satisfied`);
+      continue;
+    }
+
+    console.log(`   ▶ ${deltaId}: ${step.describe(ctx)}`);
+    await step.execute(ctx);
+    console.log(`   ✅ ${deltaId}`);
+
+    if (step.refreshCtx) {
+      const nextCtx = await snapshotOpsContext(ctx.kashYield, ctx.provider, ctx.batchCycle, ctx.lockedNAV);
+      nextCtx.aaveDebtFloor = ctx.aaveDebtFloor;
+      ctx = nextCtx;
+    }
+  }
+  return ctx;
+}
+
+/** NET_MINT: collateral deposit → borrow → HL USDC collateral → extend short. */
+export async function executeMintDeltaPipeline(ctx: OpsContext, netMintUSD: bigint): Promise<OpsContext> {
+  return executeDeltaPipeline(
+    [
+      { deltaId: 'Δmint deposit→Aave', step: aaveDepositNetMint(netMintUSD) },
+      { deltaId: 'Δmint borrow→LTV', step: aaveBorrow },
+      { deltaId: 'Δmint USDC→HL', step: hlDepositUsdc },
+      { deltaId: 'Δmint openShort', step: hlOpenShort(netMintUSD) },
+    ],
+    ctx,
+  );
+}
+
+/** REDEEM core: proportional HL close → pull HL USDC to vault. */
+export async function executeRedeemCoreDeltaPipeline(ctx: OpsContext): Promise<OpsContext> {
+  return executeDeltaPipeline(
+    [
+      { deltaId: 'Δredeem hl_close_short', step: hlCloseShort },
+      { deltaId: 'Δredeem hl_withdraw_usdc', step: hlWithdrawUsdc },
+    ],
+    ctx,
+  );
+}
+
+/** REDEEM tail sequences (rising / falling / balanced). */
+export async function executeRedeemTailDeltaPipeline(
+  ctx: OpsContext,
+  tail: RedeemTail,
+  lockedNAV: bigint | undefined,
+): Promise<OpsContext> {
+  let phases: Array<{ deltaId: string; step: OpStep }>;
+  switch (tail) {
+    case 'balanced':
+      phases = [
+        { deltaId: 'Δtail repay→Aave', step: aaveRepay },
+        { deltaId: 'Δtail repay_residual_owner', step: aaveRepayResidualDebtFromOwnerReserve },
+        { deltaId: 'Δtail aave_withdraw', step: aaveWithdraw('proportional') },
+      ];
+      break;
+    case 'falling':
+      phases = [
+        { deltaId: 'Δtail repay→Aave', step: aaveRepay },
+        { deltaId: 'Δtail repay_residual_owner', step: aaveRepayResidualDebtFromOwnerReserve },
+        { deltaId: 'Δtail aave_withdraw', step: aaveWithdraw('proportional') },
+        { deltaId: 'Δtail dex_swap_11b', step: dexSwapFromUsdc(lockedNAV) },
+      ];
+      break;
+    case 'rising':
+      phases = [
+        { deltaId: 'Δtail repay_contract_first', step: aaveRepayContractFirst },
+        { deltaId: 'Δtail aave_withdraw_partial', step: aaveWithdrawPartial },
+        { deltaId: 'Δtail dex_swap_11a', step: dexSwapForUsdc },
+        { deltaId: 'Δtail rising_cover_owner_usdc', step: risingTailCoverOwnerUsdc },
+        { deltaId: 'Δtail repay_rising_final', step: aaveRepayRisingFinal },
+        { deltaId: 'Δtail repay_residual_owner', step: aaveRepayResidualDebtFromOwnerReserve },
+        { deltaId: 'Δtail aave_withdraw_rest', step: aaveWithdraw('remaining') },
+      ];
+      break;
+    default: {
+      const _exhaustive: never = tail;
+      throw new Error(`Unhandled redeem tail: ${_exhaustive}`);
+    }
+  }
+  return executeDeltaPipeline(phases, ctx);
 }
 
 function shouldRunStep(step: OpStep, stepFilter: string): boolean {
@@ -298,7 +412,7 @@ async function canSkipSmallSwapViaOwnerReserve(ctx: OpsContext, sf: bigint): Pro
   return reserve >= sf;
 }
 
-async function getAaveAvailableBorrowUsdc6(ctx: OpsContext): Promise<bigint> {
+export async function getAaveAvailableBorrowUsdc6(ctx: OpsContext): Promise<bigint> {
   if (!ctx.aavePoolAddress || ctx.aavePoolAddress === ethers.ZeroAddress) return 0n;
   try {
     const pool = new ethers.Contract(
