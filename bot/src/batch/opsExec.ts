@@ -151,15 +151,9 @@ export async function executeMintDeltaPipeline(
   );
 }
 
-/** REDEEM core: proportional HL close → pull HL USDC to vault. */
+/** REDEEM core: proportional HL short close only. HL USDC → vault uses target-state settlement (withdraw3 + capped on-chain pull). */
 export async function executeRedeemCoreDeltaPipeline(ctx: OpsContext): Promise<OpsContext> {
-  return executeDeltaPipeline(
-    [
-      { deltaId: 'Δredeem hl_close_short', step: hlCloseShort },
-      { deltaId: 'Δredeem hl_withdraw_usdc', step: hlWithdrawUsdc },
-    ],
-    ctx,
-  );
+  return executeDeltaPipeline([{ deltaId: 'Δredeem hl_close_short', step: hlCloseShort }], ctx);
 }
 
 /** REDEEM tail sequences (rising / falling / balanced). */
@@ -172,6 +166,7 @@ export async function executeRedeemTailDeltaPipeline(
   switch (tail) {
     case 'balanced':
       phases = [
+        { deltaId: 'Δtail cover_hl_fee_shortfall', step: tailCoverHlFeeShortfall },
         { deltaId: 'Δtail repay→Aave', step: aaveRepay },
         { deltaId: 'Δtail repay_residual_owner', step: aaveRepayResidualDebtFromOwnerReserve },
         { deltaId: 'Δtail aave_withdraw', step: aaveWithdraw('proportional') },
@@ -179,6 +174,7 @@ export async function executeRedeemTailDeltaPipeline(
       break;
     case 'falling':
       phases = [
+        { deltaId: 'Δtail cover_hl_fee_shortfall', step: tailCoverHlFeeShortfall },
         { deltaId: 'Δtail repay→Aave', step: aaveRepay },
         { deltaId: 'Δtail repay_residual_owner', step: aaveRepayResidualDebtFromOwnerReserve },
         { deltaId: 'Δtail aave_withdraw', step: aaveWithdraw('proportional') },
@@ -341,15 +337,41 @@ function fmtHlPerpSize(v: bigint, ctx: OpsContext): string {
 function fmtUsd(v: bigint): string { return '$' + ethers.formatEther(v); }
 const WAD = 10n ** 18n;
 
-/** Target HL short from `computeTargets` (18-dec internal perp units, same basis as `ctx.shortSize`). */
+/**
+ * Mint short sizing: batch short target = pipeline-start short + (batch Aave deposit USD × SHORT_LEVERAGE).
+ * At SHORT_LEVERAGE=1 the incremental short notional equals the new collateral deposited (delta-neutral).
+ */
 export interface MintHlShortTargets {
-  targetHlShortInternal18: bigint;
+  /** `ctx.shortSize` at pipeline start (18-dec internal perp units). */
+  initialShortInternal18: bigint;
+  /** Pre-flight deposit estimate for sync logs/dry-run; execute reads on-chain batchMintDeployedToAave. */
+  depositAssetEstimate: bigint;
 }
 
-export function hlOpenShortDeltaInternal(ctx: OpsContext, targets: MintHlShortTargets): bigint {
-  return targets.targetHlShortInternal18 > ctx.shortSize
-    ? targets.targetHlShortInternal18 - ctx.shortSize
-    : 0n;
+function assetAmountToUsd18(ctx: OpsContext, assetAmount: bigint): bigint {
+  return ctx.isBtc
+    ? (assetAmount * ctx.price) / (10n ** 8n)
+    : (assetAmount * ctx.price) / (10n ** 18n);
+}
+
+/** Incremental HL short (18-dec internal) from batch Aave deposit asset amount × SHORT_LEVERAGE. */
+export function mintShortIncrementInternal18(ctx: OpsContext, depositAsset: bigint): bigint {
+  if (depositAsset === 0n) return 0n;
+  const depositUsd = assetAmountToUsd18(ctx, depositAsset);
+  const levScaled = BigInt(Math.round(config.strategy.shortLeverage * 100));
+  const shortUsdInc = (depositUsd * levScaled) / 100n;
+  const shortIncAssetNum = ctx.isBtc
+    ? (shortUsdInc * (10n ** 8n)) / ctx.price
+    : (shortUsdInc * (10n ** 18n)) / ctx.price;
+  return ctx.isBtc ? (shortIncAssetNum * WAD) / (10n ** 8n) : shortIncAssetNum;
+}
+
+export async function mintOpenShortDeltaInternal(ctx: OpsContext, targets: MintHlShortTargets): Promise<bigint> {
+  const batchDeployed = await readBatchMintDeployedToAave(ctx);
+  if (batchDeployed === 0n) return 0n;
+  const target =
+    targets.initialShortInternal18 + mintShortIncrementInternal18(ctx, batchDeployed);
+  return target > ctx.shortSize ? target - ctx.shortSize : 0n;
 }
 
 /** KashYield `openShort` size from internal perp Δ (wBTC 8 dec; ETH 18 dec). */
@@ -359,8 +381,8 @@ export function hlOpenShortContractSize(ctx: OpsContext, deltaInternal: bigint):
 }
 
 /** Pre-flight log sizing — same conversion as {@link hlOpenShort} at execution time. */
-export function openShortAssetEstimateFromTargets(ctx: OpsContext, targets: MintHlShortTargets): bigint {
-  return hlOpenShortContractSize(ctx, hlOpenShortDeltaInternal(ctx, targets));
+export function openShortAssetEstimateFromDeposit(ctx: OpsContext, depositAsset: bigint): bigint {
+  return hlOpenShortContractSize(ctx, mintShortIncrementInternal18(ctx, depositAsset));
 }
 
 function getHlWithdrawFeeToleranceUsdc6(): bigint {
@@ -648,16 +670,20 @@ const hlDepositUsdc: OpStep = {
       console.log('         ⚠️  Hyperliquid address not set — skipping HL deposit');
       return;
     }
+
+    const baselineHlUsdc = (await readHlApiUsdcBalance6(ctx)) ?? ctx.hlUsdcBalance;
+
     await execTx('depositToHyperliquid', ctx.kashYield.depositToHyperliquid(amount));
     if (ctx.hlDirectDepositMode) {
       await maybeBridgeDirectModeDepositToHl(ctx, amount);
     }
+    await waitForHlDepositCreditAfterMint(ctx, baselineHlUsdc, amount);
   },
 };
 
 /**
- * 05 — Open or extend short: incremental size from target-state Δ recomputed at canSkip/execute
- * (after borrow + HL deposit refresh) so idempotent re-runs see updated ctx.shortSize.
+ * 04 — Open or extend short: batch increment = on-chain batchMintDeployedToAave × SHORT_LEVERAGE
+ * (at 1x, short notional = deposit USD — delta-neutral vs new Aave collateral).
  *
  * Known edge case (wBTC): a positive internal Δ can round to 0 contract units
  * `(Δ * 10^8) / 10^18` — sub-satoshi, no economic impact; step is a no-op.
@@ -666,18 +692,24 @@ const hlOpenShort = (shortTargets: MintHlShortTargets): OpStep => ({
   id: 'hl_open_short',
   substep: 'hl',
   describe: (ctx) => {
-    const deltaInternal = hlOpenShortDeltaInternal(ctx, shortTargets);
+    const deltaInternal = mintShortIncrementInternal18(ctx, shortTargets.depositAssetEstimate);
     const sizeOpen = hlOpenShortContractSize(ctx, deltaInternal);
+    const lev = config.strategy.shortLeverage;
     if (sizeOpen === 0n) {
       return deltaInternal > 0n
         ? `no openShort (internal Δ ${fmtHlPerpSize(deltaInternal, ctx)} rounds to 0 ${ctx.assetSymbol} — sub-dust)`
-        : `no openShort increment (already at target short)`;
+        : `no openShort increment (batch Aave deposit × ${lev}x)`;
     }
-    return `open/extend short by +${fmtAsset(sizeOpen, ctx)} (target-state Δ; internal ${fmtHlPerpSize(deltaInternal, ctx)})`;
+    return (
+      `open/extend short by +${fmtAsset(sizeOpen, ctx)} ` +
+      `(batch Aave deposit × ${lev}x; at 1x short notional = deposit USD — delta-neutral)`
+    );
   },
-  canSkip: async (ctx) => hlOpenShortContractSize(ctx, hlOpenShortDeltaInternal(ctx, shortTargets)) === 0n,
+  canSkip: async (ctx) =>
+    hlOpenShortContractSize(ctx, await mintOpenShortDeltaInternal(ctx, shortTargets)) === 0n,
   execute: async (ctx) => {
-    const deltaInternal = hlOpenShortDeltaInternal(ctx, shortTargets);
+    const batchDeployed = await readBatchMintDeployedToAave(ctx);
+    const deltaInternal = await mintOpenShortDeltaInternal(ctx, shortTargets);
     const size = hlOpenShortContractSize(ctx, deltaInternal);
     if (size === 0n) {
       if (deltaInternal > 0n) {
@@ -688,7 +720,13 @@ const hlOpenShort = (shortTargets: MintHlShortTargets): OpStep => ({
       return;
     }
     const symbol = ctx.assetSymbol;
-    console.log(`         open/extend ${ctx.assetSymbol} short: incremental notional=${fmtAsset(size, ctx)}`);
+    const depositUsd = assetAmountToUsd18(ctx, batchDeployed);
+    const lev = config.strategy.shortLeverage;
+    console.log(
+      `         open/extend ${symbol} short: +${fmtAsset(size, ctx)} ` +
+        `(batch deposit ${fmtAsset(batchDeployed, ctx)} ≈ ${fmtUsd(depositUsd)} × ${lev}x leverage; ` +
+        `${lev === 1 ? 'delta-neutral vs new Aave collateral' : `${lev}x vs deposit USD`})`,
+    );
     const tx = await ctx.kashYield.openShort(symbol, size);
     await tx.wait();
     console.log('      → openShort confirmed');
@@ -751,42 +789,6 @@ const hlCloseShort: OpStep = {
       console.log('      → closeShort(partial) confirmed');
       await maybeRunHlEventRelay(ctx, tx.hash, 'EXCHANGE_CLOSE_SHORT', { required: true });
     }
-  },
-};
-
-/** 08 — Withdraw USDC from HL / adapter to contract (pull budget = max(tracked HL spot, adapter ERC-20 on L2)). */
-const hlWithdrawUsdc: OpStep = {
-  id: 'hl_withdraw_usdc',
-  substep: 'hl',
-  refreshCtx: true,
-  describe: (ctx) => `withdraw ${fmtUsdc(hlUsdcPullBudget(ctx))} USDC (HL spot + adapter ERC-20)`,
-  canSkip: async (ctx) => hlUsdcPullBudget(ctx) === 0n,
-  execute: async (ctx) => {
-    const amount = hlUsdcPullBudget(ctx);
-    if (amount === 0n) return;
-    console.log(`         ${fmtUsdc(amount)}`);
-    const contractAddr = config.kashYieldAddress || await ctx.kashYield.getAddress();
-    if (!ctx.usdcAddress || ctx.usdcAddress === ethers.ZeroAddress) {
-      throw new Error('Strict HL withdraw check requires usdcAddress on KashYield.');
-    }
-
-    const usdc = new ethers.Contract(ctx.usdcAddress, ['function balanceOf(address) view returns (uint256)'], ctx.provider);
-    const beforeUsdc = BigInt((await usdc.balanceOf(contractAddr)).toString());
-    const { received } = await execHlWithdrawToKashYield(ctx, 'withdrawFromHyperliquid', amount);
-    const afterUsdc = BigInt((await usdc.balanceOf(contractAddr)).toString());
-    const feeTolerance = getHlWithdrawFeeToleranceUsdc6();
-
-    console.log(`         KashYield USDC balance: ${fmtUsdc(beforeUsdc)} → ${fmtUsdc(afterUsdc)}`);
-    if (received + feeTolerance < amount) {
-      console.warn(
-        `         ⚠️  HL withdraw not fully settled yet: expected ${fmtUsdc(amount)} (tolerance ${fmtUsdc(feeTolerance)}), ` +
-        `received ${fmtUsdc(received)}. Waiting/retry logic will run before tail classification.`
-      );
-    } else if (received < amount) {
-      const impliedFee = amount - received;
-      console.log(`         fee/slippage accounted: ${fmtUsdc(impliedFee)} (tolerance ${fmtUsdc(feeTolerance)})`);
-    }
-    await syncHlAdapterFromHyperliquidApi(ctx, true);
   },
 };
 
@@ -1129,6 +1131,47 @@ const dexSwapForUsdc: OpStep = {
 };
 
 /**
+ * Balanced / falling tail: HL L1→L2 withdraw fee can leave ops float slightly below strategy Aave debt
+ * (typically ≤ HL_WITHDRAW_FEE_TOLERANCE_USDC). Release that gap from ownerUsdcReserve before repay.
+ */
+const tailCoverHlFeeShortfall: OpStep = {
+  id: 'tail_cover_hl_fee_shortfall',
+  substep: 'aave',
+  refreshCtx: true,
+  describe: (ctx) => {
+    const sf = usdcShortfallVsContract(ctx);
+    const cap = getHlWithdrawFeeToleranceUsdc6();
+    return `cover HL withdraw fee gap ${fmtUsdc(sf)} from owner reserve (only if ≤ ${fmtUsdc(cap)})`;
+  },
+  canSkip: async (ctx) => {
+    if (strategyAaveDebtToRepay(ctx) === 0n) return true;
+    const sf = usdcShortfallVsContract(ctx);
+    if (sf === 0n) return true;
+    if (sf > getHlWithdrawFeeToleranceUsdc6()) return true;
+    let reserve = 0n;
+    try {
+      reserve = BigInt((await ctx.kashYield.ownerUsdcReserve()).toString());
+    } catch {
+      return true;
+    }
+    return reserve === 0n;
+  },
+  execute: async (ctx) => {
+    const sf = usdcShortfallVsContract(ctx);
+    if (sf === 0n) return;
+    const cap = getHlWithdrawFeeToleranceUsdc6();
+    if (sf > cap) return;
+    const reserve = BigInt((await ctx.kashYield.ownerUsdcReserve()).toString());
+    const amount = sf < reserve ? sf : reserve;
+    if (amount === 0n) return;
+    console.log(
+      `         coverUsdcShortfall ${fmtUsdc(amount)} (HL fee gap ${fmtUsdc(sf)}, ownerUsdcReserve ${fmtUsdc(reserve)})`,
+    );
+    await execTx('coverUsdcShortfall(hl-fee)', ctx.kashYield.coverUsdcShortfall(amount));
+  },
+};
+
+/**
  * After 11a / partial-withdraw may be skipped (e.g. SMALL_SWAP_SKIP), residual Aave debt can remain
  * while USDC is already on the vault but counted only in ownerUsdcReserve. coverUsdcShortfall is
  * accounting-only: it releases up to min(shortfall, reserve) into the bot's spendable contractUsdc.
@@ -1298,6 +1341,79 @@ function selectUsdcForSync(spotUsdcStr: string, withdrawableStr: string): string
   const spot6 = decimalToBigInt(spotUsdcStr || '0', 6);
   const wd6 = decimalToBigInt(withdrawableStr || '0', 6);
   return wd6 > spot6 ? withdrawableStr : spotUsdcStr;
+}
+
+/** HL API USDC (6 dec) for mint deposit wait / adapter sync — null if HL user or API unavailable. */
+async function readHlApiUsdcBalance6(ctx: OpsContext): Promise<bigint | null> {
+  const hlUser = hlUserAddress(ctx);
+  if (!hlUser || hlUser === ethers.ZeroAddress) return null;
+  try {
+    const { InfoClient, HttpTransport } = await import('@nktkas/hyperliquid');
+    const hlApiUrl = (process.env.HYPERLIQUID_API_URL || 'https://api.hyperliquid.xyz').replace(/\/+$/, '');
+    const info = new InfoClient({ transport: new HttpTransport({ apiUrl: hlApiUrl }) });
+    const ch: any = await info.clearinghouseState({ user: hlUser });
+    const spot = await info.spotClearinghouseState({ user: hlUser }).catch(() => ({ balances: [] }));
+    const usdcSpotStr = findSpotBalance(spot, 'USDC');
+    const withdrawableStr = String(ch?.withdrawable || '0');
+    return decimalToBigInt(selectUsdcForSync(usdcSpotStr, withdrawableStr), 6);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * After `depositToHyperliquid` (+ direct-mode bridge), poll HL API until USDC credit lands
+ * before `openShort` relay runs (bridge is async; on-chain adapter ledger updates immediately).
+ */
+async function waitForHlDepositCreditAfterMint(
+  ctx: OpsContext,
+  baselineUsdc6: bigint,
+  depositedUsdc6: bigint,
+): Promise<void> {
+  if (depositedUsdc6 === 0n || config.dryRunOps) return;
+  if (!isRelayEnabled(ctx)) {
+    console.log('         [skip] HL deposit wait — event relay disabled');
+    return;
+  }
+  const enabled = (process.env.HL_DEPOSIT_WAIT_ENABLED || 'true').toLowerCase() !== 'false';
+  if (!enabled) return;
+
+  const maxMs = Math.max(0, parseInt(process.env.HL_DEPOSIT_WAIT_MAX_MS || '180000', 10));
+  const pollMs = Math.max(1000, parseInt(process.env.HL_DEPOSIT_WAIT_POLL_MS || '10000', 10));
+  if (maxMs === 0) return;
+
+  const slack = 100_000n; // 0.10 USDC — bridge / rounding
+  const minIncrease =
+    depositedUsdc6 > slack ? depositedUsdc6 - slack : (depositedUsdc6 * 95n) / 100n;
+  const targetMin = baselineUsdc6 + minIncrease;
+
+  console.log(
+    `         ⏳ Waiting for HL USDC credit ≥ ${fmtUsdc(targetMin)} ` +
+      `(baseline ${fmtUsdc(baselineUsdc6)} + deposit ${fmtUsdc(depositedUsdc6)}, up to ${(maxMs / 1000).toFixed(0)}s)`,
+  );
+
+  const started = Date.now();
+  while (Date.now() - started < maxMs) {
+    const current = await readHlApiUsdcBalance6(ctx);
+    if (current !== null && current >= targetMin) {
+      console.log(`         ✅ HL USDC credited: ${fmtUsdc(current)} (baseline was ${fmtUsdc(baselineUsdc6)})`);
+      try {
+        await syncHlAdapterFromHyperliquidApi(ctx, false);
+      } catch (e: any) {
+        console.warn(`         ⚠️  HL adapter sync after deposit: ${e?.message ?? e}`);
+      }
+      return;
+    }
+    if (current !== null) {
+      console.log(`         … HL USDC ${fmtUsdc(current)} (need ≥ ${fmtUsdc(targetMin)})`);
+    }
+    await sleep(pollMs);
+  }
+
+  console.warn(
+    `         ⚠️  HL deposit credit not confirmed within ${(maxMs / 1000).toFixed(0)}s — ` +
+      'proceeding to openShort (relay may fail; re-run ops to retry)',
+  );
 }
 
 async function readHlPositionSize(
@@ -1708,8 +1824,9 @@ function hlSettlementWithdrawAmount(ctx: OpsContext, targetHlUsdc: bigint): bigi
 }
 
 /**
- * HL API withdraw3 (L1→Arbitrum): bridge gross = HL excess above target + fee tolerance so ~$1 HL withdraw
- * fee does not strand USDC or block “at target” detection.
+ * HL API withdraw3 (L1→Arbitrum): bridge exactly HL excess above target — no fee padding on the request.
+ * HL’s ~$1 withdraw fee is handled via actual KashYield receipt + coverUsdcShortfall on tail repay;
+ * overdrawing (excess + fee) would drain HL spot below Aave borrow over repeated redeems.
  */
 function hlOffchainWithdraw3Amount(
   ctx: OpsContext,
@@ -1720,8 +1837,7 @@ function hlOffchainWithdraw3Amount(
   if (above <= feeTolerance) return 0n;
   const hl = ctx.hlUsdcBalance;
   if (hl === 0n) return 0n;
-  const gross = above + feeTolerance;
-  return gross < hl ? gross : hl;
+  return above < hl ? above : hl;
 }
 
 /**
@@ -1785,10 +1901,11 @@ async function sweepRemainingHlUsdcAfterFullRedeem(
   let fresh = ctx;
   let rounds = 0;
 
-  while (rounds < maxRounds && hlUsdcPullBudget(fresh) > dust) {
+  while (rounds < maxRounds) {
+    const amt = hlSettlementWithdrawAmount(fresh, 0n);
+    if (amt <= dust) break;
     rounds++;
-    const amt = hlUsdcPullBudget(fresh);
-    console.log(`   ↪ HL USDC sweep #${rounds}: withdraw ${fmtUsdc(amt)} (full spot balance)`);
+    console.log(`   ↪ HL USDC sweep #${rounds}: withdraw ${fmtUsdc(amt)} (excess above target 0)`);
     try {
       await execHlWithdrawToKashYield(fresh, `withdrawFromHyperliquid(sweep#${rounds})`, amt);
       await syncHlAdapterFromHyperliquidApi(fresh, true);
@@ -1802,9 +1919,9 @@ async function sweepRemainingHlUsdcAfterFullRedeem(
     console.log(`      ↪ sweep status: contractUsdc=${fmtUsdc(fresh.contractUsdc)}, hlUsdc=${fmtUsdc(fresh.hlUsdcBalance)}, adapterUsdc=${fmtUsdc(fresh.adapterUsdcErc20)}`);
   }
 
-  if (hlUsdcPullBudget(fresh) > dust) {
+  if (hlSettlementWithdrawAmount(fresh, 0n) > dust) {
     console.warn(
-      `   ⚠️  HL / adapter still holds ~${fmtUsdc(hlUsdcPullBudget(fresh))} USDC (tracked HL + adapter ERC-20) after ${maxRounds} sweep rounds — ` +
+      `   ⚠️  HL / adapter still holds ~${fmtUsdc(hlUsdcAboveTarget(fresh, 0n))} USDC above target 0 after ${maxRounds} sweep rounds — ` +
         'bridge may be slow; re-run ops or withdraw manually.',
     );
   } else if (rounds > 0) {
@@ -1813,6 +1930,11 @@ async function sweepRemainingHlUsdcAfterFullRedeem(
   return fresh;
 }
 
+/**
+ * REDEEM HL USDC settlement (target state 4): ideal HL spot after unwind =
+ * initialHlUsdc × (1 − strategyRedeemFraction); 100% unwind → 0.
+ * Bridge via HL withdraw3 (exact excess above target) + on-chain pull via hlSettlementWithdrawAmount.
+ */
 export async function waitForHlWithdrawSettlementIfNeeded(
   ctx: OpsContext,
   lockedNAV: bigint | undefined,
@@ -1970,18 +2092,19 @@ export function buildMintOpSteps(netMintUSD: bigint, shortTargets: MintHlShortTa
   return [aaveDepositNetMint(netMintUSD), aaveBorrow, hlDepositUsdc, hlOpenShort(shortTargets)];
 }
 
-/** Redeem core: proportional HL close + withdraw USDC to vault. */
+/** Redeem core: proportional HL close; USDC pull is target-state settlement after core. */
 export function buildRedeemCoreOpSteps(): OpStep[] {
-  return [hlCloseShort, hlWithdrawUsdc];
+  return [hlCloseShort];
 }
 
 export function buildRedeemTailOpStepsBalanced(): OpStep[] {
-  return [aaveRepay, aaveRepayResidualDebtFromOwnerReserve, aaveWithdraw('proportional')];
+  return [tailCoverHlFeeShortfall, aaveRepay, aaveRepayResidualDebtFromOwnerReserve, aaveWithdraw('proportional')];
 }
 
 /** Falling tail: repay → Aave withdraw → residual USDC→asset swap (target-state ordering fix). */
 export function buildRedeemTailOpStepsFalling(lockedNAV: bigint | undefined): OpStep[] {
   return [
+    tailCoverHlFeeShortfall,
     aaveRepay,
     aaveRepayResidualDebtFromOwnerReserve,
     aaveWithdraw('proportional'),
