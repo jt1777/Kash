@@ -13,7 +13,11 @@
 ## How It Works
 
 * [How Yield Works](how-yield-works.md)
-* [Risks](risks.md)
+* [Risks & Safeguards](risks.md)
+
+## Roadmap
+
+* [Roadmap](roadmap.md)
 
 ## Agent integration
 

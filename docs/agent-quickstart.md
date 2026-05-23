@@ -24,47 +24,46 @@ Source of truth in the app:
 - KashYield ABI: [`frontend/lib/contracts/kashYieldABI.ts`](../frontend/lib/contracts/kashYieldABI.ts)
 - KASH ERC-20 ABI: [`frontend/lib/contracts/kashTokenABI.ts`](../frontend/lib/contracts/kashTokenABI.ts)
 
+Use the ABI files for exact read and write method names.
+
 ---
 
 ## 2. Preflight checks
 
-Run these reads before sending a transaction:
+Before sending a transaction, read from the vault contract (via the KashYield ABI):
 
-```ts
-paused()
-isUserWindow()
-isProcessingWindow()
-getNAV()
-feeBps()
-getCurrentBatchCycle()
-getBatchInfo(batchCycle)
-```
+- Whether the contract is **paused**
+- Whether the **user window** is open (deposits/redemptions allowed)
+- Whether the **processing window** is active (batch running)
+- Current **NAV**
+- Protocol **fee** in basis points
+- Current **batch cycle** and **batch info** for that cycle
 
 Recommended gate:
 
-- Do not mint or redeem if `paused()` is true.
-- Only submit mint/redeem requests when `isUserWindow()` is true.
-- Confirm `feeBps()` matches your model before sizing a deposit.
-- Treat `getNAV()` as the current contract NAV, not a promise of future yield.
+- Do not mint or redeem if the contract is paused.
+- Only submit deposit or redeem requests when the user window is open.
+- Confirm the fee matches your model before sizing a deposit.
+- Treat the on-chain NAV as the current contract NAV, not a promise of future yield.
 - Confirm the current batch and settlement cadence against [How Yield Works](how-yield-works.md).
 
 ---
 
 ## 3. Mint KASH-ETH
 
-Native ETH path:
+Native ETH path — submit a deposit request with ETH attached (see KashYield ABI for the native-ETH deposit entrypoint):
 
 ```ts
 await wallet.writeContract({
   address: kashYieldEth,
   abi: kashYieldAbi,
-  functionName: 'requestMint',
+  functionName: 'requestMint', // see kashYieldABI.ts
   args: [0n],
   value: depositWei,
 });
 ```
 
-WETH path:
+WETH path — approve WETH to the vault, then submit the deposit request:
 
 ```ts
 await wallet.writeContract({
@@ -77,18 +76,18 @@ await wallet.writeContract({
 await wallet.writeContract({
   address: kashYieldEth,
   abi: kashYieldAbi,
-  functionName: 'requestMint',
+  functionName: 'requestMint', // see kashYieldABI.ts
   args: [wethAmount],
 });
 ```
 
-Watch for `MintRequested(user, amountIn, batchCycle)`.
+Watch for the **MintRequested** event (user, amount, batch cycle).
 
 ---
 
 ## 4. Mint KASH-BTC
 
-KASH-BTC uses wBTC. Approve the BTC vault first:
+KASH-BTC uses wBTC. Approve the BTC vault first, then submit the deposit request:
 
 ```ts
 await wallet.writeContract({
@@ -101,43 +100,39 @@ await wallet.writeContract({
 await wallet.writeContract({
   address: kashYieldBtc,
   abi: kashYieldAbi,
-  functionName: 'requestMint',
+  functionName: 'requestMint', // see kashYieldABI.ts
   args: [wbtcAmount],
 });
 ```
 
-Watch for `MintRequested(user, amountIn, batchCycle)`.
+Watch for **MintRequested**.
 
 ---
 
 ## 5. Monitor settlement
 
-Deposits and redemptions are batched. Submit before the documented cutoff, then watch:
+Deposits and redemptions are batched. Submit before the documented cutoff, then watch these events:
 
-```ts
-MintRequested
-RedeemRequested
-BatchProcessed
-TokensClaimed
-```
+- **MintRequested**
+- **RedeemRequested**
+- **BatchProcessed**
+- **TokensClaimed**
 
-Useful reads:
+Useful reads (method names in KashYield ABI):
 
-```ts
-getPendingMintRequest(user, batchCycle)
-getPendingRedeemRequest(user, batchCycle)
-getBatchInfo(batchCycle)
-balanceOf(user) // on the KASH token
-getNAV()
-```
+- Pending mint request for a user and batch cycle
+- Pending redeem request for a user and batch cycle
+- Batch info for a cycle
+- KASH token balance for the user
+- Current NAV
 
-Do not assume immediate KASH receipt after `requestMint`. Wait for batch processing and confirm the KASH token balance.
+Do not assume immediate KASH receipt after a deposit request. Wait for batch processing and confirm the KASH token balance.
 
 ---
 
 ## 6. Redeem
 
-Redeems require approving the relevant KASH token to the matching KashYield vault.
+Redeems require approving the relevant KASH token to the matching KashYield vault, then submitting a redeem request (see KashYield ABI).
 
 KASH-ETH redeem:
 
@@ -152,7 +147,7 @@ await wallet.writeContract({
 await wallet.writeContract({
   address: kashYieldEth,
   abi: kashYieldAbi,
-  functionName: 'requestRedeem',
+  functionName: 'requestRedeem', // see kashYieldABI.ts
   args: [kashAmount],
 });
 ```
@@ -170,12 +165,12 @@ await wallet.writeContract({
 await wallet.writeContract({
   address: kashYieldBtc,
   abi: kashYieldAbi,
-  functionName: 'requestRedeem',
+  functionName: 'requestRedeem', // see kashYieldABI.ts
   args: [kashAmount],
 });
 ```
 
-Watch for `RedeemRequested(user, kashAmount, batchCycle)` and then batch settlement.
+Watch for **RedeemRequested**, then batch settlement.
 
 ---
 
@@ -184,14 +179,13 @@ Watch for `RedeemRequested(user, kashAmount, batchCycle)` and then batch settlem
 Before allocating capital, read:
 
 - [How Yield Works](how-yield-works.md)
-- [Risks](risks.md)
+- [Risks & Safeguards](risks.md)
 
 Agent policy suggestion:
 
 - Set a maximum allocation per product.
-- Require `paused() == false`.
-- Require `isUserWindow() == true` for mint/redeem.
-- Require `feeBps()` within your configured maximum.
+- Require the contract not to be paused.
+- Require the user window to be open for mint/redeem.
+- Require the protocol fee to be within your configured maximum.
 - Require NAV and batch state to be read from your own RPC or indexer.
 - Size deposits based on current TVL, liquidity, strategy risks, operator assumptions, and your own risk budget.
-

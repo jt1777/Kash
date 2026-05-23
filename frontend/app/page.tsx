@@ -450,6 +450,14 @@ export default function Home() {
           .landing .hero {
             padding-top: clamp(7.25rem, 22vw, 11rem);
           }
+          /* Fixed nav covers hash targets on mobile — offset scroll snap */
+          .landing #features,
+          .landing #agent-brief,
+          .landing #verify,
+          .landing #agent-quickstart,
+          .landing #integration {
+            scroll-margin-top: clamp(7.5rem, 24vw, 10.5rem);
+          }
           .landing .secondary-cta { display: block; margin: 16px 0 0 0; }
           .landing .nav-content { justify-content: center; }
           .landing .nav-links { justify-content: center; }

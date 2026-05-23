@@ -36,7 +36,7 @@ KASH uses **Net Asset Value (NAV)** pricing. Every KASH token is worth exactly t
 
 NAV is updated hourly so you can check the value of your tokens in near real-time. The NAV bot updater does not rely on a private database: it reads portfolio balances and state from the blockchain, including vault balances, Aave positions, on-chain DEX balances, KASH token supply, and Chainlink prices.
 
-After calculating NAV, the bot submits the new value to the KashYield contract with an on-chain `updateNAV` transaction. Anyone can verify the latest NAV by reading `getNAV()` on the contract, and can audit each update by checking the transaction, emitted NAV events, and the same public on-chain inputs used by the bot.
+After calculating NAV, the bot submits the new value to the KashYield contract in an on-chain transaction. Anyone can verify the latest NAV from the contract’s public state, and can audit each update by checking the transaction, emitted NAV events, and the same public on-chain inputs used by the bot.
 
 ---
 

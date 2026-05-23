@@ -198,7 +198,7 @@ Before running the bot in production:
 2. ✅ Aave pool address set via `setAavePool.js`
 3. ✅ HyperliquidAdapter deployed via `deploy-hyperliquid-adapter.js`
 4. ✅ Adapter registered and exchange switch proposed via `setHyperliquid.js`
-5. ✅ Adapter activated via `setActivePerpExchange.js` (immediate; for 2nd+ adapters: `confirmPerpExchange.js` after 48h first)
+5. ✅ Adapter activated via `setActivePerpExchange.js` (immediate; for 2nd+ adapters: `confirmPerpExchange.js` after 24h first)
 6. ✅ Bot wallet has ETH for gas
 7. ✅ Bot wallet is contract owner (for privileged functions)
 8. ✅ Environment variables configured
@@ -294,6 +294,18 @@ Use them when you need to replay missed events, recover after downtime, or recon
 `DRY_RUN_OPS=true npm start` skips only ops tx execution but still runs phase1/nav/mark-done/phase2 on-chain.  
 Do not use that mode on live user batches unless you explicitly intend that behavior.
 
+### Hyperliquid reference (mainnet)
+
+| Item | Value |
+|------|--------|
+| Bridge2 (Arbitrum One) | `0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7` |
+| Native USDC | `0xaf88d065e77c8cC2239327C5EDb3A432268e5831` |
+| API base URL | `https://api.hyperliquid.xyz` |
+
+KashYield routes perp/spot calls through **`IPerpExchange`** adapters (production: **`HyperliquidAdapter`**). Trades and **`withdraw3`** are **off-chain via the HL API**; the bot syncs adapter state on Arbitrum after each action. Custody and `directDepositMode`: [DEPLOYMENT.md](../docs/DEPLOYMENT.md).
+
+**External docs:** [Hyperliquid docs](https://hyperliquid.gitbook.io/hyperliquid-docs/) · [Python SDK](https://github.com/hyperliquid-dex/hyperliquid-python-sdk)
+
 ## Owner Status Script
 
 View protocol state at a glance (asset in contract, Aave, Hyperliquid):
@@ -322,7 +334,7 @@ Shows:
 - Ensure a `HyperliquidAdapter` is deployed (`deploy-hyperliquid-adapter.js`)
 - Run `setHyperliquid.js` to register the adapter and propose it as the active exchange
 - The first adapter registration is immediate — just run `setActivePerpExchange.js` after `setHyperliquid.js`
-- For 2nd+ adapter registrations, run `confirmPerpExchange.js` after the 48-hour timelock, then `setActivePerpExchange.js`
+- For 2nd+ adapter registrations, run `confirmPerpExchange.js` after the 24-hour timelock, then `setActivePerpExchange.js`
 - Until confirmed, the contract has no active exchange and the bot will skip HL operations
 
 ### "Not in processing window"

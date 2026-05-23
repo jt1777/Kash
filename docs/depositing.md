@@ -21,6 +21,7 @@ KASH uses a **batch system**. Deposits are not processed instantly. Instead:
 3. After processing completes, KASH tokens are sent to your wallet automatically — no claim step needed
 
 This means there is a **waiting period** between when you submit your deposit and when you receive your KASH tokens. The wait is at most 24 hours.
+**Minimum Deposit** the minimum deposit size is 10 USDC worth of ETH or wBTC.
 
 ---
 

@@ -17,6 +17,7 @@ export interface TokenBalance {
 /**
  * Get all token balances in the contract for a given batch cycle
  * This checks what tokens were actually deposited by users
+ * This is legacy code but may be useful in the future, do not delete yet.
  * 
  * @param provider Ethers provider
  * @param batchCycle Batch cycle to check

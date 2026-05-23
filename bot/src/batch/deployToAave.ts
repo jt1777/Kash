@@ -11,6 +11,7 @@ import { getBalancesFromEvents, TokenBalance } from './getContractBalances';
  * 2. For ETH/wETH: Deposits to Aave
  * 3. For other tokens: Optionally deposits them to Aave or keeps as reserves
  * 4. Borrows USDT equal to 65% of the USD value of deposited collateral
+ * 5. This is legacy code but may be useful in the future, do not delete yet.
  * 
  * @param provider Ethers provider
  * @param wallet Wallet with owner private key
