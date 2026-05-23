@@ -40,6 +40,9 @@ function isUserRejectedWalletError(error: Error | null | undefined): boolean {
 const MINT_TOKEN_ETH = { symbol: 'ETH', address: zeroAddress, decimals: 18 };
 const MINT_TOKEN_BTC = { symbol: 'wBTC', address: CONTRACTS.mockWbtc, decimals: 8 };
 
+/** Minimum mint notional (18-dec USD) — matches bot NET_MINT_SKIP_OPS_MIN_USDC default. */
+const MIN_MINT_USD_WEI18 = 10n * 10n ** 18n;
+
 /** Truncate ETH amount to `decimals` fractional digits (no rounding up). */
 function formatEtherDisplayDecimals(wei: bigint, decimals: number): string {
   if (decimals < 0 || decimals > 18) decimals = 6;
@@ -268,6 +271,11 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
 
   const mintUsdLabel = formatApproxUsd(mintApproxUsdWei18);
 
+  const mintBelowMinUsd =
+    mintApproxUsdWei18 !== null && mintApproxUsdWei18 > 0n && mintApproxUsdWei18 < MIN_MINT_USD_WEI18;
+  const mintUsdUnavailable =
+    parsedAmount > 0n && mintApproxUsdWei18 === null && oracleRoundFetched;
+
   useEffect(() => {
     if (!showMintConfirm) return;
     const onKey = (e: KeyboardEvent) => {
@@ -299,7 +307,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
   };
 
   const handleMint = async () => {
-    if (!parsedAmount || exceedsBalance || exceedsWbtcBalance) return;
+    if (!parsedAmount || exceedsBalance || exceedsWbtcBalance || mintBelowMinUsd || mintUsdUnavailable) return;
     setShowMintConfirm(false);
 
     try {
@@ -442,7 +450,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
               <button
                 type="button"
                 onClick={() => void handleMint()}
-                disabled={isMintPending || isMintConfirming}
+                disabled={isMintPending || isMintConfirming || mintBelowMinUsd || mintUsdUnavailable}
                 className="flex-1 px-6 py-3 rounded-lg bg-linear-to-r from-indigo-600 to-purple-600 text-white font-medium hover:from-indigo-700 hover:to-purple-700 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed cursor-pointer transition-all shadow-lg disabled:shadow-none border-2 border-transparent"
               >
                 Confirm
@@ -514,6 +522,22 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
         </div>
       )}
 
+      {mintBelowMinUsd && (
+        <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+          <p className="text-sm text-amber-800">
+            Minimum mint is <strong>$10.00</strong> (approx. ${mintUsdLabel}). Increase the amount to submit a mint request.
+          </p>
+        </div>
+      )}
+
+      {mintUsdUnavailable && (
+        <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+          <p className="text-sm text-amber-800">
+            USD value unavailable — wait for the price feed to load before submitting.
+          </p>
+        </div>
+      )}
+
 
       {/* Settled mint: success message */}
       {mintSettled && !hideSettled && (
@@ -567,7 +591,16 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
         <button
           type="button"
           onClick={() => setShowMintConfirm(true)}
-          disabled={isMintPending || isMintConfirming || !amount || needsApproval || exceedsBalance || !!exceedsWbtcBalance}
+          disabled={
+            isMintPending ||
+            isMintConfirming ||
+            !amount ||
+            needsApproval ||
+            exceedsBalance ||
+            !!exceedsWbtcBalance ||
+            mintBelowMinUsd ||
+            mintUsdUnavailable
+          }
           className="w-full px-6 py-3 bg-linear-to-r from-indigo-600 to-purple-600 text-white rounded-lg font-medium hover:from-indigo-700 hover:to-purple-700 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed cursor-pointer transition-all shadow-lg"
         >
           {isMintPending || isMintConfirming ? 'Processing...' : 'Submit Mint Request'}

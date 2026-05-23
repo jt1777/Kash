@@ -99,7 +99,15 @@ See `.env.example` for all required variables. Key ones:
 | `RPC_URL` | RPC endpoint (preferred over ARBITRUM_SEPOLIA_RPC_URL) | Mainnet: `https://arb1.arbitrum.io/rpc` |
 | `HYPERLIQUID_API_URL` | Hyperliquid API base URL (mainnet) | `https://api.hyperliquid.xyz` |
 | `HYPERLIQUID_API_PRIVATE_KEY` | HL API signer key (bot key in direct mode) | `0x...` |
-| `SHORT_LEVERAGE` | Target short multiple for mint playbook | `1` or `1.7` |
+| `SHORT_LEVERAGE` | Short notional vs batch Aave deposit on mint (`openShort` reads `batchMint*DeployedToAave`) | `1` or `1.7` |
+| `NET_MINT_SKIP_OPS_MIN_USDC` | Net batch ops skip threshold (USD) — see [Sub‑$10 net batch ops](#sub-10-net-batch-ops-net_mint_skip_ops_min_usdc-default-10) | `10` |
+| `HL_DEPOSIT_WAIT_ENABLED` | After HL bridge deposit, poll until USDC credited before `openShort` | `true` |
+| `HL_DEPOSIT_WAIT_MAX_MS` | Max wait for HL deposit credit (ms) | `180000` |
+| `HL_DEPOSIT_WAIT_POLL_MS` | Poll interval for HL deposit wait (ms) | `10000` |
+| `HL_WITHDRAW_WAIT_ENABLED` | After redeem HL withdraw, wait for USDC on KashYield | `true` |
+| `HL_WITHDRAW_WAIT_MAX_MS` | Max wait for HL withdraw settlement (ms) | `360000` |
+| `HL_WITHDRAW_WAIT_POLL_MS` | Poll interval for HL withdraw wait (ms) | `20000` |
+| `HL_WITHDRAW_FEE_TOLERANCE_USDC` | Balanced/falling tail: max USDC gap covered via `coverUsdcShortfall` before Aave repay | `1` |
 | `SMALL_SWAP_SKIP_MAX_USDC` | Rising tail — see [Redeem tail / spot dust thresholds](#redeem-tail--spot-dust-thresholds) | `2` |
 
 ### Redeem tail / spot dust thresholds
@@ -120,11 +128,47 @@ Swaps **above** the rising-tail threshold still use on-chain **`minOut`** from C
 
 ### Batch Processor
 
-Handles daily batch processing:
-- Waits for processing window (23:50-23:59 UTC)
-- Calls `processBatch()` on contract
-- Handles `NET_MINT` / `NET_REDEEM` events
-- Deploys capital to Aave and Hyperliquid
+Handles the daily two-phase batch on KashYield (`performUpkeep` → ops → settlement NAV → mark-done → Phase 2):
+
+- Waits for the processing window (23:50–23:59 UTC) when configured
+- Pre–Phase-1 and post-ops **`updateNAV`**
+- **`runStepOps`** → **`runTargetStateEngine`** → **`opsExec`** delta pipelines (sole automated mint/redeem ops path)
+- **`markBatchOpsDone`** preflight (vault asset vs gross redeem need)
+- Phase 2 distribution via `performUpkeep` / `processBatchPhase2ForCycle`
+
+Legacy **`handleNetMint` / `handleNetRedeem`** handlers were removed from `batchProcessor.ts`. Receipt parsing after Phase 2 is **informational only** (no deploy/withdraw triggered from events).
+
+#### Mint ops (`net_mint_hl`, net ≥ skip threshold)
+
+Order: **Aave deposit** → **`markMint*Deployed`** → **borrow to LTV** → **HL USDC deposit** → **wait for HL credit** → **open/extend short**.
+
+- No on-chain **`spotBuyOnHyperliquid`** on the automated mint path (USDC collateral + perp short only).
+- Short increment ≈ **batch Aave deposit USD × `SHORT_LEVERAGE`** (via `batchMintDeployedToAave`), not gross deployable USD × leverage.
+- After `depositToHyperliquid`, the bot polls HL until USDC is credited before `openShort` (`HL_DEPOSIT_WAIT_*`).
+
+#### Redeem ops (`redeem_hl`)
+
+1. **Core:** proportional **close short** → **HL settlement** (`withdraw3` + target USDC pull to KashYield; no legacy “withdraw all HL USDC” core step).
+2. **Tail** (after settlement wait): **balanced / falling / rising** — Aave repay, Aave withdraw, optional **11a** / **11b** spot swaps; **`coverUsdcShortfall`** for small HL withdraw fee gaps (`HL_WITHDRAW_FEE_TOLERANCE_USDC`).
+
+See [`targetStateEngine.ts`](src/batch/targetStateEngine.ts) and [`opsExec.ts`](src/batch/opsExec.ts).
+
+#### Sub‑$10 net batch ops (`NET_MINT_SKIP_OPS_MIN_USDC`, default **10**)
+
+Gating lives in **`runStepOps`** only (not in `targetStateEngine`). Uses **net** = `totalMintUSD − totalRedeemUSD` (18‑dec USD). Phase 1 → settlement NAV → mark-done → Phase 2 **always run** when the batch has requests.
+
+| Net batch | Ops behavior |
+|-----------|----------------|
+| **Net mint &lt; $10** | Skip Aave/HL; deposited wBTC/ETH **stays on the vault** (dust). KASH still minted in Phase 2. |
+| **Net redeem ≥ $10** | Full redeem ops (HL + Aave tail). |
+| **Net redeem &lt; $10**, vault **covers** payout | Skip ops; Phase 2 pays redeemers from **vault wBTC/ETH** (`vaultCoversRedeemPayout` — same check as mark-done). |
+| **Net redeem &lt; $10**, vault **insufficient** | Full redeem ops. |
+
+**Dust layer:** Skipped net mints accumulate idle vault asset (backs NAV, not deployed to Aave/HL). Small net redeems that skip ops draw down that vault slice without unwinding the levered book — intentional pairing for micro flows. The **frontend** blocks mint requests **&lt; $10** (oracle USD); **redemptions have no minimum**.
+
+**Note:** Mint deploy sizing for a later ≥ $10 batch uses **that batch’s after-fee net mint** only (capped by vault balance); accumulated dust is not added into the deploy target, but may be consumed up to that batch’s target.
+
+Manual **`scripts/ops/`** steps (e.g. `04-spot-buy-asset`, `07-sell-spot-asset`) follow the older HL spot playbook; **`npm start`** does not use those on mint/redeem.
 
 ### Rebalancer Bot
 
@@ -225,11 +269,11 @@ SHORT_LEVERAGE=1
 
 ### 3) Inline HL relay during `npm start` (new)
 
-The batch ops playbooks now execute Hyperliquid API actions inline during `npm start` for:
+The batch ops playbooks execute Hyperliquid API actions inline during `npm start` for:
 - `EXCHANGE_OPEN_SHORT`
 - `EXCHANGE_CLOSE_SHORT`
-- `EXCHANGE_SPOT_BUY`
-- `EXCHANGE_SPOT_SELL`
+
+(`EXCHANGE_SPOT_BUY` / `EXCHANGE_SPOT_SELL` are **not** used on the automated mint path; rising/falling tails use on-chain **`swapForUsdc` / `swapFromUsdc`** via `spotDexAddress`. Relay scripts can still replay spot events for recovery.)
 
 After each HL order, the bot syncs adapter state (`syncBalances` + `syncPosition`) on Arbitrum.
 
@@ -294,7 +338,7 @@ The batch is split into five steps so each can be run individually. If any step 
 |------|-------------|--------|
 | —    | *(pre-Phase-1)* | `computeNewNAV` → **`updateNAV`** (Phase-1-era MTM on-chain) |
 | 1    | `phase1`    | `performUpkeep()` after the above (Phase 1; batch moves to phase 1) |
-| 2    | `ops`       | NET_MINT/NET_REDEEM; sizing uses **Phase-1-era** NAV (on-chain `currentNAV` after step 1) |
+| 2    | `ops`       | **`runStepOps`** (skip gates + target-state mint/redeem); sizing uses **Phase-1-era** NAV |
 | 3    | `nav`       | `computeNewNAV` post-ops → **`updateNAV` (settlement)** for Phase 2 |
 | 4    | `mark-done` | `markBatchOpsDone(batchCycle)` (batch moves to phase 2) |
 | 5    | `phase2`    | Phase 2 distribution at **settlement** `currentNAV` |
@@ -392,16 +436,19 @@ npm start -- --batch=20523 --step=phase2
 The value is NAV in 18-decimal fixed-point (e.g. `$1.0523` = `1052300000000000000`).
 
 ### Running only Hyperliquid or only Aave steps (Phase 1)
-Phase 1 NET_MINT and NET_REDEEM are split into **Hyperliquid** steps (deposit/withdraw HL, spot buy/sell, open/close short) and **Aave** steps (deposit/withdraw, borrow/repay). You can run one set at a time for testing or recovery:
+
+Ops sub-steps (`--step=hl` / `--step=aave`) filter steps inside **`opsExec`** delta pipelines. Order for a full run: **NET_MINT** — Aave then HL; **NET_REDEEM** — HL core then Aave/tail.
 
 - **HL only:** `npm start -- --step=hl` or `BATCH_STEP=hl npm start`
-  - NET_MINT: deposit USDC to HL, open/extend short (no spot buy in current mint playbook).
-  - NET_REDEEM: close short, withdraw USDC from HL.
+  - **NET_MINT:** HL USDC deposit, wait for credit, open/extend short (no spot buy).
+  - **NET_REDEEM:** close short, HL USDC settlement to KashYield.
 - **Aave only:** `npm start -- --step=aave` or `BATCH_STEP=aave npm start`
-  - NET_MINT: deposit to Aave, borrow USDC.
-  - NET_REDEEM: repay USDC to Aave, withdraw wBTC/ETH from Aave.
+  - **NET_MINT:** deposit to Aave, borrow USDC.
+  - **NET_REDEEM:** tail — repay, withdraw, optional 11a/11b (after HL core when running full ops).
 
-Order for a full run: for NET_MINT run Aave first then HL; for NET_REDEEM run HL first then Aave. If one step fails, fix state and re-run that step (or the other) without re-running the whole batch.
+Sub‑$10 skip gates in **`runStepOps`** apply before any sub-step runs. If ops is skipped entirely, `--step=hl` / `--step=aave` on that batch have nothing to do.
+
+Manual **`bot/scripts/ops/`** scripts are independent one-step Hardhat tools; see [`scripts/ops/README.md`](scripts/ops/README.md). They do not invoke `batchProcessor`.
 
 ## Known limitations / Work in progress
 
@@ -417,9 +464,9 @@ These items are stubs or partially implemented — tracked here after the develo
 
 The NAV path runs **`computeNewNAV` / `estimatePortfolioValueUSD`** for **pre-Phase-1** and **post-ops settlement** `updateNAV` calls (see Five-step batch flow above). When the yield readers above are implemented, NAV inputs will reflect them automatically.
 
-### USD → token conversion in Aave calls
+### USD → token amounts in ops
 
-Aave deposit/withdraw/borrow/repay functions in `batchProcessor.ts` expect **token amounts** (e.g. WETH in 18 decimals, wBTC in 8 decimals), but the net position computed by the bot is in **USD with 18 decimals**. The conversion is done per-call using `price = getEthPrice() / getBtcPrice()`. Verify this is consistent for all code paths, especially in `handleNetRedeem` where multiple partial withdrawals may occur.
+Aave/HL steps in **`opsExec.ts`** use **token amounts** (wBTC 8 dec, ETH 18 dec, USDC 6 dec). Batch **net USD** (18 dec) is converted per step using Chainlink **`getBtcPrice()` / `getEthPrice()`**. Redeem **`totalRedeemAsset`** and mark-done use the same NAV era as ops sizing (`phase1EraNAV` at ops time; settlement NAV at mark-done).
 
 ## License
 

@@ -190,10 +190,11 @@ export const config = {
   dryRunOps: process.argv.includes('--dry-run-ops') || process.env.DRY_RUN_OPS === 'true',
 
   /**
-   * NET_MINT only: if batch net mint (USD, 18 decimals — same units as `totalMintUSD − totalRedeemUSD` /
-   * ProtocolInteraction NET_MINT amount) is **strictly below** this value, skip strategy ops (no Aave/HL
-   * playbook); deposited ETH/wBTC remains on the contract until a later batch clears the threshold.
-   * Human USDC/notional (e.g. `10` = $10). Env: NET_MINT_SKIP_OPS_MIN_USDC. Default 10.
+   * Net batch ops skip threshold (USD, 18 decimals — `totalMintUSD − totalRedeemUSD`).
+   * • Net **mint** below this: skip Aave/HL ops; collateral stays on the contract.
+   * • Net **redeem** below this: skip Aave/HL ops only when vault asset already covers Phase 2 payout
+   *   (same check as mark-done); otherwise run full redeem ops.
+   * Human notional (e.g. `10` = $10). Env: NET_MINT_SKIP_OPS_MIN_USDC. Default 10.
    */
   netMintSkipOpsMinUsd18: (() => {
     const raw = process.env.NET_MINT_SKIP_OPS_MIN_USDC ?? '10';

@@ -177,14 +177,6 @@ export async function runTargetStateEngine(
   lockedNAV?: bigint,
 ): Promise<void> {
   if (scenario === 'net_mint_hl') {
-    const minUsd = config.netMintSkipOpsMinUsd18;
-    if (netMintUSD < minUsd) {
-      console.log(
-        `\n💰 NET_MINT (${ctx.assetSymbol}) — net ${fmtUsd(netMintUSD)} is below NET_MINT_SKIP_OPS_MIN_USDC (${fmtUsd(minUsd)}); skipping ops.\n`,
-      );
-      return;
-    }
-
     console.log(`\n💰 NET_MINT (${ctx.assetSymbol}) — deploying ${fmtUsd(netMintUSD)} net capital (delta engine phase 2)\n`);
 
     const targets = await computeTargets(ctx, scenario, netMintUSD);

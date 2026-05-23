@@ -4,7 +4,7 @@ import { protocolActionName } from '../contracts/protocolActionCodes';
 import { config } from '../config';
 import {
   snapshotOpsContext,
-  computeTotalRedeemAsset,
+  vaultCoversRedeemPayout,
   getAaveBorrowedAmountV3,
   getAaveSuppliedAmountV3,
   readHyperliquidAdapterAddress,
@@ -334,12 +334,42 @@ export class BatchProcessor {
       return;
     }
 
-    const mintSkipMin = config.netMintSkipOpsMinUsd18;
-    if (scenario === 'net_mint_hl' && net < mintSkipMin) {
+    const opsSkipMinUsd = config.netMintSkipOpsMinUsd18;
+    if (scenario === 'net_mint_hl' && net > 0n && net < opsSkipMinUsd) {
       console.log(
-        `   NET_MINT net ${ethers.formatEther(net)} USD is below NET_MINT_SKIP_OPS_MIN_USDC (${ethers.formatEther(mintSkipMin)} USD) — skipping ops playbook (collateral stays on contract).\n`,
+        `   NET_MINT net ${ethers.formatEther(net)} USD is below NET_MINT_SKIP_OPS_MIN_USDC (${ethers.formatEther(opsSkipMinUsd)} USD) — skipping ops playbook (collateral stays on contract).\n`,
       );
       return;
+    }
+
+    if (scenario === 'redeem_hl' && net < 0n) {
+      const netRedeemUsd = -net;
+      const assetSymbol = isBtc ? 'wBTC' : 'ETH';
+      const assetDecimals = isBtc ? 8 : 18;
+      if (netRedeemUsd < opsSkipMinUsd) {
+        const cover = await vaultCoversRedeemPayout(
+          this.kashYield,
+          this.provider,
+          batchCycle,
+          phase1EraNAV,
+          isBtc,
+        );
+        if (cover.covers) {
+          console.log(
+            `   NET_REDEEM net ${ethers.formatEther(netRedeemUsd)} USD is below NET_MINT_SKIP_OPS_MIN_USDC (${ethers.formatEther(opsSkipMinUsd)} USD) ` +
+              `and vault ${assetSymbol} covers Phase 2 payout — skipping ops (pay redeemers from contract).\n` +
+              `      vault ${assetSymbol}=${ethers.formatUnits(cover.contractBalance, assetDecimals)}, ` +
+              `need=${ethers.formatUnits(cover.required, assetDecimals)} ` +
+              `(redeem ${ethers.formatUnits(cover.totalRedeemAsset, assetDecimals)} + owner reserve ${ethers.formatUnits(cover.ownerAssetReserve, assetDecimals)})\n`,
+          );
+          return;
+        }
+        console.log(
+          `   NET_REDEEM net ${ethers.formatEther(netRedeemUsd)} USD is below ${ethers.formatEther(opsSkipMinUsd)} USD but vault ${assetSymbol} ` +
+            `(${ethers.formatUnits(cover.contractBalance, assetDecimals)}) does not cover Phase 2 need ` +
+            `(${ethers.formatUnits(cover.required, assetDecimals)}) — running full redeem ops.\n`,
+        );
+      }
     }
 
     // Snapshot all on-chain state once before executing any steps
@@ -399,51 +429,27 @@ export class BatchProcessor {
    * to phase 2, so Phase 2 cannot enter an InsufficientEthForRedeems state due to partial ops.
    * Uses computeTotalRedeemAsset from opsContext — same formula as the ops playbook steps. */
   private async runStepMarkDone(batchCycle: bigint, lockedNAV?: bigint): Promise<void> {
-    const decimals = isBtc ? 8n : 18n;
-    const price = isBtc
-      ? BigInt((await this.kashYield.getBtcPrice()).toString())
-      : BigInt((await this.kashYield.getEthPrice()).toString());
-
-    const totalRedeemAsset = await computeTotalRedeemAsset(
+    const decimals = isBtc ? 8 : 18;
+    const cover = await vaultCoversRedeemPayout(
       this.kashYield,
+      this.provider,
       batchCycle,
       lockedNAV,
-      price,
-      decimals,
+      isBtc,
     );
 
-    if (totalRedeemAsset > 0n) {
-      const contractAddr = config.kashYieldAddress!;
-      let contractBalance: bigint;
-      let ownerAssetReserve = 0n;
-      if (isBtc) {
-        try {
-          const wbtcAddr: string = await this.kashYield.wbtcAddress();
-          const wbtc = new ethers.Contract(wbtcAddr, ['function balanceOf(address) view returns (uint256)'], this.provider);
-          contractBalance = BigInt((await wbtc.balanceOf(contractAddr)).toString());
-          ownerAssetReserve = BigInt((await this.kashYield.ownerWbtcReserve()).toString());
-        } catch { contractBalance = 0n; }
-      } else {
-        contractBalance = BigInt((await this.provider.getBalance(contractAddr)).toString());
-        try {
-          ownerAssetReserve = BigInt((await this.kashYield.ownerEthReserve()).toString());
-        } catch { ownerAssetReserve = 0n; }
-      }
-
-      // Must match on-chain Phase 2: balance >= owner*Reserve + gross redeem asset
-      // (redeemer payout plus protocol fee retained as owner reserve).
-      const requiredForPhase2 = totalRedeemAsset + ownerAssetReserve;
-      if (contractBalance < requiredForPhase2) {
+    if (cover.totalRedeemAsset > 0n) {
+      if (!cover.covers) {
         throw new Error(
-          `Cannot markBatchOpsDone: contract holds ${ethers.formatUnits(contractBalance, Number(decimals))} ` +
-          `but Phase 2 needs ${ethers.formatUnits(requiredForPhase2, Number(decimals))} ` +
-          `(gross redeem ${ethers.formatUnits(totalRedeemAsset, Number(decimals))} + owner reserve ${ethers.formatUnits(ownerAssetReserve, Number(decimals))}). ` +
+          `Cannot markBatchOpsDone: contract holds ${ethers.formatUnits(cover.contractBalance, decimals)} ` +
+          `but Phase 2 needs ${ethers.formatUnits(cover.required, decimals)} ` +
+          `(gross redeem ${ethers.formatUnits(cover.totalRedeemAsset, decimals)} + owner reserve ${ethers.formatUnits(cover.ownerAssetReserve, decimals)}). ` +
           `Withdraw more ${isBtc ? 'wBTC' : 'ETH'} from Aave (or reduce owner reserve) before proceeding.`
         );
       }
       console.log(
-        `   ✅ Balance check passed: contract has ${ethers.formatUnits(contractBalance, Number(decimals))} ` +
-          `(need ${ethers.formatUnits(requiredForPhase2, Number(decimals))} = gross redeem ${ethers.formatUnits(totalRedeemAsset, Number(decimals))} + owner reserve ${ethers.formatUnits(ownerAssetReserve, Number(decimals))})`,
+        `   ✅ Balance check passed: contract has ${ethers.formatUnits(cover.contractBalance, decimals)} ` +
+          `(need ${ethers.formatUnits(cover.required, decimals)} = gross redeem ${ethers.formatUnits(cover.totalRedeemAsset, decimals)} + owner reserve ${ethers.formatUnits(cover.ownerAssetReserve, decimals)})`,
       );
     }
 

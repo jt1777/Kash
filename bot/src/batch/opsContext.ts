@@ -216,6 +216,76 @@ export async function computeTotalRedeemAsset(
   return total;
 }
 
+/** Same balance gate as `runStepMarkDone` / Phase 2 `InsufficientWbtcForRedeems`. */
+export async function vaultCoversRedeemPayout(
+  kashYield: ethers.Contract,
+  provider: ethers.Provider,
+  batchCycle: bigint,
+  lockedNAV: bigint | undefined,
+  isBtc: boolean,
+): Promise<{
+  covers: boolean;
+  totalRedeemAsset: bigint;
+  contractBalance: bigint;
+  required: bigint;
+  ownerAssetReserve: bigint;
+}> {
+  const assetDecimals = isBtc ? 8n : 18n;
+  const price = isBtc
+    ? BigInt((await kashYield.getBtcPrice()).toString())
+    : BigInt((await kashYield.getEthPrice()).toString());
+  const totalRedeemAsset = await computeTotalRedeemAsset(
+    kashYield,
+    batchCycle,
+    lockedNAV,
+    price,
+    assetDecimals,
+  );
+  if (totalRedeemAsset === 0n) {
+    return {
+      covers: true,
+      totalRedeemAsset: 0n,
+      contractBalance: 0n,
+      required: 0n,
+      ownerAssetReserve: 0n,
+    };
+  }
+
+  const contractAddr = await kashYield.getAddress();
+  let contractBalance = 0n;
+  let ownerAssetReserve = 0n;
+  if (isBtc) {
+    try {
+      const wbtcAddr: string = await kashYield.wbtcAddress();
+      const wbtc = new ethers.Contract(
+        wbtcAddr,
+        ['function balanceOf(address) view returns (uint256)'],
+        provider,
+      );
+      contractBalance = BigInt((await wbtc.balanceOf(contractAddr)).toString());
+      ownerAssetReserve = BigInt((await kashYield.ownerWbtcReserve()).toString());
+    } catch {
+      contractBalance = 0n;
+    }
+  } else {
+    contractBalance = BigInt((await provider.getBalance(contractAddr)).toString());
+    try {
+      ownerAssetReserve = BigInt((await kashYield.ownerEthReserve()).toString());
+    } catch {
+      ownerAssetReserve = 0n;
+    }
+  }
+
+  const required = totalRedeemAsset + ownerAssetReserve;
+  return {
+    covers: contractBalance >= required,
+    totalRedeemAsset,
+    contractBalance,
+    required,
+    ownerAssetReserve,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Perp / Hyperliquid adapter address (ETH vault has hyperliquid(); BTC lacked it historically)
 // ---------------------------------------------------------------------------
