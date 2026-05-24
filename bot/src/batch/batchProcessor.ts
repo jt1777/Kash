@@ -167,6 +167,35 @@ export class BatchProcessor {
   }
 
   /**
+   * Past-cycle batches stuck at phase 0 cannot run Phase 1: performUpkeep() always targets
+   * block.timestamp / cycleDurationSeconds (the current cycle). Fail before ops/mark-done
+   * so operators are not misled by a partial pipeline on the wrong cycle.
+   */
+  private async rejectStalePhaseZeroBatch(
+    batchCycle: bigint,
+    phaseNum: number,
+    batchInfo: { processed: boolean; mintUsersCount: bigint; redeemUsersCount: bigint },
+  ): Promise<void> {
+    if (batchInfo.processed || phaseNum !== 0) return;
+
+    const hasRequests =
+      BigInt(batchInfo.mintUsersCount.toString()) > 0n ||
+      BigInt(batchInfo.redeemUsersCount.toString()) > 0n;
+    if (!hasRequests) return;
+
+    const currentCycleRaw = await this.kashYield.getCurrentBatchCycle();
+    const currentCycle =
+      typeof currentCycleRaw === 'bigint' ? currentCycleRaw : BigInt(currentCycleRaw.toString());
+    if (batchCycle >= currentCycle) return;
+
+    throw new Error(
+      `Cycle ${batchCycle} is stale phase 0 (current cycle is ${currentCycle}). ` +
+        'performUpkeep() only processes the current cycle, so Phase 1 never ran for this batch. ' +
+        `Users must cancel mint/redeem requests on cycle ${batchCycle} and resubmit in the current cycle.`,
+    );
+  }
+
+  /**
    * Two-phase flow: pre-Phase-1 updateNAV → Phase 1 → ops → settlement updateNAV → markBatchOpsDone → Phase 2.
    * When BATCH_STEP is phase1|ops|nav|mark-done|phase2, runs only that step and exits.
    */
@@ -176,6 +205,8 @@ export class BatchProcessor {
   ): Promise<void> {
     const phase = await this.kashYield.batchPhase(batchCycle);
     const phaseNum = Number(phase);
+
+    await this.rejectStalePhaseZeroBatch(batchCycle, phaseNum, batchInfo);
 
     if (batchInfo.processed && !config.allowProcessedBatch) {
       console.log(`✅ Batch ${batchCycle} already processed (phase 3)\n`);

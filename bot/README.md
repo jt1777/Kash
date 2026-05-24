@@ -401,6 +401,12 @@ The `BATCH_CYCLE=N` environment variable is equivalent to `--batch=N`.
 If a mint/redeem request is stuck in an older cycle with `phase=0`, it cannot be picked up by `performUpkeep()` anymore.  
 User must cancel (`cancelMintRequest`/`cancelRedeemRequest`) and resubmit in the current cycle.
 
+Targeting such a cycle with `--batch=N` (or any step on it) **fails immediately** with:
+
+`Cycle N is stale phase 0 (current cycle is …). Users must cancel … and resubmit in the current cycle.`
+
+Do not expect `--batch=N --step=phase1|ops|nav|mark-done|phase2` to recover stale phase-0 batches.
+
 **Re-running ops on an already-processed batch (`--allow-processed`)**
 
 If a batch reached phase 3 (processed) but the capital operations (Aave/Hyperliquid) never completed — for example the mint batch finalized but wBTC was never deployed — you can re-run the ops step using `--allow-processed`:
