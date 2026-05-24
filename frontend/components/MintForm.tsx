@@ -5,6 +5,7 @@ import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadCont
 import { CONTRACTS, ARBITRUM_ONE_BLOCK_EXPLORER, HARDHAT_CHAIN_ID } from '@/lib/contracts/addresses';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 import { kashTokenABI } from '@/lib/contracts/kashTokenABI';
+import { usePendingBatchRequest } from '@/lib/usePendingBatchRequest';
 import { chainlinkAggregatorABI } from '@/lib/contracts/chainlinkAggregatorABI';
 import { parseEther, parseUnits, formatEther, formatUnits, zeroAddress } from 'viem';
 import { useChainId } from 'wagmi';
@@ -148,6 +149,14 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
     query: { refetchInterval: 15000 },
   });
 
+  const { cancellable: cancellableMint, stuck: stuckMint, refetch: refetchPendingLookback } =
+    usePendingBatchRequest({
+      kashYield,
+      userAddress: address,
+      currentBatchCycle,
+      kind: 'mint',
+    });
+
   const spotOracleAddress = isBtc ? CONTRACTS.oracles.btcUsd : CONTRACTS.oracles.ethUsd;
 
   const { data: oracleRound, isFetched: oracleRoundFetched } = useReadContract({
@@ -176,31 +185,27 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
   const cycleDuration = cycleDurationSecondsRaw !== undefined ? Number(cycleDurationSecondsRaw) : 86400;
   const isShortCycle = cycleDuration < 86400;
 
+  const pendingMintCycle = cancellableMint?.batchCycle ?? stuckMint?.batchCycle ?? currentBatchCycle;
+
   const { data: pendingMintRequest, refetch: refetchPendingMint } = useReadContract({
     address: kashYield,
     abi: kashYieldABI,
     functionName: 'getPendingMintRequest',
-    args: address && currentBatchCycle !== undefined ? [address, currentBatchCycle] : undefined,
+    args: address && pendingMintCycle !== undefined ? [address, pendingMintCycle] : undefined,
     query: { refetchInterval: 15000 },
   });
 
   // Only treat as processed when we have batch info; otherwise show pending/cancel state
   const batchProcessed = batchInfo ? (batchInfo as readonly [bigint, bigint, boolean, bigint, bigint])[2] : false;
-  const canCancelMint = Boolean(
-    address &&
-    currentBatchCycle !== undefined &&
-    batchInfo &&
-    !batchProcessed &&
-    pendingMintRequest &&
-    pendingMintRequest.amountIn > 0n
-  );
+  const canCancelMint = Boolean(cancellableMint && cancellableMint.amount > 0n);
+  const hasStuckMint = Boolean(stuckMint && stuckMint.amount > 0n);
 
   // localStorage key scoped to wallet + cycle + product so it persists across page refreshes
   const pendingStorageKey = useMemo(
-    () => address && currentBatchCycle !== undefined
-      ? `kash-mint-pending-${address}-${currentBatchCycle}-${product}`
+    () => address && pendingMintCycle !== undefined
+      ? `kash-mint-pending-${address}-${pendingMintCycle}-${product}`
       : null,
-    [address, currentBatchCycle, product]
+    [address, pendingMintCycle, product]
   );
 
   // Load persisted flag on mount / when cycle changes
@@ -241,8 +246,9 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
   useEffect(() => {
     if (isMintSuccess) {
       refetchPendingMint();
+      refetchPendingLookback();
     }
-  }, [isMintSuccess, refetchPendingMint]);
+  }, [isMintSuccess, refetchPendingMint, refetchPendingLookback]);
 
   useEffect(() => {
     if (isMintSuccess && mintHash && amount && lastActivityRefreshHash !== mintHash) {
@@ -335,12 +341,12 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
   };
 
   const handleCancelMint = () => {
-    if (currentBatchCycle === undefined) return;
+    if (!cancellableMint) return;
     cancelMint({
       address: kashYield,
       abi: kashYieldABI,
       functionName: 'cancelMintRequest',
-      args: [currentBatchCycle],
+      args: [cancellableMint.batchCycle],
       ...gasOptions,
     });
   };
@@ -561,9 +567,11 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
       )}
 
       {/* Pending mint: Cancel button */}
-      {canCancelMint && (
+      {canCancelMint && cancellableMint && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
-          <p className="text-sm text-amber-800 mb-2">You have a pending mint request for this batch cycle.</p>
+          <p className="text-sm text-amber-800 mb-2">
+            You have a pending mint request for batch cycle {cancellableMint.batchCycle.toString()}.
+          </p>
           <button
             type="button"
             onClick={handleCancelMint}
@@ -572,6 +580,15 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
           >
             {isCancelMintPending || isCancelMintConfirming ? 'Cancelling...' : 'Cancel Mint Request'}
           </button>
+        </div>
+      )}
+
+      {hasStuckMint && stuckMint && !canCancelMint && (
+        <div className="rounded-lg border border-orange-200 bg-orange-50 p-3">
+          <p className="text-sm text-orange-900 font-medium mb-1">Mint in progress (batch cycle {stuckMint.batchCycle.toString()})</p>
+          <p className="text-sm text-orange-800">
+            Your deposit is locked while the batch completes (phase {stuckMint.phase}). Cancellation is not available once processing has started.
+          </p>
         </div>
       )}
 

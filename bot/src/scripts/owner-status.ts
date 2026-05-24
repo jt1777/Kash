@@ -4,7 +4,7 @@
  * Shows protocol state for KashYieldETH or KashYieldBtc:
  * - Asset in contract: total vs getReserved* (pending mints + gross redeem estimate) vs owner/protocol-fee reserve
  * - Aave: supplied ETH/wBTC, borrowed USDC
- * - Hyperliquid: USDC in spot, wBTC/ETH in spot, perp positions (ETH/BTC: size, collateral, active)
+ * - KASH token: total supply (circulation) vs KASH on vault (pending redeems only)
  *
  * Usage (same vault selection as `npm run start` — see bot/src/config.ts):
  *   PRODUCT=eth KASH_YIELD_ETH_ADDRESS=0x... npm run owner:status
@@ -32,6 +32,7 @@ const ERC20_ABI = [
     type: 'function',
   },
   { inputs: [], name: 'decimals', outputs: [{ name: '', type: 'uint8' }], stateMutability: 'view', type: 'function' },
+  { inputs: [], name: 'totalSupply', outputs: [{ name: '', type: 'uint256' }], stateMutability: 'view', type: 'function' },
 ] as const;
 
 const RESERVED_LOOKBACK = 10;
@@ -197,20 +198,43 @@ async function main() {
   }
   console.log('');
 
-  // ─── KASH in Contract ────────────────────────────────────────────────────
+  // ─── KASH token (supply vs vault escrow) ─────────────────────────────────
   try {
     const kashTokenAddr = isBtc
       ? await kashYield.kashTokenBtc()
       : await kashYield.kashTokenEth();
     const kashToken = new ethers.Contract(kashTokenAddr, ERC20_ABI, provider);
     const kashInContract = await kashToken.balanceOf(vaultAddress);
+    const kashTotalSupply = await kashToken.totalSupply();
     const kashDecimals = await kashToken.decimals();
     const kashLabel = isBtc ? 'KASH-BTC' : 'KASH-ETH';
-    console.log(`📌 KASH in Contract (${kashLabel})`);
-    console.log('  Total:           ', ethers.formatUnits(kashInContract, kashDecimals), kashLabel, `(${kashDecimals} decimals)`);
-    console.log('  Note: Includes KASH transferred in by redeem requests not yet processed in Phase 2.');
+    const kashInUserWallets =
+      kashTotalSupply >= kashInContract ? kashTotalSupply - kashInContract : 0n;
+    console.log(`📌 KASH token (${kashLabel})`);
+    console.log(
+      '  Total supply:    ',
+      ethers.formatUnits(kashTotalSupply, kashDecimals),
+      kashLabel,
+      '← outstanding minted (circulation + vault escrow)',
+    );
+    console.log(
+      '  On vault:        ',
+      ethers.formatUnits(kashInContract, kashDecimals),
+      kashLabel,
+      '← pending redeems only (Phase 2 not yet run for those requests)',
+    );
+    console.log(
+      '  In user wallets: ',
+      ethers.formatUnits(kashInUserWallets, kashDecimals),
+      kashLabel,
+      '← totalSupply − vault balance (typical “in circulation”)',
+    );
+    console.log(`  Token contract:  ${kashTokenAddr}`);
+    console.log(
+      '  Note: Vault KASH = 0 after processed batches is normal. Use total supply / user wallets for mint activity — not vault balance alone.',
+    );
   } catch (e: any) {
-    console.log('📌 KASH in Contract: failed to fetch –', e?.message ?? e);
+    console.log('📌 KASH token: failed to fetch –', e?.message ?? e);
   }
   console.log('');
 

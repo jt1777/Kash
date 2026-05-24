@@ -141,8 +141,8 @@ export function RecentActivity() {
     }
   }, [address, isArbitrumOne, load, activityExternalRefreshNonce]);
 
-  // For each activity: getBatchInfo (processed?) and getPendingMintRequest/getPendingRedeemRequest (still has request?)
-  const readConfigs: { address: `0x${string}`; abi: typeof kashYieldABI; functionName: 'getBatchInfo' | 'getPendingMintRequest' | 'getPendingRedeemRequest'; args: [bigint] | [string, bigint] }[] = [];
+  // For each activity: getBatchInfo, batchPhase, and getPendingMintRequest/getPendingRedeemRequest
+  const readConfigs: { address: `0x${string}`; abi: typeof kashYieldABI; functionName: 'getBatchInfo' | 'batchPhase' | 'getPendingMintRequest' | 'getPendingRedeemRequest'; args: [bigint] | [string, bigint] }[] = [];
   const activityToConfigIndex: number[] = [];
   const activityToConfigIndexRef = useRef<number[]>([]);
   activities.forEach((a, i) => {
@@ -152,6 +152,7 @@ export function RecentActivity() {
     const cycle = BigInt(a.batchCycle);
     const batchIdx = readConfigs.length;
     readConfigs.push({ address: contract, abi: kashYieldABI, functionName: 'getBatchInfo', args: [cycle] });
+    readConfigs.push({ address: contract, abi: kashYieldABI, functionName: 'batchPhase', args: [cycle] });
     if (a.type === 'mint') {
       readConfigs.push({ address: contract, abi: kashYieldABI, functionName: 'getPendingMintRequest', args: [address, cycle] });
     } else {
@@ -169,6 +170,7 @@ export function RecentActivity() {
   const cancelledByIndex = new Map<number, boolean>();
   const processedByIndex = new Map<number, boolean>();
   const hasRequestByIndex = new Map<number, boolean>();
+  const isProcessingByIndex = new Map<number, boolean>();
   if (readResults && address) {
     type BatchResult = { status: 'success'; result: readonly [bigint, bigint, boolean, bigint, bigint] };
     type PendingResult = { status: 'success'; result: { amountIn?: bigint; kashAmount?: bigint } };
@@ -176,17 +178,22 @@ export function RecentActivity() {
       const batchIdx = activityToConfigIndex[i];
       if (batchIdx === undefined) continue;
       const batchR = readResults[batchIdx] as BatchResult | undefined;
-      const pendingR = readResults[batchIdx + 1] as PendingResult | undefined;
-      // Only treat as processed when we have a successful batch result; otherwise show pending/cancel state
+      const phaseRaw = readResults[batchIdx + 1];
+      const pendingR = readResults[batchIdx + 2] as PendingResult | undefined;
       const processed = batchR?.status === 'success' && batchR.result
         ? batchR.result[2]
         : false;
+      const phase =
+        phaseRaw?.status === 'success' && (phaseRaw as { result?: unknown }).result != null
+          ? Number((phaseRaw as { result: number | bigint }).result)
+          : 0;
       const hasRequest = pendingR?.status === 'success' && pendingR.result
         ? activities[i].type === 'mint'
           ? (pendingR.result.amountIn ?? 0n) > 0n
           : (pendingR.result.kashAmount ?? 0n) > 0n
         : false;
-      canCancelByIndex.set(i, !processed && hasRequest);
+      const isProcessing = !processed && hasRequest && phase > 0;
+      canCancelByIndex.set(i, !processed && hasRequest && phase === 0);
       // Only show "Transaction cancelled" when we've positively confirmed it was once pending
       // (hash is in cancelEligibleHashes) but the request is now gone without the batch running.
       // Without that localStorage evidence we can't distinguish a cancelled tx from a batch-cycle
@@ -197,6 +204,7 @@ export function RecentActivity() {
       );
       processedByIndex.set(i, processed);
       hasRequestByIndex.set(i, hasRequest);
+      isProcessingByIndex.set(i, isProcessing);
     }
   }
 
@@ -214,7 +222,7 @@ export function RecentActivity() {
         const batchIdx = indexMap[i];
         if (batchIdx === undefined) continue;
         const batchR = readResults[batchIdx] as BatchResult | undefined;
-        const pendingR = readResults[batchIdx + 1] as PendingResult | undefined;
+        const pendingR = readResults[batchIdx + 2] as PendingResult | undefined;
         const processed = batchR?.status === 'success' && batchR.result ? batchR.result[2] : false;
         const hasRequest = pendingR?.status === 'success' && pendingR.result
           ? activities[i].type === 'mint'
@@ -406,6 +414,7 @@ export function RecentActivity() {
               const canCancel = canCancelByIndex.get(i) ?? false;
               const cancelled = cancelledByIndex.get(i) ?? false;
               const processed = processedByIndex.get(i) ?? false;
+              const isProcessing = isProcessingByIndex.get(i) ?? false;
               const isCancellingThis = cancelTarget?.contractAddress === item.contractAddress &&
                 cancelTarget?.batchCycle === item.batchCycle &&
                 cancelTarget?.type === item.type;
@@ -457,7 +466,10 @@ export function RecentActivity() {
                       {isCancellingThis ? 'Cancelling…' : item.type === 'mint' ? 'Cancel mint' : 'Cancel redeem'}
                     </button>
                   )}
-                  {isPending && !canCancel && (
+                  {isProcessing && (
+                    <span className="text-xs font-medium text-orange-600 shrink-0">Processing</span>
+                  )}
+                  {isPending && !canCancel && !isProcessing && (
                     <span className="text-xs font-medium text-amber-600 shrink-0">Pending</span>
                   )}
                   {cancelled && (

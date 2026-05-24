@@ -5,6 +5,7 @@ import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadCont
 import { CONTRACTS, ARBITRUM_ONE_BLOCK_EXPLORER, HARDHAT_CHAIN_ID } from '@/lib/contracts/addresses';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 import { kashTokenABI } from '@/lib/contracts/kashTokenABI';
+import { usePendingBatchRequest } from '@/lib/usePendingBatchRequest';
 import { parseEther, formatEther } from 'viem';
 import { useChainId } from 'wagmi';
 
@@ -94,39 +95,42 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
     query: { refetchInterval: 15000 },
   });
 
-  const { data: cycleDurationSecondsRaw } = useReadContract({
+  const { data: paused } = useReadContract({
     address: kashYield,
     abi: kashYieldABI,
-    functionName: 'cycleDurationSeconds',
+    functionName: 'paused',
+    query: { refetchInterval: 15_000 },
   });
-  const cycleDuration = cycleDurationSecondsRaw !== undefined ? Number(cycleDurationSecondsRaw) : 86400;
-  const isShortCycle = cycleDuration < 86400;
+
+  const { cancellable: cancellableRedeem, stuck: stuckRedeem, refetch: refetchPendingLookback } =
+    usePendingBatchRequest({
+      kashYield,
+      userAddress: address,
+      currentBatchCycle,
+      kind: 'redeem',
+    });
+
+  const pendingRedeemCycle = cancellableRedeem?.batchCycle ?? stuckRedeem?.batchCycle ?? currentBatchCycle;
 
   const { data: pendingRedeemRequest, refetch: refetchPendingRedeem } = useReadContract({
     address: kashYield,
     abi: kashYieldABI,
     functionName: 'getPendingRedeemRequest',
-    args: address && currentBatchCycle !== undefined ? [address, currentBatchCycle] : undefined,
+    args: address && pendingRedeemCycle !== undefined ? [address, pendingRedeemCycle] : undefined,
     query: { refetchInterval: 15000 },
   });
 
   // Only treat as processed when we have batch info; otherwise show pending/cancel state
   const batchProcessed = batchInfo ? (batchInfo as readonly [bigint, bigint, boolean, bigint, bigint])[2] : false;
-  const canCancelRedeem = Boolean(
-    address &&
-    currentBatchCycle !== undefined &&
-    batchInfo &&
-    !batchProcessed &&
-    pendingRedeemRequest &&
-    pendingRedeemRequest.kashAmount > 0n
-  );
+  const canCancelRedeem = Boolean(cancellableRedeem && cancellableRedeem.amount > 0n);
+  const hasStuckRedeem = Boolean(stuckRedeem && stuckRedeem.amount > 0n);
 
   // localStorage key scoped to wallet + cycle + product so it persists across page refreshes
   const pendingStorageKey = useMemo(
-    () => address && currentBatchCycle !== undefined
-      ? `kash-redeem-pending-${address}-${currentBatchCycle}-${product}`
+    () => address && pendingRedeemCycle !== undefined
+      ? `kash-redeem-pending-${address}-${pendingRedeemCycle}-${product}`
       : null,
-    [address, currentBatchCycle, product]
+    [address, pendingRedeemCycle, product]
   );
 
   // Load persisted flag on mount / when cycle changes
@@ -178,8 +182,9 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
   useEffect(() => {
     if (isRedeemSuccess) {
       refetchPendingRedeem();
+      refetchPendingLookback();
     }
-  }, [isRedeemSuccess, refetchPendingRedeem]);
+  }, [isRedeemSuccess, refetchPendingRedeem, refetchPendingLookback]);
 
   useEffect(() => {
     if (isRedeemSuccess && redeemHash && amount && lastActivityRefreshHash !== redeemHash) {
@@ -224,12 +229,12 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
   };
 
   const handleCancelRedeem = () => {
-    if (currentBatchCycle === undefined) return;
+    if (!cancellableRedeem) return;
     cancelRedeem({
       address: kashYield,
       abi: kashYieldABI,
       functionName: 'cancelRedeemRequest',
-      args: [currentBatchCycle],
+      args: [cancellableRedeem.batchCycle],
       ...gasOptions,
     });
   };
@@ -405,9 +410,12 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
       )}
 
       {/* Pending redeem: Cancel button */}
-      {canCancelRedeem && (
+      {canCancelRedeem && cancellableRedeem && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
-          <p className="text-sm text-amber-800 mb-2">You have a pending redeem request for this batch cycle.</p>
+          <p className="text-sm text-amber-800 mb-2">
+            You have a pending redeem request for batch cycle {cancellableRedeem.batchCycle.toString()} (
+            {Number(formatEther(cancellableRedeem.amount)).toFixed(4)} {redeemSymbol}).
+          </p>
           <button
             type="button"
             onClick={handleCancelRedeem}
@@ -416,6 +424,22 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
           >
             {isCancelRedeemPending || isCancelRedeemConfirming ? 'Cancelling...' : 'Cancel Redeem Request'}
           </button>
+        </div>
+      )}
+
+      {/* Stuck redeem: batch started processing — cancel no longer possible */}
+      {hasStuckRedeem && stuckRedeem && !canCancelRedeem && (
+        <div className="rounded-lg border border-orange-200 bg-orange-50 p-3">
+          <p className="text-sm text-orange-900 font-medium mb-1">Redeem in progress (batch cycle {stuckRedeem.batchCycle.toString()})</p>
+          <p className="text-sm text-orange-800">
+            {Number(formatEther(stuckRedeem.amount)).toFixed(4)} {redeemSymbol} is locked on the vault while the batch
+            completes (phase {stuckRedeem.phase}). Cancellation is not available once processing has started.
+          </p>
+          <p className="text-xs text-orange-700 mt-2">
+            {paused
+              ? 'The protocol is paused — you can recover your KASH via emergencyWithdrawRedeem on the contract.'
+              : 'Your wBTC will be sent to your wallet when the batch finishes. If this stays stuck, contact the operator.'}
+          </p>
         </div>
       )}
 

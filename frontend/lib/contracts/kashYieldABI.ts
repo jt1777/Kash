@@ -97,6 +97,13 @@ export const kashYieldABI = [
     type: "function",
   },
   {
+    inputs: [{ name: "batchCycle", type: "uint256" }],
+    name: "batchPhase",
+    outputs: [{ name: "", type: "uint8" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
     inputs: [{ name: "user", type: "address" }],
     name: "getTotalDepositedBtc",
     outputs: [{ name: "", type: "uint256" }],

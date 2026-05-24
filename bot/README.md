@@ -320,6 +320,7 @@ PRODUCT=btc KASH_YIELD_BTC_ADDRESS=0x... AAVE_POOL_ADDRESS=0x... npm run owner:s
 
 Shows:
 - **Asset in contract**: Total wBTC/ETH, user deposits (reserved), excess (owner-withdrawable)
+- **KASH token**: Total supply, on-vault (pending redeems only), in user wallets — **do not** treat vault KASH = 0 as “no mints”
 - **Aave**: Supplied ETH/wBTC, borrowed USDC
 - **Hyperliquid**: USDC in spot wallet, open perp positions
 
