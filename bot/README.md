@@ -148,7 +148,7 @@ Order: **Aave deposit** → **`markMint*Deployed`** → **borrow to LTV** → **
 
 #### Redeem ops (`redeem_hl`)
 
-1. **Core:** proportional **close short** → **HL settlement** (`withdraw3` + target USDC pull to KashYield; no legacy “withdraw all HL USDC” core step).
+1. **Core:** proportional **close short** → **HL settlement** (`withdraw3` + on-chain adapter pull to KashYield; settlement is not complete until HL spot is at target **and** adapter ERC-20 USDC is drained **and** vault ops float covers strategy Aave repay).
 2. **Tail** (after settlement wait): **balanced / falling / rising** — Aave repay, Aave withdraw, optional **11a** / **11b** spot swaps; **`coverUsdcShortfall`** for small HL withdraw fee gaps (`HL_WITHDRAW_FEE_TOLERANCE_USDC`).
 
 See [`targetStateEngine.ts`](src/batch/targetStateEngine.ts) and [`opsExec.ts`](src/batch/opsExec.ts).
