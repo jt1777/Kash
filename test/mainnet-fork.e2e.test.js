@@ -417,7 +417,7 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
       expect(await kashYieldBtc.batchPhase(batchCycle)).to.equal(1);
 
       // ── Aave + HL manual ops (reserve protocol fee on vault for Phase 2) ─
-      const { deployBtc, borrowUsdc } = await manualBtcMintOps({
+      const { deployBtc, borrowUsdc, btcPrice } = await manualBtcMintOps({
         kashYield: kashYieldBtc,
         bot,
         hlAdapter,
