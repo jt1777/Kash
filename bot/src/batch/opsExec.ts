@@ -7,6 +7,7 @@ import {
   type OpsContext,
 } from './opsContext';
 import { strategyAaveDebtToRepay, strategyAaveDebtFloor, type RedeemTail } from './opsClassifier';
+import { execTx } from './txSend';
 
 // ---------------------------------------------------------------------------
 // OpStep interface
@@ -79,7 +80,7 @@ export async function runPlaybook(
     console.log(`   ✅ ${step.id} done`);
 
     if (step.refreshCtx) {
-      const nextCtx = await snapshotOpsContext(ctx.kashYield, ctx.provider, ctx.batchCycle, ctx.lockedNAV);
+      const nextCtx = await snapshotOpsContext(ctx.kashYield, ctx.provider, ctx.signer, ctx.batchCycle, ctx.lockedNAV);
       nextCtx.aaveDebtFloor = ctx.aaveDebtFloor;
       ctx = nextCtx;
     }
@@ -126,7 +127,7 @@ export async function executeDeltaPipeline(
     console.log(`   ✅ ${deltaId}`);
 
     if (step.refreshCtx) {
-      const nextCtx = await snapshotOpsContext(ctx.kashYield, ctx.provider, ctx.batchCycle, ctx.lockedNAV);
+      const nextCtx = await snapshotOpsContext(ctx.kashYield, ctx.provider, ctx.signer, ctx.batchCycle, ctx.lockedNAV);
       nextCtx.aaveDebtFloor = ctx.aaveDebtFloor;
       ctx = nextCtx;
     }
@@ -212,16 +213,6 @@ function shouldRunStep(step: OpStep, stepFilter: string): boolean {
 // Shared low-level helpers (called by step execute functions)
 // ---------------------------------------------------------------------------
 
-async function execTx(
-  label: string,
-  txPromise: Promise<ethers.ContractTransactionResponse>,
-): Promise<ethers.ContractTransactionReceipt | null> {
-  const tx = await txPromise;
-  const receipt = await tx.wait();
-  console.log(`      → ${label} confirmed`);
-  return receipt;
-}
-
 /**
  * `withdrawFromHyperliquid(requested)` then log **KashYield USDC delta** (actual bridge-in),
  * not only the requested amount. Optionally logs adapter ERC-20 USDC delta.
@@ -241,9 +232,7 @@ async function execHlWithdrawToKashYield(
   const ad = ctx.perpAdapterAddress;
   if (ad) beforeAd = BigInt((await usdc.balanceOf(ad)).toString());
 
-  const tx = await ctx.kashYield.withdrawFromHyperliquid(amountRequested);
-  await tx.wait();
-  console.log(`      → ${logLabel} confirmed`);
+  await execTx(logLabel, () => ctx.kashYield.withdrawFromHyperliquid(amountRequested));
 
   const afterKy = BigInt((await usdc.balanceOf(contractAddr)).toString());
   const received = afterKy > beforeKy ? afterKy - beforeKy : 0n;
@@ -500,7 +489,7 @@ export const aaveDeposit: OpStep = {
     const toDeposit = target < ctx.contractAsset ? target : ctx.contractAsset;
     if (toDeposit === 0n) return;
     console.log(`         ${fmtAsset(toDeposit, ctx)}`);
-    await execTx('depositToAave', ctx.kashYield.depositToAave(toDeposit, aaveTxOverrides()));
+    await execTx('depositToAave', () => ctx.kashYield.depositToAave(toDeposit, aaveTxOverrides()));
   },
 };
 
@@ -537,10 +526,13 @@ async function computeDeployableNetMintAsset(ctx: OpsContext, fallbackNetMintUSD
 async function markBatchMintDeployedToAave(ctx: OpsContext, amount: bigint): Promise<void> {
   if (amount === 0n) return;
   try {
-    const tx = ctx.isBtc
-      ? ctx.kashYield.markMintBtcDeployed(ctx.batchCycle, amount)
-      : ctx.kashYield.markMintEthDeployed(ctx.batchCycle, amount);
-    await execTx(ctx.isBtc ? 'markMintBtcDeployed' : 'markMintEthDeployed', tx);
+    await execTx(
+      ctx.isBtc ? 'markMintBtcDeployed' : 'markMintEthDeployed',
+      () =>
+        ctx.isBtc
+          ? ctx.kashYield.markMintBtcDeployed(ctx.batchCycle, amount)
+          : ctx.kashYield.markMintEthDeployed(ctx.batchCycle, amount),
+    );
   } catch (e: any) {
     console.warn(`         ⚠️  Could not mark batch mint deployed to Aave: ${e?.message ?? e}`);
   }
@@ -570,7 +562,7 @@ const aaveDepositNetMint = (netMintUSD: bigint): OpStep => ({
     const toDeposit = await computeNetMintAaveDepositAmount(ctx, netMintUSD);
     if (toDeposit === 0n) return;
     console.log(`         ${fmtAsset(toDeposit, ctx)} (after-fee net mint deposit only; protocol fee stays on vault)`);
-    await execTx('depositToAave', ctx.kashYield.depositToAave(toDeposit, aaveTxOverrides()));
+    await execTx('depositToAave', () => ctx.kashYield.depositToAave(toDeposit, aaveTxOverrides()));
     await markBatchMintDeployedToAave(ctx, toDeposit);
   },
 });
@@ -621,7 +613,7 @@ export const aaveBorrow: OpStep = {
     } else {
       console.log(`         ${fmtUsdc(toBorrow)}`);
     }
-    await execTx('borrowFromAave', ctx.kashYield.borrowFromAave(ctx.aaveUsdcAddress, toBorrow, aaveTxOverrides()));
+    await execTx('borrowFromAave', () => ctx.kashYield.borrowFromAave(ctx.aaveUsdcAddress, toBorrow, aaveTxOverrides()));
   },
 };
 
@@ -673,7 +665,7 @@ const hlDepositUsdc: OpStep = {
 
     const baselineHlUsdc = (await readHlApiUsdcBalance6(ctx)) ?? ctx.hlUsdcBalance;
 
-    await execTx('depositToHyperliquid', ctx.kashYield.depositToHyperliquid(amount));
+    await execTx('depositToHyperliquid', () => ctx.kashYield.depositToHyperliquid(amount));
     if (ctx.hlDirectDepositMode) {
       await maybeBridgeDirectModeDepositToHl(ctx, amount);
     }
@@ -727,10 +719,8 @@ const hlOpenShort = (shortTargets: MintHlShortTargets): OpStep => ({
         `(batch deposit ${fmtAsset(batchDeployed, ctx)} ≈ ${fmtUsd(depositUsd)} × ${lev}x leverage; ` +
         `${lev === 1 ? 'delta-neutral vs new Aave collateral' : `${lev}x vs deposit USD`})`,
     );
-    const tx = await ctx.kashYield.openShort(symbol, size);
-    await tx.wait();
-    console.log('      → openShort confirmed');
-    await maybeRunHlEventRelay(ctx, tx.hash, 'EXCHANGE_OPEN_SHORT', { required: true });
+    const receipt = await execTx('openShort', () => ctx.kashYield.openShort(symbol, size));
+    await maybeRunHlEventRelay(ctx, receipt.hash, 'EXCHANGE_OPEN_SHORT', { required: true });
   },
 });
 
@@ -778,16 +768,14 @@ const hlCloseShort: OpStep = {
     }
     if (closeSize >= fullSize) {
       console.log(`         closing full ${symbol} short`);
-      const tx = await ctx.kashYield['closeShort(string)'](symbol);
-      await tx.wait();
-      console.log('      → closeShort(full) confirmed');
-      await maybeRunHlEventRelay(ctx, tx.hash, 'EXCHANGE_CLOSE_SHORT', { required: true });
+      const receipt = await execTx('closeShort(full)', () => ctx.kashYield['closeShort(string)'](symbol));
+      await maybeRunHlEventRelay(ctx, receipt.hash, 'EXCHANGE_CLOSE_SHORT', { required: true });
     } else {
       console.log(`         closing ${fmtHlPerpSize(closeSize, ctx)} of ${fmtHlPerpSize(fullSize, ctx)}`);
-      const tx = await ctx.kashYield['closeShort(string,uint256)'](symbol, closeSize);
-      await tx.wait();
-      console.log('      → closeShort(partial) confirmed');
-      await maybeRunHlEventRelay(ctx, tx.hash, 'EXCHANGE_CLOSE_SHORT', { required: true });
+      const receipt = await execTx('closeShort(partial)', () =>
+        ctx.kashYield['closeShort(string,uint256)'](symbol, closeSize),
+      );
+      await maybeRunHlEventRelay(ctx, receipt.hash, 'EXCHANGE_CLOSE_SHORT', { required: true });
     }
   },
 };
@@ -801,7 +789,7 @@ async function executeAaveRepay(ctx: OpsContext): Promise<void> {
   const amount = ctx.contractUsdc < debtToRepay ? ctx.contractUsdc : debtToRepay;
   if (amount === 0n) return;
   console.log(`         ${fmtUsdc(amount)}`);
-  await execTx('repayToAave', ctx.kashYield.repayToAave(ctx.aaveUsdcAddress, amount, aaveTxOverrides()));
+  await execTx('repayToAave', () => ctx.kashYield.repayToAave(ctx.aaveUsdcAddress, amount, aaveTxOverrides()));
 }
 
 /** Final repay in rising tail after optional tiny-shortfall swap skip — fails loud if USDC still missing. */
@@ -822,7 +810,7 @@ async function executeAaveRepayRisingFinal(ctx: OpsContext): Promise<void> {
   }
   if (amount === 0n) return;
   console.log(`         ${fmtUsdc(amount)}`);
-  await execTx('repayToAave', ctx.kashYield.repayToAave(ctx.aaveUsdcAddress, amount, aaveTxOverrides()));
+  await execTx('repayToAave', () => ctx.kashYield.repayToAave(ctx.aaveUsdcAddress, amount, aaveTxOverrides()));
 }
 
 function describeAaveRepay(ctx: OpsContext): string {
@@ -885,14 +873,14 @@ const aaveRepayResidualDebtFromOwnerReserve: OpStep = {
       const cover = shortfall < reserve ? shortfall : reserve;
       if (cover > 0n) {
         console.log(`         coverUsdcShortfall ${fmtUsdc(cover)} for residual Aave debt dust`);
-        await execTx('coverUsdcShortfall(residual)', ctx.kashYield.coverUsdcShortfall(cover));
+        await execTx('coverUsdcShortfall(residual)', () => ctx.kashYield.coverUsdcShortfall(cover));
         spendable += cover;
       }
     }
     const amount = spendable < debtToRepay ? spendable : debtToRepay;
     if (amount === 0n) return;
     console.log(`         repay residual ${fmtUsdc(amount)} to Aave (debt=${fmtUsdc(ctx.aaveDebt)})`);
-    await execTx('repayToAave(residual)', ctx.kashYield.repayToAave(ctx.aaveUsdcAddress, amount, aaveTxOverrides()));
+    await execTx('repayToAave(residual)', () => ctx.kashYield.repayToAave(ctx.aaveUsdcAddress, amount, aaveTxOverrides()));
   },
 };
 
@@ -952,7 +940,7 @@ const dexSwapFromUsdc = (_lockedNAV: bigint | undefined): OpStep => ({
     );
     await execTx(
       'swapFromUsdc',
-      ctx.kashYield.swapFromUsdc(usdcToSwap, swapTxOverrides()),
+      () => ctx.kashYield.swapFromUsdc(usdcToSwap, swapTxOverrides()),
     );
   },
 });
@@ -1006,7 +994,7 @@ const aaveWithdraw = (mode: 'proportional' | 'remaining'): OpStep => ({
     }
     if (amount === 0n) return;
     console.log(`         ${fmtAsset(amount, ctx)}`);
-    await execTx('withdrawFromAave', ctx.kashYield.withdrawFromAave(amount, aaveTxOverrides()));
+    await execTx('withdrawFromAave', () => ctx.kashYield.withdrawFromAave(amount, aaveTxOverrides()));
   },
 });
 
@@ -1074,7 +1062,7 @@ const aaveWithdrawPartial: OpStep = {
     console.log(
       `         ${fmtAsset(toWithdraw, ctx)} (for swap≤${fmtAsset(assetForShortfall, ctx)}, redeem gap ${fmtAsset(redeemGap, ctx)})`,
     );
-    await execTx('withdrawFromAave(partial)', ctx.kashYield.withdrawFromAave(toWithdraw, aaveTxOverrides()));
+    await execTx('withdrawFromAave(partial)', () => ctx.kashYield.withdrawFromAave(toWithdraw, aaveTxOverrides()));
   },
 };
 
@@ -1126,7 +1114,7 @@ const dexSwapForUsdc: OpStep = {
     if (Object.keys(swapOpts).length > 0) {
       console.log(`         (OPS_SWAP_GAS_LIMIT set — swap tx uses explicit gasLimit, real Uniswap on-chain)`);
     }
-    await execTx('swapForUsdc', ctx.kashYield.swapForUsdc(toSell, swapOpts));
+    await execTx('swapForUsdc', () => ctx.kashYield.swapForUsdc(toSell, swapOpts));
   },
 };
 
@@ -1167,7 +1155,7 @@ const tailCoverHlFeeShortfall: OpStep = {
     console.log(
       `         coverUsdcShortfall ${fmtUsdc(amount)} (HL fee gap ${fmtUsdc(sf)}, ownerUsdcReserve ${fmtUsdc(reserve)})`,
     );
-    await execTx('coverUsdcShortfall(hl-fee)', ctx.kashYield.coverUsdcShortfall(amount));
+    await execTx('coverUsdcShortfall(hl-fee)', () => ctx.kashYield.coverUsdcShortfall(amount));
   },
 };
 
@@ -1204,7 +1192,7 @@ const risingTailCoverOwnerUsdc: OpStep = {
     console.log(
       `         coverUsdcShortfall ${fmtUsdc(amount)} (shortfall ${fmtUsdc(sf)}, ownerUsdcReserve ${fmtUsdc(reserve)})`,
     );
-    await execTx('coverUsdcShortfall', ctx.kashYield.coverUsdcShortfall(amount));
+    await execTx('coverUsdcShortfall', () => ctx.kashYield.coverUsdcShortfall(amount));
   },
 };
 
@@ -1213,15 +1201,13 @@ async function maybeBridgeDirectModeDepositToHl(ctx: OpsContext, amountUsdc6: bi
   if (!ctx.hlBridgeAddress || ctx.hlBridgeAddress === ethers.ZeroAddress) {
     throw new Error('HL direct mode is enabled but adapter hlBridgeAddress is not set');
   }
-  const signerPk = process.env.HYPERLIQUID_API_PRIVATE_KEY || config.privateKey;
-  if (!signerPk) throw new Error('HL direct mode requires HYPERLIQUID_API_PRIVATE_KEY (or PRIVATE_KEY)');
-
-  const signer = new ethers.Wallet(signerPk, ctx.provider);
+  const signer = ctx.signer;
   if (ctx.hlAccountAddress && ctx.hlAccountAddress !== ethers.ZeroAddress) {
-    if (signer.address.toLowerCase() !== ctx.hlAccountAddress.toLowerCase()) {
+    const signerAddr = await signer.getAddress();
+    if (signerAddr.toLowerCase() !== ctx.hlAccountAddress.toLowerCase()) {
       throw new Error(
-        `HL direct mode requires signer=${ctx.hlAccountAddress}; got ${signer.address}. ` +
-        'Set HYPERLIQUID_API_PRIVATE_KEY to the hlAccount key.'
+        `HL direct mode requires signer=${ctx.hlAccountAddress}; got ${signerAddr}. ` +
+        'Set PRIVATE_KEY to the hlAccount key (or disable direct mode).',
       );
     }
   }
@@ -1231,15 +1217,14 @@ async function maybeBridgeDirectModeDepositToHl(ctx: OpsContext, amountUsdc6: bi
     ['function balanceOf(address) view returns (uint256)', 'function transfer(address,uint256) returns (bool)'],
     signer,
   );
-  const bal = BigInt((await usdc.balanceOf(signer.address)).toString());
+  const signerAddr = await signer.getAddress();
+  const bal = BigInt((await usdc.balanceOf(signerAddr)).toString());
   if (bal < amountUsdc6) {
     throw new Error(`HL direct mode bridge transfer failed: signer has ${fmtUsdc(bal)} but needs ${fmtUsdc(amountUsdc6)}`);
   }
 
-  console.log(`      ↪ direct mode: bridge ${fmtUsdc(amountUsdc6)} from hlAccount ${signer.address} → ${ctx.hlBridgeAddress}`);
-  const tx = await usdc.transfer(ctx.hlBridgeAddress, amountUsdc6);
-  await tx.wait();
-  console.log('      → hlBridge USDC transfer confirmed');
+  console.log(`      ↪ direct mode: bridge ${fmtUsdc(amountUsdc6)} from hlAccount ${signerAddr} → ${ctx.hlBridgeAddress}`);
+  await execTx('hlBridge USDC transfer', () => usdc.transfer(ctx.hlBridgeAddress, amountUsdc6));
 }
 
 function trimDec(v: string, maxDp = 6): string {
@@ -1522,13 +1507,6 @@ async function syncHlAdapterFromHyperliquidApi(
     if (!enabled) return;
   }
 
-  const signerPk = process.env.HYPERLIQUID_API_PRIVATE_KEY || config.privateKey;
-  if (!signerPk) {
-    console.warn(
-      '      ⚠️  HL adapter sync skipped: set PRIVATE_KEY or HYPERLIQUID_API_PRIVATE_KEY for adapter txs',
-    );
-    return;
-  }
   const hlUser = hlUserAddress(ctx);
   if (!hlUser || hlUser === ethers.ZeroAddress) {
     console.warn('      ⚠️  HL adapter sync skipped: could not resolve HL user');
@@ -1553,7 +1531,7 @@ async function syncHlAdapterFromHyperliquidApi(
   const entry18 = decimalToBigInt(pos?.position?.entryPx || '0', 18);
   const isActive = size18 > 0n;
 
-  const signer = new ethers.Wallet(config.privateKey || signerPk, ctx.provider);
+  const signer = ctx.signer;
   const adapter = new ethers.Contract(
     ctx.perpAdapterAddress,
     [
@@ -1563,9 +1541,8 @@ async function syncHlAdapterFromHyperliquidApi(
     signer,
   );
 
-  await (await adapter.syncBalances(usdc6, asset18)).wait();
-  await (await adapter.syncPosition(ctx.assetSymbol, size18, entry18, isActive)).wait();
-  console.log('      → HL adapter syncBalances + syncPosition confirmed');
+  await execTx('HL adapter syncBalances', () => adapter.syncBalances(usdc6, asset18));
+  await execTx('HL adapter syncPosition', () => adapter.syncPosition(ctx.assetSymbol, size18, entry18, isActive));
 }
 
 async function maybeRunHlEventRelay(
@@ -1894,8 +1871,8 @@ async function ensureOpsUsdcCoverFromOwnerReserve(ctx: OpsContext): Promise<OpsC
     `   ↪ coverUsdcShortfall ${fmtUsdc(cover)} (raw ${fmtUsdc(raw)} on vault, strategy debt ${fmtUsdc(debt)}, ` +
       `ops float was ${fmtUsdc(ctx.contractUsdc)})`,
   );
-  await execTx('coverUsdcShortfall(settlement)', ctx.kashYield.coverUsdcShortfall(cover));
-  const next = await snapshotOpsContext(ctx.kashYield, ctx.provider, ctx.batchCycle, ctx.lockedNAV);
+  await execTx('coverUsdcShortfall(settlement)', () => ctx.kashYield.coverUsdcShortfall(cover));
+  const next = await snapshotOpsContext(ctx.kashYield, ctx.provider, ctx.signer, ctx.batchCycle, ctx.lockedNAV);
   next.aaveDebtFloor = ctx.aaveDebtFloor;
   return next;
 }
@@ -1940,7 +1917,7 @@ async function sweepRemainingHlUsdcAfterFullRedeem(
       console.warn(`      ⚠️  HL sweep #${rounds} failed: ${e?.message ?? e}`);
     }
     await sleep(pollMs);
-    const nextFresh = await snapshotOpsContext(fresh.kashYield, fresh.provider, fresh.batchCycle, lockedNAV);
+    const nextFresh = await snapshotOpsContext(fresh.kashYield, fresh.provider, fresh.signer, fresh.batchCycle, lockedNAV);
     nextFresh.aaveDebtFloor = fresh.aaveDebtFloor;
     fresh = nextFresh;
     console.log(`      ↪ sweep status: contractUsdc=${fmtUsdc(fresh.contractUsdc)}, hlUsdc=${fmtUsdc(fresh.hlUsdcBalance)}, adapterUsdc=${fmtUsdc(fresh.adapterUsdcErc20)}`);
@@ -2049,7 +2026,7 @@ export async function waitForHlWithdrawSettlementIfNeeded(
         const { received } = await execHlWithdrawToKashYield(fresh, `withdrawFromHyperliquid(retry#${attempts})`, pullAmt);
         await syncHlAdapterFromHyperliquidApi(fresh, true);
         if (received > 0n) {
-          const nextFresh = await snapshotOpsContext(fresh.kashYield, fresh.provider, fresh.batchCycle, lockedNAV);
+          const nextFresh = await snapshotOpsContext(fresh.kashYield, fresh.provider, fresh.signer, fresh.batchCycle, lockedNAV);
           nextFresh.aaveDebtFloor = fresh.aaveDebtFloor;
           fresh = nextFresh;
           console.log(
@@ -2071,7 +2048,7 @@ export async function waitForHlWithdrawSettlementIfNeeded(
     }
 
     await sleep(pollMs);
-    const nextFresh = await snapshotOpsContext(fresh.kashYield, fresh.provider, fresh.batchCycle, lockedNAV);
+    const nextFresh = await snapshotOpsContext(fresh.kashYield, fresh.provider, fresh.signer, fresh.batchCycle, lockedNAV);
     nextFresh.aaveDebtFloor = fresh.aaveDebtFloor;
     fresh = nextFresh;
     console.log(

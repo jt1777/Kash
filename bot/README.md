@@ -376,9 +376,101 @@ The bot does not detect "failure" directly; it detects **incomplete** batches fr
    - **Phase 2 orphan:** batch phase is 2 but the batch is **not** marked processed (Phase 2 distribution did not run or did not finish).
 4. Runs **one** batch per start: the **first** incomplete batch found (oldest first), or the **current** cycle if none are incomplete.
 
-**Recovery: when a step errors mid-batch**
+### Batch recovery runbook
 
-If a step errors (e.g. "No active position" during ops), the batch stays in phase 1 or 2 and is not marked processed. The next bot run will detect it as an incomplete orphan and pick it up automatically — no manual intervention needed in most cases.
+Use this when a batch is stuck at **phase 1** (ops incomplete or mark-done blocked) or **phase 2** (payout not done). Prefer **diagnose → one corrective action → one completion run**. Avoid looping full `npm start` after mark-done has already failed.
+
+#### Is `updateNAV` called every time a problem?
+
+**On a normal, single full run — no.** Two `updateNAV` writes per batch (starting from phase 0) are intentional:
+
+1. **Pre–Phase-1** — fresh MTM so Phase 1 on-chain signals use today’s portfolio.
+2. **Post-ops settlement** — MTM after trades/fees so Phase 2 mint/redeem matches realized balances.
+
+**On recovery — it can make things worse if you repeat full runs blindly.**
+
+When you resume from **phase 1** with `npm start -- --batch=N` (no `--step`), the bot **always** runs ops → **settlement `updateNAV` again** → mark-done → phase2 — even when every ops step was `[Δ skip]`. Each settlement write:
+
+- Updates on-chain **`currentNAV`** from live MTM (BTC price, portfolio, settlement buffer).
+- Raises **mark-done**’s required vault wBTC/ETH (`totalRedeemAsset` ∝ NAV × pending KASH).
+
+So if the vault is **already short** wBTC for payout, **re-running the full batch without fixing the asset gap first** can **raise the bar every time** while leaving the hole unchanged. That is what happened when mark-done failed, then runs 2–3 wrote higher settlement NAV (~$1.00 → ~$1.02 → ~$1.06) while ~0.00001224 wBTC was still missing.
+
+**Rule:** after `Cannot markBatchOpsDone`, do **not** loop full `npm start`. Fix the wBTC/ETH gap once, then finish with targeted steps (below).
+
+#### Default recovery command
+
+One full resume (ops → settlement nav → mark-done → phase2):
+
+```bash
+cd bot
+npm run build   # after code changes
+PRODUCT=btc SKIP_PROCESSING_WINDOW_CHECK=true npm start -- --batch=<cycle>
+```
+
+Use when ops **actually failed mid-pipeline** (HL/Aave incomplete). Do **not** use when mark-done already failed and ops are all skips — fix capital first (next section).
+
+#### Diagnose first
+
+```bash
+npm run owner:status
+```
+
+Check for batch `<cycle>`:
+
+| Signal | Meaning |
+|--------|---------|
+| `phase=1 processed=false` | Mid-batch — ops and/or nav/mark-done/phase2 incomplete |
+| `phase=2 processed=false` | mark-done passed; Phase 2 payout not done |
+| KASH still on vault | Phase 2 not finished |
+| Aave debt / HL short non-zero | Ops tail incomplete |
+| Vault wBTC low + USDC ops float | May need **11b** (USDC→wBTC), not more manual wBTC dribbles |
+
+#### Common failure modes
+
+**1. Ops aborted mid-tail (e.g. tx error after repay, before 11b swap)**
+
+- On-chain: Aave/HL may look “done”, but vault wBTC can still be below Phase 2 need; USDC may sit on vault unused.
+- **Fix:** complete the missing tail action (often **swap ops USDC → wBTC** via falling-tail / 11b path, or owner script), **then** one completion run.
+- **Do not** assume a small manual wBTC transfer fixes mark-done — if you also run settlement `updateNAV` again, required wBTC rises in parallel (same ~$ gap can persist).
+
+**2. `Cannot markBatchOpsDone` (vault wBTC/ETH below gross redeem + owner reserve)**
+
+- mark-done uses **settlement NAV** (or on-chain `currentNAV` after `--step=nav`).
+- **Fix gap first** (11b / swap / withdraw remaining from Aave if any), **then** finish without re-bumping NAV repeatedly:
+
+```bash
+# After capital is sufficient — skip re-running ops if already idempotent:
+PRODUCT=btc SKIP_PROCESSING_WINDOW_CHECK=true npm start -- --batch=<cycle> --step=mark-done
+PRODUCT=btc SKIP_PROCESSING_WINDOW_CHECK=true npm start -- --batch=<cycle> --step=phase2
+```
+
+Only re-run `--step=nav` if settlement NAV was never written or you intentionally want a fresh MTM (understand it changes Phase 2 sizing).
+
+**3. Partial step runs (`--step=hl`, `--step=ops` only)**
+
+- `--step=ops` exits after ops — **does not** run nav, mark-done, or phase2.
+- `--step=hl` on NET_REDEEM runs HL unwind only — **skips Aave tail** (repay, withdraw, 11b).
+- After `--step=ops` or `--step=hl`, you must still run nav → mark-done → phase2 (or one full `npm start`).
+
+**4. Stale phase 0 (past cycle, Phase 1 never ran)**
+
+- Not recoverable with `--batch=N`. User must **cancel** and resubmit in the current cycle. Bot fails fast if you target it.
+
+**5. Two processes, same `PRIVATE_KEY`**
+
+- Can cause `nonce too low` mid-batch. Run **one** bot at a time on the bot wallet.
+
+#### What not to do
+
+- Loop `npm start -- --batch=N` after mark-done failure hoping it self-heals.
+- Send tiny manual wBTC to the contract without checking mark-done math vs settlement NAV.
+- Use `--step=hl` on a full redeem that still needs Aave tail.
+- Confuse `phase=1` with `processed=true` — phase 1 means mid-pipeline, not paid out.
+
+#### When auto-resume is enough
+
+If a step errors but **capital is unchanged** (e.g. transient RPC, nonce retry succeeds on re-run), the next `npm start` orphan pick-up is fine — **one** retry, not many.
 
 **Targeting a specific batch cycle**
 

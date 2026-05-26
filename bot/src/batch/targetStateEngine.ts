@@ -223,7 +223,7 @@ export async function runTargetStateEngine(
 
     await executeRedeemCoreDeltaPipeline(ctx);
 
-    let freshCtx = await snapshotOpsContext(ctx.kashYield, ctx.provider, ctx.batchCycle, lockedNAV);
+    let freshCtx = await snapshotOpsContext(ctx.kashYield, ctx.provider, ctx.signer, ctx.batchCycle, lockedNAV);
     freshCtx.aaveDebtFloor = strategyAaveDebtFloor(freshCtx);
     freshCtx = await waitForHlWithdrawSettlementIfNeeded(freshCtx, lockedNAV);
 

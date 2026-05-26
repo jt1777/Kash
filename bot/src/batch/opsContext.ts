@@ -10,6 +10,8 @@ export interface OpsContext {
   /** Contract references (used by step executors) */
   kashYield: ethers.Contract;
   provider: ethers.Provider;
+  /** Bot wallet — sole on-chain signer for KashYield, adapter sync, and direct HL bridge transfers. */
+  signer: ethers.Signer;
 
   /**
    * Contract wallet balances at snapshot time, **after** subtracting owner cushions:
@@ -340,6 +342,7 @@ export async function readHyperliquidAdapterAddress(
 export async function snapshotOpsContext(
   kashYield: ethers.Contract,
   provider: ethers.Provider,
+  signer: ethers.Signer,
   batchCycle: bigint,
   lockedNAV: bigint | undefined,
 ): Promise<OpsContext> {
@@ -480,6 +483,7 @@ export async function snapshotOpsContext(
   return {
     kashYield,
     provider,
+    signer,
     contractAsset,
     contractUsdc,
     aaveSupplied,

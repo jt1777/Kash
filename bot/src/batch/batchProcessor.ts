@@ -12,6 +12,7 @@ import {
 import { classifyScenario, scenarioLabel } from './opsClassifier';
 import { runTargetStateEngine } from './targetStateEngine';
 import { runTestAaveLoopPlaybook } from './opsTestPlaybook';
+import { execTx } from './txSend';
 
 const isBtc = config.product === 'btc';
 
@@ -341,8 +342,7 @@ export class BatchProcessor {
   /** Step 1: Call performUpkeep() (Phase 1 indicative). Batch must be phase 0 with requests. */
   private async runStepPhase1(batchCycle: bigint): Promise<void> {
     console.log('🔄 Step phase1: Calling performUpkeep()...');
-    const tx1 = await this.kashYield.performUpkeep('0x');
-    const receipt1 = await tx1.wait();
+    const receipt1 = await execTx('performUpkeep (phase 1)', () => this.kashYield.performUpkeep('0x'));
     console.log(`   ✅ Phase 1 done in block ${receipt1.blockNumber}\n`);
   }
 
@@ -404,7 +404,7 @@ export class BatchProcessor {
     }
 
     // Snapshot all on-chain state once before executing any steps
-    const ctx = await snapshotOpsContext(this.kashYield, this.provider, batchCycle, phase1EraNAV);
+    const ctx = await snapshotOpsContext(this.kashYield, this.provider, this.signer, batchCycle, phase1EraNAV);
 
     if (scenario === 'net_mint_hl' || scenario === 'redeem_hl') {
       await runTargetStateEngine(ctx, scenario, net, phase1EraNAV);
@@ -451,7 +451,7 @@ export class BatchProcessor {
     }
 
     console.log(`📈 ${logLabel}: Updating NAV to $${ethers.formatEther(newNAV)} per KASH  (usdcBal=${ethers.formatUnits(usdcBalance, 6)}, assetBal=${ethers.formatEther(assetBalance)})...`);
-    await (await this.kashYield.updateNAV(newNAV, usdcBalance, assetBalance, 0n)).wait();
+    await execTx('updateNAV', () => this.kashYield.updateNAV(newNAV, usdcBalance, assetBalance, 0n));
     console.log('   ✅ updateNAV done\n');
   }
 
@@ -485,7 +485,7 @@ export class BatchProcessor {
     }
 
     console.log('📋 Step mark-done: Marking batch ops done...');
-    await (await this.kashYield.markBatchOpsDone(batchCycle)).wait();
+    await execTx('markBatchOpsDone', () => this.kashYield.markBatchOpsDone(batchCycle));
     console.log('   ✅ markBatchOpsDone\n');
   }
 
@@ -629,16 +629,17 @@ export class BatchProcessor {
     const currentCycleBn = typeof currentCycle === 'bigint' ? currentCycle : BigInt(currentCycle.toString());
     if (batchCycle === currentCycleBn) {
       console.log('🔄 Phase 2: Calling performUpkeep()...');
-      const tx2 = await this.kashYield.performUpkeep('0x');
-      const receipt2 = await tx2.wait();
+      const receipt2 = await execTx('performUpkeep (phase 2)', () => this.kashYield.performUpkeep('0x'));
       console.log(`   ✅ Phase 2 done in block ${receipt2.blockNumber}`);
       console.log(`   Tx hash: ${receipt2.hash}\n`);
       await this.handleEventsFromReceipt(receipt2);
     } else {
       console.log(`🔄 Phase 2: Calling processBatchPhase2ForCycle(${batchCycle}) (orphan batch)...`);
       try {
-        const tx2 = await this.kashYield.processBatchPhase2ForCycle(batchCycle);
-        const receipt2 = await tx2.wait();
+        const receipt2 = await execTx(
+          `processBatchPhase2ForCycle(${batchCycle})`,
+          () => this.kashYield.processBatchPhase2ForCycle(batchCycle),
+        );
         console.log(`   ✅ Phase 2 for batch ${batchCycle} done in block ${receipt2.blockNumber}`);
         console.log(`   Tx hash: ${receipt2.hash}\n`);
         await this.handleEventsFromReceipt(receipt2);
