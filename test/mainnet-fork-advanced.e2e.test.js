@@ -7,6 +7,12 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const hre = require("hardhat");
+const {
+  mintProtocolFee,
+  usdcBorrowForAssetUsd,
+  manualEthMintOps,
+  settleMintPhase2,
+} = require("./helpers/forkBatchOps");
 
 // Pin to a recent Arbitrum block for reproducibility
 const FORK_BLOCK = process.env.FORK_BLOCK_NUMBER 
@@ -97,17 +103,14 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     await kashYieldEth.connect(user).requestMint(0, { value: ethAmount });
     await kashYieldEth.connect(bot).performUpkeep("0x"); // Phase 1
 
-    const ethPrice   = await kashYieldEth.getEthPrice();
-    const ethUsdVal  = ethAmount * ethPrice / (10n ** 18n);
-    const borrowUsdc = ethUsdVal * 60n / 100n / (10n ** 12n);
+    await manualEthMintOps({
+      kashYield: kashYieldEth,
+      bot,
+      hlAdapter,
+      mintEthAmount: ethAmount,
+    });
 
-    await kashYieldEth.connect(bot).depositToAave(ethAmount);
-    await kashYieldEth.connect(bot).borrowFromAave(USDC_ADDRESS, borrowUsdc);
-    await kashYieldEth.connect(bot).depositToHyperliquid(borrowUsdc);
-
-    await kashYieldEth.connect(bot).updateNAV(10n ** 18n, borrowUsdc, 0n, 0n);
-    await kashYieldEth.connect(bot).markBatchOpsDone(batchCycle);
-    await kashYieldEth.connect(bot).performUpkeep("0x"); // Phase 2
+    await settleMintPhase2({ kashYield: kashYieldEth, bot, batchCycle, nav: NAV_1 });
     return batchCycle;
   }
 
@@ -123,17 +126,17 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     await kashYieldEth.connect(bot).performUpkeep("0x"); // Phase 1
 
     const total = eth1 + eth2;
+    const feeBps = BigInt(await kashYieldEth.feeBps());
+    const deployTotal = total - mintProtocolFee(eth1, feeBps) - mintProtocolFee(eth2, feeBps);
     const ethPrice = await kashYieldEth.getEthPrice();
-    const ethUsdVal = (total * ethPrice) / 10n ** 18n;
-    const borrowUsdc = (ethUsdVal * 60n) / 100n / 10n ** 12n;
+    const deployUsd = (deployTotal * ethPrice) / 10n ** 18n;
+    const borrowUsdc = usdcBorrowForAssetUsd(deployUsd);
 
-    await kashYieldEth.connect(bot).depositToAave(total);
+    await kashYieldEth.connect(bot).depositToAave(deployTotal);
     await kashYieldEth.connect(bot).borrowFromAave(USDC_ADDRESS, borrowUsdc);
     await kashYieldEth.connect(bot).depositToHyperliquid(borrowUsdc);
 
-    await kashYieldEth.connect(bot).updateNAV(10n ** 18n, borrowUsdc, 0n, 0n);
-    await kashYieldEth.connect(bot).markBatchOpsDone(batchCycle);
-    await kashYieldEth.connect(bot).performUpkeep("0x"); // Phase 2
+    await settleMintPhase2({ kashYield: kashYieldEth, bot, batchCycle, nav: NAV_1 });
     return batchCycle;
   }
 
@@ -200,17 +203,20 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     expect(await kashYieldEth.batchPhase(batchCycle)).to.equal(1);
 
     const TOTAL_ETH  = ethers.parseEther("0.8");
+    const feeBps = BigInt(await kashYieldEth.feeBps());
+    const eth0_5 = ethers.parseEther("0.5");
+    const eth0_3 = ethers.parseEther("0.3");
+    const deployTotal =
+      TOTAL_ETH - mintProtocolFee(eth0_5, feeBps) - mintProtocolFee(eth0_3, feeBps);
     const ethPrice   = await kashYieldEth.getEthPrice();
-    const ethUsdVal  = TOTAL_ETH * ethPrice / (10n ** 18n);
-    const borrowUsdc = ethUsdVal * 60n / 100n / (10n ** 12n);
+    const deployUsd  = (deployTotal * ethPrice) / (10n ** 18n);
+    const borrowUsdc = usdcBorrowForAssetUsd(deployUsd);
 
-    await kashYieldEth.connect(bot).depositToAave(TOTAL_ETH);
+    await kashYieldEth.connect(bot).depositToAave(deployTotal);
     await kashYieldEth.connect(bot).borrowFromAave(USDC_ADDRESS, borrowUsdc);
     await kashYieldEth.connect(bot).depositToHyperliquid(borrowUsdc);
 
-    await kashYieldEth.connect(bot).updateNAV(10n ** 18n, borrowUsdc, 0n, 0n);
-    await kashYieldEth.connect(bot).markBatchOpsDone(batchCycle);
-    await kashYieldEth.connect(bot).performUpkeep("0x"); // Phase 2
+    await settleMintPhase2({ kashYield: kashYieldEth, bot, batchCycle, nav: NAV_1 });
 
     const bal1 = await kashTokenEth.balanceOf(user1.address);
     const bal2 = await kashTokenEth.balanceOf(user2.address);

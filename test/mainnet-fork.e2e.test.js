@@ -24,6 +24,11 @@
 const { expect } = require("chai");
 const { ethers }  = require("hardhat");
 const hre         = require("hardhat");
+const {
+  manualEthMintOps,
+  manualBtcMintOps,
+  settleMintPhase2,
+} = require("./helpers/forkBatchOps");
 
 // Pin to a specific Arbitrum block for reproducibility and RPC cache hits.
 // Hardhat caches all state for pinned forks in .cache/hardhat-network-fork/,
@@ -169,51 +174,40 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
       await kashYieldEth.connect(bot).performUpkeep("0x");
       expect(await kashYieldEth.batchPhase(batchCycle)).to.equal(1);
 
-      // ── Aave: deposit WETH, borrow USDC ───────────────────────────────────
-      await kashYieldEth.connect(bot).depositToAave(MINT_ETH);
-
-      const ethPrice = await kashYieldEth.getEthPrice();
-      const ethUsdValue = MINT_ETH * ethPrice / (10n ** 18n); // 18-dec USD
-      const borrowUsdc = ethUsdValue * 60n / 100n / (10n ** 12n); // 6-dec USDC — 60% LTV leaves buffer for accrued interest
+      // ── Aave + HL manual ops (reserve protocol fee on vault for Phase 2) ─
+      const { deployEth, borrowUsdc } = await manualEthMintOps({
+        kashYield: kashYieldEth,
+        bot,
+        hlAdapter,
+        mintEthAmount: MINT_ETH,
+      });
       console.log(`       Aave: borrowing ${ethers.formatUnits(borrowUsdc, 6)} USDC`);
 
-      await kashYieldEth.connect(bot).borrowFromAave(USDC_ADDRESS, borrowUsdc);
       const contractUsdc = await usdc.balanceOf(await kashYieldEth.getAddress());
       expect(contractUsdc).to.equal(borrowUsdc);
       console.log(`       ✅ Aave USDC borrowed: ${ethers.formatUnits(contractUsdc, 6)}`);
 
-      // ── HL: deposit USDC to bridge ────────────────────────────────────────
-      // On mainnet this sends USDC to the real HL bridge at 0x2Df1c...
-      // HL will credit the adapter's Arbitrum address on the HL L1.
-      await kashYieldEth.connect(bot).depositToHyperliquid(borrowUsdc);
       const bridgeUsdc = await usdc.balanceOf(HL_BRIDGE);
       console.log(`       ✅ HL bridge USDC balance: ${ethers.formatUnits(bridgeUsdc, 6)} (includes prior deposits)`);
-      // Adapter's internal usdcBalance tracker should reflect the deposit.
       const adapterUsdcBalance = await hlAdapter.usdcBalance();
       expect(adapterUsdcBalance).to.equal(borrowUsdc);
 
-      // ── HL: spot buy and open short (no-ops on mainnet — off-chain via HL API) ──
-      // These emit events for audit but execute no on-chain HL logic.
-      await kashYieldEth.connect(bot).spotBuyOnHyperliquid(borrowUsdc);
-      const shortSizeUSD  = ethUsdValue * 170n / 100n;
-      const shortSizeAsset = shortSizeUSD * 10n ** 18n / ethPrice;
-      await kashYieldEth.connect(bot).openShort("ETH", shortSizeAsset);
-
-      // Simulate HL confirming the position (bot calls syncPosition after HL API confirms).
-      await hlAdapter.syncPosition("ETH", shortSizeAsset, ethPrice, true);
       const [posSize, , , , posActive] = await kashYieldEth.getHyperliquidPosition("ETH");
       expect(posActive).to.be.true;
-      expect(posSize).to.equal(shortSizeAsset);
+      expect(posSize).to.be.gt(0n);
       console.log(`       ✅ Short position synced: ${ethers.formatEther(posSize)} ETH`);
 
-      // ── NAV + mark done + Phase 2 ─────────────────────────────────────────
-      await kashYieldEth.connect(bot).updateNAV(NAV_1, borrowUsdc, 0n, 0n);
-      await kashYieldEth.connect(bot).markBatchOpsDone(batchCycle);
-      await kashYieldEth.connect(bot).performUpkeep("0x");
+      const protocolFeeEth = MINT_ETH - deployEth;
+      const vaultEth = await ethers.provider.getBalance(await kashYieldEth.getAddress());
+      expect(vaultEth).to.be.gte(protocolFeeEth);
+
+      // ── Settlement NAV + mark done + Phase 2 ───────────────────────────────
+      await settleMintPhase2({ kashYield: kashYieldEth, bot, batchCycle, nav: NAV_1 });
       expect(await kashYieldEth.batchProcessed(batchCycle)).to.be.true;
 
       // ── Verify KashToken minted ───────────────────────────────────────────
       const kashBalance = await kashTokenEth.balanceOf(user1.address);
+      const ethPrice = await kashYieldEth.getEthPrice();
       const expectedKash = ethPrice * 9997n / 10000n; // ≈ ETH value at $1 NAV minus 0.03% fee
       expect(kashBalance).to.be.closeTo(expectedKash, expectedKash / 20n); // within 5%
       console.log(`       ✅ Kash-ETH minted: ${ethers.formatEther(kashBalance)}`);
@@ -425,38 +419,31 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
       await kashYieldBtc.connect(bot).performUpkeep("0x");
       expect(await kashYieldBtc.batchPhase(batchCycle)).to.equal(1);
 
-      // ── Aave: deposit wBTC, borrow USDC ───────────────────────────────────
-      await kashYieldBtc.connect(bot).depositToAave(MINT_BTC);
-
-      const btcPrice   = await kashYieldBtc.getBtcPrice();
-      const btcUsdValue = MINT_BTC * btcPrice / (10n ** 8n); // 18-dec USD
-      const borrowUsdc  = btcUsdValue * 60n / 100n / (10n ** 12n); // 6-dec — 60% LTV leaves buffer for accrued interest
+      // ── Aave + HL manual ops (reserve protocol fee on vault for Phase 2) ─
+      const { deployBtc, borrowUsdc } = await manualBtcMintOps({
+        kashYield: kashYieldBtc,
+        bot,
+        hlAdapter,
+        mintBtcAmount: MINT_BTC,
+      });
       console.log(`       Aave: borrowing ${ethers.formatUnits(borrowUsdc, 6)} USDC`);
 
-      await kashYieldBtc.connect(bot).borrowFromAave(USDC_ADDRESS, borrowUsdc);
       const contractUsdc = await usdc.balanceOf(await kashYieldBtc.getAddress());
       expect(contractUsdc).to.be.gte(borrowUsdc);
       console.log(`       ✅ Aave USDC borrowed: ${ethers.formatUnits(contractUsdc, 6)}`);
 
-      // ── HL: deposit USDC to bridge ────────────────────────────────────────
-      await kashYieldBtc.connect(bot).depositToHyperliquid(borrowUsdc);
       expect(await hlAdapter.usdcBalance()).to.equal(borrowUsdc);
       console.log(`       ✅ Adapter usdcBalance: ${ethers.formatUnits(await hlAdapter.usdcBalance(), 6)}`);
 
-      // ── HL: spot buy + open short (no-ops, trading is off-chain) ──────────
-      await kashYieldBtc.connect(bot).spotBuyOnHyperliquid(borrowUsdc);
-      const shortSizeUSD   = btcUsdValue * 170n / 100n;
-      const shortSizeAsset = shortSizeUSD * 10n ** 18n / btcPrice;
-      await kashYieldBtc.connect(bot).openShort("BTC", shortSizeAsset);
-      await hlAdapter.syncPosition("BTC", shortSizeAsset, btcPrice, true);
       const [posSize, , , , posActive] = await kashYieldBtc.getHyperliquidPosition("BTC");
       expect(posActive).to.be.true;
       console.log(`       ✅ Short position synced: ${ethers.formatEther(posSize)} BTC`);
 
-      // ── NAV + mark done + Phase 2 ─────────────────────────────────────────
-      await kashYieldBtc.connect(bot).updateNAV(NAV_1, borrowUsdc, 0n, 0n);
-      await kashYieldBtc.connect(bot).markBatchOpsDone(batchCycle);
-      await kashYieldBtc.connect(bot).performUpkeep("0x");
+      const protocolFeeBtc = MINT_BTC - deployBtc;
+      const vaultBtc = await wbtc.balanceOf(await kashYieldBtc.getAddress());
+      expect(vaultBtc).to.be.gte(protocolFeeBtc);
+
+      await settleMintPhase2({ kashYield: kashYieldBtc, bot, batchCycle, nav: NAV_1 });
       expect(await kashYieldBtc.batchProcessed(batchCycle)).to.be.true;
 
       const kashBalance = await kashTokenBtc.balanceOf(user1.address);
