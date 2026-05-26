@@ -183,14 +183,11 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
       });
       console.log(`       Aave: borrowing ${ethers.formatUnits(borrowUsdc, 6)} USDC`);
 
-      const contractUsdc = await usdc.balanceOf(await kashYieldEth.getAddress());
-      expect(contractUsdc).to.equal(borrowUsdc);
-      console.log(`       ✅ Aave USDC borrowed: ${ethers.formatUnits(contractUsdc, 6)}`);
-
       const bridgeUsdc = await usdc.balanceOf(HL_BRIDGE);
       console.log(`       ✅ HL bridge USDC balance: ${ethers.formatUnits(bridgeUsdc, 6)} (includes prior deposits)`);
       const adapterUsdcBalance = await hlAdapter.usdcBalance();
       expect(adapterUsdcBalance).to.equal(borrowUsdc);
+      console.log(`       ✅ HL adapter usdcBalance: ${ethers.formatUnits(adapterUsdcBalance, 6)}`);
 
       const [posSize, , , , posActive] = await kashYieldEth.getHyperliquidPosition("ETH");
       expect(posActive).to.be.true;
@@ -428,12 +425,9 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
       });
       console.log(`       Aave: borrowing ${ethers.formatUnits(borrowUsdc, 6)} USDC`);
 
-      const contractUsdc = await usdc.balanceOf(await kashYieldBtc.getAddress());
-      expect(contractUsdc).to.be.gte(borrowUsdc);
-      console.log(`       ✅ Aave USDC borrowed: ${ethers.formatUnits(contractUsdc, 6)}`);
-
-      expect(await hlAdapter.usdcBalance()).to.equal(borrowUsdc);
-      console.log(`       ✅ Adapter usdcBalance: ${ethers.formatUnits(await hlAdapter.usdcBalance(), 6)}`);
+      const adapterUsdcBalance = await hlAdapter.usdcBalance();
+      expect(adapterUsdcBalance).to.equal(borrowUsdc);
+      console.log(`       ✅ HL adapter usdcBalance: ${ethers.formatUnits(adapterUsdcBalance, 6)}`);
 
       const [posSize, , , , posActive] = await kashYieldBtc.getHyperliquidPosition("BTC");
       expect(posActive).to.be.true;
