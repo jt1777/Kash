@@ -325,6 +325,24 @@ function fmtHlPerpSize(v: bigint, ctx: OpsContext): string {
 }
 function fmtUsd(v: bigint): string { return '$' + ethers.formatEther(v); }
 const WAD = 10n ** 18n;
+/** Hyperliquid min notional for partial perp orders (full reduce-only close is exempt). */
+const HL_MIN_PARTIAL_CLOSE_NOTIONAL_USD18 = 10n * WAD;
+
+function hlPerpNotionalUsd18(ctx: OpsContext, sizeInternal18: bigint): bigint {
+  return (sizeInternal18 * ctx.price) / WAD;
+}
+
+/** Bump partial close when strategy notional is below HL's $10 floor (capped at full short). */
+function applyHlMinPartialCloseSize(ctx: OpsContext, closeSize: bigint, fullSize: bigint): bigint {
+  if (closeSize === 0n || closeSize >= fullSize || ctx.price === 0n) return closeSize;
+  const notional = hlPerpNotionalUsd18(ctx, closeSize);
+  if (notional >= HL_MIN_PARTIAL_CLOSE_NOTIONAL_USD18) return closeSize;
+  console.log(
+    `         strategy close $${Number(ethers.formatEther(notional)).toFixed(2)} < HL $10 min → bumping to $10`,
+  );
+  const bumped = (HL_MIN_PARTIAL_CLOSE_NOTIONAL_USD18 * WAD) / ctx.price;
+  return bumped < fullSize ? bumped : fullSize;
+}
 
 /**
  * Mint short sizing: batch short target = pipeline-start short + (batch Aave deposit USD × SHORT_LEVERAGE).
@@ -766,6 +784,7 @@ const hlCloseShort: OpStep = {
       console.log(`         strategy unwind is 0; no ${symbol} short close needed`);
       return;
     }
+    closeSize = applyHlMinPartialCloseSize(ctx, closeSize, fullSize);
     if (closeSize >= fullSize) {
       console.log(`         closing full ${symbol} short`);
       const receipt = await execTx('closeShort(full)', () => ctx.kashYield['closeShort(string)'](symbol));
@@ -1747,9 +1766,9 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** 100% of KASH supply redeemed this batch — drain HL spot USDC, not just “enough to repay Aave”. */
-function isFullRedeemForHlSweep(ctx: OpsContext): boolean {
-  return ctx.redeemFraction >= BigInt(1e18);
+/** 100% strategy unwind this batch — drain HL spot USDC, not just “enough to repay Aave”. */
+function isFullStrategyUnwindForHlSweep(ctx: OpsContext): boolean {
+  return ctx.strategyRedeemFraction >= BigInt(1e18);
 }
 
 /** Upper bound for moving USDC adapter → KashYield: max(HL-tracked spot, adapter ERC-20 on L2). */
@@ -1895,7 +1914,7 @@ async function sweepRemainingHlUsdcAfterFullRedeem(
   ctx: OpsContext,
   lockedNAV: bigint | undefined,
 ): Promise<OpsContext> {
-  const defaultSweep = isFullRedeemForHlSweep(ctx);
+  const defaultSweep = isFullStrategyUnwindForHlSweep(ctx);
   const want = (process.env.HL_REDEEM_SWEEP_REMAINING_USDC || (defaultSweep ? 'true' : 'false')).toLowerCase() === 'true';
   if (!want) return ctx;
 

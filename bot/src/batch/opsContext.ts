@@ -43,7 +43,7 @@ export interface OpsContext {
 
   /** Redemption accounting */
   batchCycle: bigint;
-  /** Gross: batchTotalRedeemKash / totalSupply — share of all KASH being redeemed (for HL USDC sweep, logging). */
+  /** Gross: batchTotalRedeemKash / totalSupply — share of all KASH being redeemed (logging). */
   redeemFraction: bigint; // 18 dec; 1e18 = 100%
   /**
    * Strategy unwind: max(0, redeemKash − estMintKash) / totalSupply when batch has minters;
