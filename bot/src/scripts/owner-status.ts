@@ -118,9 +118,10 @@ async function main() {
     totalInContract = await wbtc.balanceOf(vaultAddress);
     reserved = await kashYield.getReservedBtc();
     const br = await reservedAssetBreakdown(kashYield, true);
-    const excess = totalInContract > reserved ? totalInContract - reserved : 0n;
     const ownerAssetReserve = await kashYield.ownerWbtcReserve().catch(() => 0n);
     const protocolFeeReserve = await kashYield.protocolFeeWbtcReserve().catch(() => 0n);
+    const userNavVault =
+      totalInContract > ownerAssetReserve ? totalInContract - ownerAssetReserve : 0n;
     console.log('📦 Asset in Contract (wBTC)');
     console.log('  Total:            ', ethers.formatUnits(totalInContract, 8), 'wBTC');
     console.log(
@@ -141,19 +142,28 @@ async function main() {
     if (br.total !== reserved) {
       console.log('    ⚠️  Breakdown sum ≠ on-chain reserved (unexpected); trust getReservedBtc.');
     }
-    console.log('  Owner reserve:    ', ethers.formatUnits(ownerAssetReserve, 8), 'wBTC (excluded from user NAV / ops)');
-    console.log('    · Protocol fee: ', ethers.formatUnits(protocolFeeReserve, 8), 'wBTC (current fee-owned portion)');
-    console.log('  Excess (owner):   ', ethers.formatUnits(excess, 8), 'wBTC (withdrawable via ownerWithdrawWbtc)');
     console.log(
-      '  Note: "Reserved" is user obligations; owner reserve/protocol fees are separate owner-withdrawable excess.',
+      '  Contract (user NAV):',
+      ethers.formatUnits(userNavVault, 8),
+      'wBTC  ← vault balance minus ownerWbtcReserve; included in updateNAV',
+    );
+    console.log(
+      '  Owner reserve:    ',
+      ethers.formatUnits(ownerAssetReserve, 8),
+      'wBTC (excluded from user NAV; redeem protocol fees accrue here)',
+    );
+    console.log('    · Protocol fee: ', ethers.formatUnits(protocolFeeReserve, 8), 'wBTC (subset of owner reserve)');
+    console.log(
+      '  Note: Pending-batch "reserved" is a subset of on-vault wBTC. Only ownerWbtcReserve is owner-owned; the rest backs KASH NAV.',
     );
   } else {
     totalInContract = await provider.getBalance(vaultAddress);
     reserved = await kashYield.getReservedEth();
     const br = await reservedAssetBreakdown(kashYield, false);
-    const excess = totalInContract > reserved ? totalInContract - reserved : 0n;
     const ownerAssetReserve = await kashYield.ownerEthReserve().catch(() => 0n);
     const protocolFeeReserve = await kashYield.protocolFeeEthReserve().catch(() => 0n);
+    const userNavVault =
+      totalInContract > ownerAssetReserve ? totalInContract - ownerAssetReserve : 0n;
     console.log('📦 Asset in Contract (ETH)');
     console.log('  Total:            ', ethers.formatEther(totalInContract), 'ETH');
     console.log(
@@ -166,11 +176,19 @@ async function main() {
     if (br.total !== reserved) {
       console.log('    ⚠️  Breakdown sum ≠ on-chain reserved (unexpected); trust getReservedEth.');
     }
-    console.log('  Owner reserve:    ', ethers.formatEther(ownerAssetReserve), 'ETH (excluded from user NAV / ops)');
-    console.log('    · Protocol fee: ', ethers.formatEther(protocolFeeReserve), 'ETH (current fee-owned portion)');
-    console.log('  Excess (owner):   ', ethers.formatEther(excess), 'ETH (withdrawable via ownerWithdrawEth)');
     console.log(
-      '  Note: Reserved is user obligations; owner reserve/protocol fees are separate owner-withdrawable excess.',
+      '  Contract (user NAV):',
+      ethers.formatEther(userNavVault),
+      'ETH  ← vault balance minus ownerEthReserve; included in updateNAV',
+    );
+    console.log(
+      '  Owner reserve:    ',
+      ethers.formatEther(ownerAssetReserve),
+      'ETH (excluded from user NAV; redeem protocol fees accrue here)',
+    );
+    console.log('    · Protocol fee: ', ethers.formatEther(protocolFeeReserve), 'ETH (subset of owner reserve)');
+    console.log(
+      '  Note: Pending-batch "reserved" is a subset of on-vault ETH. Only ownerEthReserve is owner-owned; the rest backs KASH NAV.',
     );
   }
   console.log('');

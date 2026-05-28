@@ -22,7 +22,30 @@ This guide covers production deployment of **KashYieldETH** and **KashYieldBtc**
 
 4. **`exchangeSwitchDelay`** on a fresh vault defaults to **24 hours**. The **first** perp adapter registration is immediate; the delay applies when you **later** propose **another** adapter. On mainnet, do **not** set the delay to `0` unless you explicitly accept no timelock for future adapter changes.
 
-5. **Owner / treasury reserves** (`ownerUsdcReserve`, asset-specific owner buffers). The products credit on-chain balances that are **not** part of user NAV: call `markOwnerUsdcDeposit` after the owner sends USDC; on **KashYieldETH** use payable `markOwnerEthDeposit()` for ETH buffers; on **KashYieldBtc** use `markOwnerWbtcDeposit` for WBTC. The bot may call `coverUsdcShortfall` to move reserved USDC into the working float. Batch phase 2 and `ownerWithdraw*` enforce these cushions. Ops and `snapshotOpsContext` use **adjusted** balances (raw minus reserves) as the deployable float.
+5. **Owner / treasury reserves** (`ownerUsdcReserve`, asset-specific owner buffers). These balances are **not** part of user NAV. The bot may call `coverUsdcShortfall` to move reserved USDC into the working float. Batch phase 2 credits protocol fees to owner asset reserves; `ownerWithdraw*` pulls only from those reserves. Ops and `snapshotOpsContext` use **adjusted** balances (raw minus reserves) as the deployable float.
+
+   **Crediting owner reserves (one transaction each; cannot re-label existing user NAV float):**
+
+   | Function | Contract | How tokens move |
+   |----------|----------|-----------------|
+   | `markOwnerEthDeposit()` | KashYieldETH | Payable — send ETH as **`msg.value`** in the same call (no separate transfer). |
+   | `markOwnerUsdcDeposit(amount)` | KashYieldETH, KashYieldBtc | **`transferFrom`** owner → vault in the same call. Owner must **`approve` the vault** for USDC first (separate tx unless using a batch wallet). |
+   | `markOwnerWbtcDeposit(amount)` | KashYieldBtc | Same as USDC — **`approve` wBTC** on the vault, then call `markOwnerWbtcDeposit` (pulls and credits in one tx). |
+
+   Example (Hardhat console or script), after approval:
+
+   ```javascript
+   // USDC — KashYieldETH or KashYieldBtc
+   await usdc.approve(kashYieldAddress, amount)
+   await kashYield.markOwnerUsdcDeposit(amount)
+
+   // wBTC — KashYieldBtc only
+   await wbtc.approve(kashYieldAddress, amount)
+   await kashYield.markOwnerWbtcDeposit(amount)
+
+   // ETH — KashYieldETH only (single tx)
+   await kashYield.markOwnerEthDeposit({ value: amount })
+   ```
 
 6. **Contract size (EIP-170, 24576 bytes).** `hardhat.config.js` enables the Solidity optimizer (`runs: 1`), `viaIR: true`, and `metadata.bytecodeHash: "none"`. `ProtocolInteraction` uses **`uint8` action codes** (see `contracts/libraries/ProtocolActionCodes.sol`). After `npx hardhat compile`, confirm there is no “contract code size exceeds 24576 bytes” warning before deploy.
 

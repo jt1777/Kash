@@ -1,8 +1,8 @@
 /**
- * Pull on-vault asset not needed for user `getReserved*` to the owner wallet.
- * Run before `npm run start` batch ops so idle owner / dust is not swept into Aave with user mints.
+ * Pull owner-marked vault asset (`ownerWbtcReserve` / `ownerEthReserve`) to the owner wallet.
+ * Does not withdraw unreserved vault float that backs user NAV.
  *
- * Max withdraw on-chain: amount + reserved <= vault balance (fixed `ownerWithdrawWbtc` / `ownerWithdrawEth`).
+ * Max withdraw on-chain: amount <= owner reserve and amount <= vault balance.
  *
  * Usage (run in bot directory)
  *   PRODUCT=btc npm run owner:withdraw-excess-asset
@@ -13,7 +13,7 @@
  *   WITHDRAW_AMOUNT          — cap in human units (wBTC if PRODUCT=btc, ETH if PRODUCT=eth)
  *   WITHDRAW_AMOUNT_WBTC     — btc-only cap (8 decimals), if WITHDRAW_AMOUNT unset
  *   WITHDRAW_AMOUNT_ETH      — eth-only cap (18 decimals), if WITHDRAW_AMOUNT unset
- *   MIN_EXCESS_BASE_UNITS    — skip if withdrawable excess ≤ this (raw: sats or wei). Default 1
+ *   MIN_EXCESS_BASE_UNITS    — skip if withdrawable reserve ≤ this (raw: sats or wei). Default 1
  *   MIN_EXCESS_SATOSHIS      — legacy alias when PRODUCT=btc (same as MIN_EXCESS_BASE_UNITS if set)
  */
 
@@ -68,7 +68,7 @@ async function main() {
   const wallet = new ethers.Wallet(config.privateKey, provider);
   const kashYield = new ethers.Contract(vaultAddr, kashYieldABI, wallet);
 
-  console.log(`Owner withdraw excess ${assetLabel} (KashYield)`);
+  console.log(`Owner withdraw owner ${assetLabel} reserve (KashYield)`);
   console.log('═'.repeat(50));
   console.log(`Product:  ${config.product.toUpperCase()}`);
   console.log(`Contract: ${vaultAddr}`);
@@ -105,7 +105,8 @@ async function main() {
     }
   }
 
-  const maxFromContract = bal > reserved ? bal - reserved : 0n;
+  const maxFromContract =
+    ownerAssetReserve > 0n && bal < ownerAssetReserve ? bal : ownerAssetReserve;
   const minDust = minExcessBaseUnits(isBtc);
 
   const fmt = (v: bigint) =>
@@ -122,7 +123,7 @@ async function main() {
   console.log(`MIN_EXCESS_BASE_UNITS:  ${minDust}\n`);
 
   if (maxFromContract <= 0n) {
-    console.log(`No excess ${assetLabel} (balance ≤ reserved). Nothing to do.`);
+    console.log(`No owner ${assetLabel} reserve to withdraw. Nothing to do.`);
     return;
   }
 
@@ -144,7 +145,7 @@ async function main() {
   }
 
   if (amount < minDust) {
-    console.log(`Excess below minimum (${minDust} base units). Skip.`);
+    console.log(`Owner reserve below minimum (${minDust} base units). Skip.`);
     return;
   }
 

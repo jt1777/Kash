@@ -36,6 +36,7 @@ error UsePerformUpkeep();
 error InsufficientWbtcForRedeems();
 error InsufficientWbtcInContract();
 error InsufficientExcessWbtc();
+error InsufficientOwnerWbtcReserve();
 error InsufficientOwnerUsdcReserve();
 error ExceedsMintWbtcForCycle();
 error NoUsersProvided();
@@ -811,7 +812,7 @@ contract KashYieldBtc is ReentrancyGuard {
         uint256 reserved = 0;
         uint256 btcPrice = getBtcPrice();
         // Sum reservations across the current cycle and the last 10 past cycles so that
-        // ownerWithdrawWbtc cannot drain BTC that belongs to users in unprocessed old batches.
+        // Pending mint/redeem obligations for NAV and ops; owner asset pulls are limited to ownerWbtcReserve.
         uint256 lookback = 10;
         for (uint256 i = 0; i <= lookback; i++) {
             if (i > currentCycle) break;
@@ -831,17 +832,16 @@ contract KashYieldBtc is ReentrancyGuard {
         emit ProtocolInteraction(ProtocolActionCodes.MINT_BTC_DEPLOYED, wbtcAddress, amount);
     }
 
-    /// @notice Pull wBTC from the vault for the owner. User obligations (`getReservedBtc`) must remain covered.
-    ///         Withdraws first consume `ownerWbtcReserve` (reducing it), then any unreserved on-vault balance.
+    /// @notice Pull owner-marked wBTC from the vault (protocol fees credit `ownerWbtcReserve` on phase 2).
+    ///         Does not withdraw unreserved vault wBTC that backs user NAV.
     function ownerWithdrawWbtc(uint256 amount) external onlyOwner {
-        uint256 reserved = getReservedBtc();
+        if (amount > ownerWbtcReserve) revert InsufficientOwnerWbtcReserve();
         uint256 bal = IERC20(wbtcAddress).balanceOf(address(this));
-        if (amount + reserved > bal) revert InsufficientExcessWbtc();
-        uint256 fromReserve = amount < ownerWbtcReserve ? amount : ownerWbtcReserve;
+        if (amount > bal) revert InsufficientExcessWbtc();
         unchecked {
-            ownerWbtcReserve -= fromReserve;
+            ownerWbtcReserve -= amount;
         }
-        uint256 protocolFeeConsumed = fromReserve < protocolFeeWbtcReserve ? fromReserve : protocolFeeWbtcReserve;
+        uint256 protocolFeeConsumed = amount < protocolFeeWbtcReserve ? amount : protocolFeeWbtcReserve;
         unchecked {
             protocolFeeWbtcReserve -= protocolFeeConsumed;
         }
@@ -856,12 +856,16 @@ contract KashYieldBtc is ReentrancyGuard {
         emit ProtocolInteraction(ProtocolActionCodes.RESCUE_ERC20, token, amount);
     }
 
+    /// @notice Pull USDC from the owner and credit owner reserve (excluded from user NAV).
     function markOwnerUsdcDeposit(uint256 amount) external onlyOwner {
+        IERC20(usdcAddress).safeTransferFrom(owner, address(this), amount);
         ownerUsdcReserve += amount;
         emit ProtocolInteraction(ProtocolActionCodes.OWNER_USDC_DEPOSIT, usdcAddress, amount);
     }
 
+    /// @notice Pull wBTC from the owner and credit owner reserve (excluded from user NAV).
     function markOwnerWbtcDeposit(uint256 amount) external onlyOwner {
+        IERC20(wbtcAddress).safeTransferFrom(owner, address(this), amount);
         ownerWbtcReserve += amount;
         emit ProtocolInteraction(ProtocolActionCodes.OWNER_WBTC_DEPOSIT, wbtcAddress, amount);
     }

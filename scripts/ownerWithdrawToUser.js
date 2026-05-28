@@ -1,5 +1,5 @@
 // scripts/ownerWithdrawWbtcToUser.js
-// Withdraws excess collateral from KashYield to a user address.
+// Withdraws owner-marked vault asset (`ownerWbtcReserve` / `ownerEthReserve`) to a user address.
 // Supports PRODUCT=btc (wBTC, KashYieldBtc) or PRODUCT=eth (native ETH, KashYieldETH).
 // Flow: contract -> owner (ownerWithdrawWbtc / ownerWithdrawEth) -> user (transfer).
 //
@@ -18,9 +18,9 @@
 //   KASH_YIELD_BTC_ADDRESS      - KashYieldBtc; used when PRODUCT=btc
 //   KASH_YIELD_ETH_ADDRESS      - KashYieldETH; used when PRODUCT=eth
 //
-// Amount (human-readable; default: all excess):
+// Amount (human-readable; default: all owner reserve):
 //   WITHDRAW_AMOUNT=0.25        - withdraw 0.25 (wBTC or ETH)
-//   WITHDRAW_AMOUNT=all         - withdraw all excess (default if omitted)
+//   WITHDRAW_AMOUNT=all         - withdraw all owner reserve (default if omitted)
 
 require("dotenv").config();
 const hre = require("hardhat");
@@ -38,25 +38,27 @@ async function runBtc(signer, kashYield, contractAddress, userAddress, amountArg
   );
 
   const contractBalance = await wbtc.balanceOf(contractAddress);
-  const reserved = await kashYield.getReservedBtc();
-  const excess =
-    contractBalance > reserved ? contractBalance - reserved : 0n;
-  if (excess === 0n) {
-    console.log("No excess wBTC in the contract. Nothing to withdraw.");
+  const ownerReserve = await kashYield.ownerWbtcReserve();
+  const withdrawable =
+    ownerReserve > 0n && contractBalance < ownerReserve
+      ? contractBalance
+      : ownerReserve;
+  if (withdrawable === 0n) {
+    console.log("No owner wBTC reserve in the contract. Nothing to withdraw.");
     return;
   }
 
   let amount;
   if (!amountArg || amountArg.toLowerCase() === "all") {
-    amount = excess;
+    amount = withdrawable;
     console.log(
-      `Withdrawing all excess: ${hre.ethers.formatUnits(amount, WBTC_DECIMALS)} wBTC`
+      `Withdrawing all owner reserve: ${hre.ethers.formatUnits(amount, WBTC_DECIMALS)} wBTC`
     );
   } else {
     amount = hre.ethers.parseUnits(amountArg, WBTC_DECIMALS);
-    if (amount > excess) {
+    if (amount > withdrawable) {
       throw new Error(
-        `Requested ${amountArg} wBTC but only ${hre.ethers.formatUnits(excess, WBTC_DECIMALS)} wBTC excess available.`
+        `Requested ${amountArg} wBTC but only ${hre.ethers.formatUnits(withdrawable, WBTC_DECIMALS)} wBTC owner reserve available.`
       );
     }
     console.log(
@@ -81,25 +83,27 @@ async function runBtc(signer, kashYield, contractAddress, userAddress, amountArg
 
 async function runEth(signer, kashYield, contractAddress, userAddress, amountArg) {
   const contractBalance = await hre.ethers.provider.getBalance(contractAddress);
-  const reserved = await kashYield.getReservedEth();
-  const excess =
-    contractBalance > reserved ? contractBalance - reserved : 0n;
-  if (excess === 0n) {
-    console.log("No excess ETH in the contract. Nothing to withdraw.");
+  const ownerReserve = await kashYield.ownerEthReserve();
+  const withdrawable =
+    ownerReserve > 0n && contractBalance < ownerReserve
+      ? contractBalance
+      : ownerReserve;
+  if (withdrawable === 0n) {
+    console.log("No owner ETH reserve in the contract. Nothing to withdraw.");
     return;
   }
 
   let amount;
   if (!amountArg || amountArg.toLowerCase() === "all") {
-    amount = excess;
+    amount = withdrawable;
     console.log(
-      `Withdrawing all excess: ${hre.ethers.formatEther(amount)} ETH`
+      `Withdrawing all owner reserve: ${hre.ethers.formatEther(amount)} ETH`
     );
   } else {
     amount = hre.ethers.parseEther(amountArg);
-    if (amount > excess) {
+    if (amount > withdrawable) {
       throw new Error(
-        `Requested ${amountArg} ETH but only ${hre.ethers.formatEther(excess)} ETH excess available.`
+        `Requested ${amountArg} ETH but only ${hre.ethers.formatEther(withdrawable)} ETH owner reserve available.`
       );
     }
     console.log(

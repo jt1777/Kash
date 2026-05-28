@@ -42,6 +42,7 @@ error UsePerformUpkeep();
 error InsufficientEthForRedeems();
 error InsufficientEthInContract();
 error InsufficientExcessEth();
+error InsufficientOwnerEthReserve();
 error InsufficientOwnerUsdcReserve();
 error ExceedsMintEthForCycle();
 error NoUsersProvided();
@@ -831,7 +832,7 @@ contract KashYieldETH is ReentrancyGuard {
         uint256 reserved = 0;
         uint256 ethPrice = getEthPrice();
         // Sum reservations across the current cycle and the last 10 past cycles so that
-        // ownerWithdrawEth cannot drain ETH that belongs to users in unprocessed old batches.
+        // Pending mint/redeem obligations for NAV and ops; owner asset pulls are limited to ownerEthReserve.
         uint256 lookback = 10;
         for (uint256 i = 0; i <= lookback; i++) {
             if (i > currentCycle) break;
@@ -851,17 +852,16 @@ contract KashYieldETH is ReentrancyGuard {
         emit ProtocolInteraction(ProtocolActionCodes.MINT_ETH_DEPLOYED, ETH_ADDRESS, amount);
     }
 
-    /// @notice Pull ETH from the vault for the owner. User obligations (`getReservedEth`) must remain covered.
-    ///         Withdraws first consume `ownerEthReserve` (reducing it), then any unreserved on-vault balance.
+    /// @notice Pull owner-marked ETH from the vault (protocol fees credit `ownerEthReserve` on phase 2).
+    ///         Does not withdraw unreserved vault ETH that backs user NAV.
     function ownerWithdrawEth(uint256 amount) external onlyOwner {
-        uint256 reserved = getReservedEth();
+        if (amount > ownerEthReserve) revert InsufficientOwnerEthReserve();
         uint256 bal = address(this).balance;
-        if (amount + reserved > bal) revert InsufficientExcessEth();
-        uint256 fromReserve = amount < ownerEthReserve ? amount : ownerEthReserve;
+        if (amount > bal) revert InsufficientExcessEth();
         unchecked {
-            ownerEthReserve -= fromReserve;
+            ownerEthReserve -= amount;
         }
-        uint256 protocolFeeConsumed = fromReserve < protocolFeeEthReserve ? fromReserve : protocolFeeEthReserve;
+        uint256 protocolFeeConsumed = amount < protocolFeeEthReserve ? amount : protocolFeeEthReserve;
         unchecked {
             protocolFeeEthReserve -= protocolFeeConsumed;
         }
@@ -876,8 +876,9 @@ contract KashYieldETH is ReentrancyGuard {
         emit ProtocolInteraction(ProtocolActionCodes.RESCUE_ERC20, token, amount);
     }
 
-    /// @notice Credit owner USDC reserve after USDC has been transferred to this contract (accounting only).
+    /// @notice Pull USDC from the owner and credit owner reserve (excluded from user NAV).
     function markOwnerUsdcDeposit(uint256 amount) external onlyOwner {
+        IERC20(usdcAddress).safeTransferFrom(owner, address(this), amount);
         ownerUsdcReserve += amount;
         emit ProtocolInteraction(ProtocolActionCodes.OWNER_USDC_DEPOSIT, usdcAddress, amount);
     }
