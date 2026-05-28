@@ -337,11 +337,89 @@ function applyHlMinPartialCloseSize(ctx: OpsContext, closeSize: bigint, fullSize
   if (closeSize === 0n || closeSize >= fullSize || ctx.price === 0n) return closeSize;
   const notional = hlPerpNotionalUsd18(ctx, closeSize);
   if (notional >= HL_MIN_PARTIAL_CLOSE_NOTIONAL_USD18) return closeSize;
-  console.log(
-    `         strategy close $${Number(ethers.formatEther(notional)).toFixed(2)} < HL $10 min → bumping to $10`,
-  );
   const bumped = (HL_MIN_PARTIAL_CLOSE_NOTIONAL_USD18 * WAD) / ctx.price;
   return bumped < fullSize ? bumped : fullSize;
+}
+
+/** One HL size tick in 18-dec internal perp units (e.g. 0.00001 BTC when szDecimals=5). */
+function hlPerpSzTickInternal18(szDecimals: number): bigint {
+  const shift = HL_PERP_SIZE_DECIMALS - szDecimals;
+  if (shift <= 0) return WAD;
+  return 10n ** BigInt(shift);
+}
+
+/** Round up to HL perp size grid (relay uses floor via formatHlSize; partial closes need ceil). */
+function ceilFormatHlSizeFromInternal18(sizeInternal18: bigint, szDecimals: number): string {
+  if (sizeInternal18 <= 0n) return '0';
+  if (szDecimals <= 0) {
+    return ((sizeInternal18 + WAD - 1n) / WAD).toString();
+  }
+  const quant = hlPerpSzTickInternal18(szDecimals);
+  const units = (sizeInternal18 + quant - 1n) / quant;
+  const scale = 10n ** BigInt(szDecimals);
+  const whole = units / scale;
+  const frac = units % scale;
+  if (frac === 0n) return whole.toString();
+  const fracStr = frac.toString().padStart(szDecimals, '0').replace(/0+$/, '');
+  return `${whole}.${fracStr}`;
+}
+
+/**
+ * Size partial closeShort for HL: $10 notional floor + ceil to szDecimals so relay order is not rejected.
+ * On-chain closeShort and HL relay must use the same quantized size.
+ */
+function ensureHlPartialCloseSize(
+  ctx: OpsContext,
+  closeSize: bigint,
+  fullSize: bigint,
+  szDecimals: number,
+  options?: { log?: boolean },
+): bigint {
+  const log = options?.log !== false;
+  if (closeSize === 0n || closeSize >= fullSize || ctx.price === 0n) return closeSize;
+
+  const original = closeSize;
+  let sized = applyHlMinPartialCloseSize(ctx, closeSize, fullSize);
+  if (sized >= fullSize) return fullSize;
+
+  const tick = hlPerpSzTickInternal18(szDecimals);
+  let quantized = decimalToBigInt(
+    ceilFormatHlSizeFromInternal18(sized, szDecimals),
+    HL_PERP_SIZE_DECIMALS,
+  );
+  if (quantized >= fullSize) return fullSize;
+
+  while (quantized > 0n && hlPerpNotionalUsd18(ctx, quantized) < HL_MIN_PARTIAL_CLOSE_NOTIONAL_USD18) {
+    quantized += tick;
+    if (quantized >= fullSize) return fullSize;
+    quantized = decimalToBigInt(
+      ceilFormatHlSizeFromInternal18(quantized, szDecimals),
+      HL_PERP_SIZE_DECIMALS,
+    );
+  }
+
+  const display = ceilFormatHlSizeFromInternal18(quantized, szDecimals);
+  if (quantized !== original && log) {
+    const notional = hlPerpNotionalUsd18(ctx, quantized);
+    const idealNotional = hlPerpNotionalUsd18(ctx, original);
+    const reason =
+      idealNotional < HL_MIN_PARTIAL_CLOSE_NOTIONAL_USD18
+        ? `strategy $${Number(ethers.formatEther(idealNotional)).toFixed(2)} < HL $10 min`
+        : 'HL size grid';
+    console.log(
+      `         partial close ${display} ${ctx.assetSymbol} (${reason}, szDecimals=${szDecimals}, ~$${Number(ethers.formatEther(notional)).toFixed(2)} notional)`,
+    );
+  }
+  return quantized;
+}
+
+async function fetchHlPerpSzDecimals(ctx: OpsContext, symbol: string): Promise<number> {
+  const { InfoClient, HttpTransport } = await import('@nktkas/hyperliquid');
+  const hlApiUrl = (process.env.HYPERLIQUID_API_URL || 'https://api.hyperliquid.xyz').replace(/\/+$/, '');
+  const info = new InfoClient({ transport: new HttpTransport({ apiUrl: hlApiUrl }) });
+  const perpMeta = await info.meta();
+  const assetId = findPerpAssetId(perpMeta, symbol.toUpperCase());
+  return Number(perpMeta?.universe?.[assetId]?.szDecimals ?? 0);
 }
 
 /**
@@ -779,12 +857,13 @@ const hlCloseShort: OpStep = {
   execute: async (ctx) => {
     const symbol = ctx.assetSymbol;
     const fullSize = ctx.shortSize;
-    let closeSize = (fullSize * ctx.strategyRedeemFraction) / BigInt(1e18);
+    let     closeSize = (fullSize * ctx.strategyRedeemFraction) / BigInt(1e18);
     if (closeSize === 0n) {
       console.log(`         strategy unwind is 0; no ${symbol} short close needed`);
       return;
     }
-    closeSize = applyHlMinPartialCloseSize(ctx, closeSize, fullSize);
+    const szDecimals = await fetchHlPerpSzDecimals(ctx, symbol);
+    closeSize = ensureHlPartialCloseSize(ctx, closeSize, fullSize, szDecimals);
     if (closeSize >= fullSize) {
       console.log(`         closing full ${symbol} short`);
       const receipt = await execTx('closeShort(full)', () => ctx.kashYield['closeShort(string)'](symbol));
@@ -1668,8 +1747,17 @@ async function maybeRunHlEventRelay(
     if (closeSizeWei > 0n) {
       const assetId = findPerpAssetId(perpMeta, symbol);
       const szDecimals = Number(perpMeta?.universe?.[assetId]?.szDecimals ?? 0);
+      const fullClose = parsed.name === 'closeShort' && parsed.args.length === 1;
+      if (!fullClose && closeSizeWei < beforeSize) {
+        closeSizeWei = ensureHlPartialCloseSize(ctx, closeSizeWei, beforeSize, szDecimals, { log: false });
+        if (closeSizeWei >= beforeSize) {
+          closeSizeWei = beforeSize;
+        }
+      }
       const rawSize = ethers.formatUnits(closeSizeWei, HL_PERP_SIZE_DECIMALS);
-      const size = formatHlSize(rawSize, szDecimals);
+      const size = fullClose || closeSizeWei >= beforeSize
+        ? formatHlSize(rawSize, szDecimals)
+        : ceilFormatHlSizeFromInternal18(closeSizeWei, szDecimals);
       if (!size || size === '0') {
         const msg = `HL relay: close size rounds to 0 at szDecimals=${szDecimals}`;
         if (required) throw new Error(msg);
@@ -1678,7 +1766,6 @@ async function maybeRunHlEventRelay(
       }
       const placedSize = decimalToBigInt(size, HL_PERP_SIZE_DECIMALS);
       const px = formatHlLimitPx(mids[symbol], true, szDecimals);
-      const fullClose = parsed.name === 'closeShort' && parsed.args.length === 1;
       console.log(`      ↪ HL relay: BUY ${size} ${symbol} reduce-only @ IOC ${px}`);
       await exchange.order({
         orders: [{ a: assetId, b: true, p: px, s: size, r: true, t: { limit: { tif: 'Ioc' } } }],
