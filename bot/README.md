@@ -104,7 +104,7 @@ See `.env.example` for all required variables. Key ones:
 | `HL_DEPOSIT_WAIT_ENABLED` | After HL bridge deposit, poll until USDC credited before `openShort` | `true` |
 | `HL_DEPOSIT_WAIT_MAX_MS` | Max wait for HL deposit credit (ms) | `180000` |
 | `HL_DEPOSIT_WAIT_POLL_MS` | Poll interval for HL deposit wait (ms) | `10000` |
-| `HL_WITHDRAW_WAIT_ENABLED` | After redeem HL withdraw, wait for USDC on KashYield | `true` |
+| `HL_WITHDRAW_WAIT_ENABLED` | After redeem, run HL USDC settlement wait (`withdraw3` + adapter pull). Set `false` for dirty-batch recovery (see [Batch recovery runbook](#batch-recovery-runbook)) | `true` |
 | `HL_WITHDRAW_WAIT_MAX_MS` | Max wait for HL withdraw settlement (ms) | `360000` |
 | `HL_WITHDRAW_WAIT_POLL_MS` | Poll interval for HL withdraw wait (ms) | `20000` |
 | `HL_WITHDRAW_FEE_TOLERANCE_USDC` | Balanced/falling tail: max USDC gap covered via `coverUsdcShortfall` before Aave repay | `1` |
@@ -168,7 +168,7 @@ Order: **Aave deposit** → **`markMint*Deployed`** → **borrow to LTV** → **
 
 #### Redeem ops (`redeem_hl`)
 
-1. **Core:** proportional **close short** → **HL settlement** (`withdraw3` + on-chain adapter pull to KashYield; settlement is not complete until HL spot is at target **and** adapter ERC-20 USDC is drained **and** vault ops float covers strategy Aave repay).
+1. **Core:** proportional **close short** → **HL settlement** (`withdraw3` + on-chain adapter pull to KashYield; settlement is not complete until HL spot is at target **and** adapter ERC-20 USDC is drained **and** vault ops float covers strategy Aave repay). Settlement syncs the adapter from the HL API before sizing `withdraw3`; **at most one `withdraw3` per `npm start`**.
 2. **Tail** (after settlement wait): **balanced / falling / rising** — Aave repay, Aave withdraw, optional **11a** / **11b** spot swaps; **`coverUsdcShortfall`** for small HL withdraw fee gaps (`HL_WITHDRAW_FEE_TOLERANCE_USDC`).
 
 See [`targetStateEngine.ts`](src/batch/targetStateEngine.ts) and [`opsExec.ts`](src/batch/opsExec.ts).
@@ -488,6 +488,27 @@ Only re-run `--step=nav` if settlement NAV was never written or you intentionall
 
 - The batch processor acquires a **single-instance lock** at startup (see [Pipeline guards](#pipeline-guards)). A second `npm start` on the same product + contract exits with the lock path instead of racing through ops/mark-done.
 - Two processes sharing the same **`PRIVATE_KEY`** can still cause **`nonce too low`** if both send txs (e.g. manual ops scripts while the bot runs). Run **one** sender at a time on the bot wallet.
+
+**6. Dirty HL / adapter state (manual HL close, failed relay, stale mirror)**
+
+Symptoms: `owner:status` **HL USDC in spot** disagrees with on-chain **`getHyperliquidSpotBalance()`** mirror; settlement loop fires repeated **`withdraw3`** (~$1 fee each); batch stuck at **phase 1** after a partial HL unwind.
+
+**Do not** run a normal full `npm start` or bare `--step=aave` hoping it self-heals. Use this sequence:
+
+1. **Diagnose** — `npm run owner:status` (trust the HL API line for real HL spot; mirror may lag).
+2. **Sync adapter** — `node bot/scripts/ops/14-hl-sync-state.js` (or wait for in-flight bridge USDC on the adapter, then pull to KashYield if needed).
+3. **Skip settlement wait** on recovery — settlement reads the adapter mirror; when HL was fixed manually or vault USDC already covers strategy Aave repay, disable the withdraw3 loop:
+
+```bash
+cd bot
+npm run build   # after code changes
+HL_WITHDRAW_WAIT_ENABLED=false PRODUCT=btc SKIP_PROCESSING_WINDOW_CHECK=true npm start -- --batch=<cycle> --step=aave
+HL_WITHDRAW_WAIT_ENABLED=false PRODUCT=btc SKIP_PROCESSING_WINDOW_CHECK=true npm start -- --batch=<cycle> --step=nav
+HL_WITHDRAW_WAIT_ENABLED=false PRODUCT=btc SKIP_PROCESSING_WINDOW_CHECK=true npm start -- --batch=<cycle> --step=mark-done
+HL_WITHDRAW_WAIT_ENABLED=false PRODUCT=btc SKIP_PROCESSING_WINDOW_CHECK=true npm start -- --batch=<cycle> --step=phase2
+```
+
+On **normal** redeem runs (not dirty recovery), the bot syncs the adapter from the HL API once at the start of settlement wait, and sends **at most one `withdraw3` per `npm start`**.
 
 #### What not to do
 

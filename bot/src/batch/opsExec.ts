@@ -2066,6 +2066,11 @@ export async function waitForHlWithdrawSettlementIfNeeded(
   }
 
   let fresh = ctx;
+  console.log('   ↪ Syncing HL adapter from API before settlement decisions...');
+  await syncHlAdapterFromHyperliquidApi(fresh, true);
+  fresh = await snapshotOpsContext(fresh.kashYield, fresh.provider, fresh.signer, fresh.batchCycle, lockedNAV);
+  fresh.aaveDebtFloor = ctx.aaveDebtFloor;
+
   const initialHlUsdc = fresh.hlUsdcBalance;
   const targetHlUsdc = targetHlUsdc6(initialHlUsdc, fresh.strategyRedeemFraction);
 
@@ -2100,7 +2105,7 @@ export async function waitForHlWithdrawSettlementIfNeeded(
 
   const started = Date.now();
   let attempts = 0;
-  let lastWithdraw3Above = 0n;
+  let withdraw3SentThisRun = false;
 
   while (Date.now() - started < maxMs) {
     const above = hlUsdcAboveTarget(fresh, targetHlUsdc);
@@ -2109,15 +2114,13 @@ export async function waitForHlWithdrawSettlementIfNeeded(
     }
 
     const withdraw3Amt = hlOffchainWithdraw3Amount(fresh, targetHlUsdc, feeTolerance);
-    if (withdraw3Amt > 0n && fresh.hlUsdcBalance > 0n) {
-      const shouldBridge = lastWithdraw3Above === 0n || above < lastWithdraw3Above;
-      if (shouldBridge) {
-        try {
-          await maybeInitiateHlOffchainWithdraw(fresh, withdraw3Amt);
-          lastWithdraw3Above = above;
-        } catch (e: any) {
-          console.warn(`      ⚠️  HL off-chain withdraw initiation failed: ${e?.message ?? e}`);
-        }
+    if (withdraw3Amt > 0n && fresh.hlUsdcBalance > 0n && !withdraw3SentThisRun) {
+      try {
+        await maybeInitiateHlOffchainWithdraw(fresh, withdraw3Amt);
+        withdraw3SentThisRun = true;
+        console.log(`      ↪ HL withdraw3 sent ${fmtUsdc(withdraw3Amt)} (one withdraw3 max per npm start)`);
+      } catch (e: any) {
+        console.warn(`      ⚠️  HL off-chain withdraw initiation failed: ${e?.message ?? e}`);
       }
     }
 
