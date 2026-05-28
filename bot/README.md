@@ -135,8 +135,28 @@ Handles the daily two-phase batch on KashYield (`performUpkeep` → ops → sett
 - **`runStepOps`** → **`runTargetStateEngine`** → **`opsExec`** delta pipelines (sole automated mint/redeem ops path)
 - **`markBatchOpsDone`** preflight (vault asset vs gross redeem need)
 - Phase 2 distribution via `performUpkeep` / `processBatchPhase2ForCycle`
+- **Pipeline guards** — single-instance lock, Phase 1 cycle alignment, idempotent mark-done (see below)
 
 Legacy **`handleNetMint` / `handleNetRedeem`** handlers were removed from `batchProcessor.ts`. Receipt parsing after Phase 2 is **informational only** (no deploy/withdraw triggered from events).
+
+#### Pipeline guards
+
+These run automatically on every `npm start` (including orphan resume and `--step=…` runs). They do **not** replace on-chain recovery for **stale phase-0** past cycles — users still cancel/resubmit there.
+
+| Guard | Where | Behavior |
+|-------|--------|----------|
+| **Single-instance lock** | Start/end of `run()` ([`batchRunLock.ts`](src/batch/batchRunLock.ts)) | One batch processor per product + contract address. A second `npm start` exits immediately if another process holds the lock. Stale locks from dead processes are replaced automatically. Lock file: `/tmp/kashyield-bot/<product>-<contract>.lock` |
+| **Phase 1 already done** | `runStepPhase1` | If `batchPhase[batchCycle] ≥ 1`, skip `performUpkeep` (safe retry / resume after Phase 1 succeeded). |
+| **Phase 1 cycle alignment** | `runStepPhase1` | Re-read `getCurrentBatchCycle()` immediately before `performUpkeep` (after slow pre-NAV). Refuse the call if `batchCycle ≠ currentCycle` — `performUpkeep` would run Phase 1 on the **timestamp** cycle, not the batch the bot is finishing. Verify `batchPhase[batchCycle] === 1` after the tx. |
+| **Idempotent mark-done** | `runStepMarkDone` | If batch is already **phase ≥ 2**, log and skip `markBatchOpsDone` instead of sending a tx that would revert with `WrongPhase`. |
+
+**What these guards do not block:** orphan scan (phase 1/2 resume on older cycles), `--step=ops|nav|mark-done|phase2` on a targeted `--batch=N`, or `processBatchPhase2ForCycle` for phase-2 orphans — those paths either skip `performUpkeep` or use the cycle-specific Phase 2 entrypoint.
+
+**Operational notes:**
+
+- Run **one** bot process per bot wallet / contract (the lock enforces this for the batch processor; overlapping agents + cron still risk nonce races if they use different entrypoints).
+- If a lock sticks after a crash, remove the file path from the error message under `/tmp/kashyield-bot/`.
+- After mark-done has already succeeded, a retry that reaches `--step=mark-done` or a full run’s mark-done step will **skip** cleanly instead of failing on-chain.
 
 #### Mint ops (`net_mint_hl`, net ≥ skip threshold)
 
@@ -342,6 +362,13 @@ Shows:
 - Batch processing only works between 23:50-23:59 UTC (unless the contract uses testing constants for full 24h)
 - Set `WAIT_FOR_PROCESSING_WINDOW=true` to have the bot wait for the window, or set `SKIP_PROCESSING_WINDOW_CHECK=true` to run the batch logic anyway for testing (the contract may still revert if it enforces the window)
 
+### "Another batch bot is already running"
+- Only one batch processor may run per product + contract. Wait for the other process to finish, or remove the stale lock file shown in the error (under `/tmp/kashyield-bot/`) if that process crashed.
+
+### "Refusing performUpkeep: bot targets cycle … but chain current cycle is …"
+- `performUpkeep()` always runs Phase 1 for the **current timestamp cycle**. The bot refused because the target batch cycle no longer matches `getCurrentBatchCycle()` (often after a long pre-NAV, or targeting the wrong cycle for `--step=phase1`).
+- For **stale phase-0 past cycles**, users must cancel and resubmit — Phase 1 cannot run on-chain for that cycle. For **current-cycle** runs, retry in the new cycle or use orphan resume (`--step=ops` on a batch already at phase 1).
+
 ### Five-step batch flow
 The batch is split into five steps so each can be run individually. If any step errors, fix the issue and re-run that step (or the next). Default remains a full run (all five in sequence).
 
@@ -350,10 +377,10 @@ The batch is split into five steps so each can be run individually. If any step 
 | Step | Name        | Action |
 |------|-------------|--------|
 | —    | *(pre-Phase-1)* | `computeNewNAV` → **`updateNAV`** (Phase-1-era MTM on-chain) |
-| 1    | `phase1`    | `performUpkeep()` after the above (Phase 1; batch moves to phase 1) |
+| 1    | `phase1`    | `performUpkeep()` after the above (Phase 1; batch moves to phase 1). Skipped if already phase ≥ 1; refused if `batchCycle ≠ currentCycle`. |
 | 2    | `ops`       | **`runStepOps`** (skip gates + target-state mint/redeem); sizing uses **Phase-1-era** NAV |
 | 3    | `nav`       | `computeNewNAV` post-ops → **`updateNAV` (settlement)** for Phase 2 |
-| 4    | `mark-done` | `markBatchOpsDone(batchCycle)` (batch moves to phase 2) |
+| 4    | `mark-done` | `markBatchOpsDone(batchCycle)` (batch moves to phase 2). Skipped if already phase ≥ 2. |
 | 5    | `phase2`    | Phase 2 distribution at **settlement** `currentNAV` |
 
 #### Pre-Phase-1 vs settlement NAV
@@ -457,9 +484,10 @@ Only re-run `--step=nav` if settlement NAV was never written or you intentionall
 
 - Not recoverable with `--batch=N`. User must **cancel** and resubmit in the current cycle. Bot fails fast if you target it.
 
-**5. Two processes, same `PRIVATE_KEY`**
+**5. Two processes / overlapping `npm start`**
 
-- Can cause `nonce too low` mid-batch. Run **one** bot at a time on the bot wallet.
+- The batch processor acquires a **single-instance lock** at startup (see [Pipeline guards](#pipeline-guards)). A second `npm start` on the same product + contract exits with the lock path instead of racing through ops/mark-done.
+- Two processes sharing the same **`PRIVATE_KEY`** can still cause **`nonce too low`** if both send txs (e.g. manual ops scripts while the bot runs). Run **one** sender at a time on the bot wallet.
 
 #### What not to do
 
@@ -470,7 +498,7 @@ Only re-run `--step=nav` if settlement NAV was never written or you intentionall
 
 #### When auto-resume is enough
 
-If a step errors but **capital is unchanged** (e.g. transient RPC, nonce retry succeeds on re-run), the next `npm start` orphan pick-up is fine — **one** retry, not many.
+If a step errors but **capital is unchanged** (e.g. transient RPC, nonce retry succeeds on re-run), the next `npm start` orphan pick-up is fine — **one** retry, not many. Phase 1 and mark-done are idempotent: already-advanced phases are skipped instead of reverting on-chain.
 
 **Targeting a specific batch cycle**
 

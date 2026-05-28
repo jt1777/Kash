@@ -13,6 +13,7 @@ import { classifyScenario, scenarioLabel } from './opsClassifier';
 import { runTargetStateEngine } from './targetStateEngine';
 import { runTestAaveLoopPlaybook } from './opsTestPlaybook';
 import { execTx } from './txSend';
+import { BatchRunLock } from './batchRunLock';
 
 const isBtc = config.product === 'btc';
 
@@ -49,6 +50,16 @@ export class BatchProcessor {
   }
 
   async run(): Promise<void> {
+    const runLock = new BatchRunLock();
+    runLock.acquire();
+    try {
+      await this.runLocked();
+    } finally {
+      runLock.release();
+    }
+  }
+
+  private async runLocked(): Promise<void> {
     console.log('🚀 Starting Batch Processor...\n');
 
     // isProcessingWindow() can revert on some testnet deployments (e.g. cycleDurationSeconds=0
@@ -339,11 +350,39 @@ export class BatchProcessor {
     console.log(`✅ Batch ${batchCycle} already finalized (phase ${phaseNum}).\n`);
   }
 
+  private async getCurrentBatchCycleBn(): Promise<bigint> {
+    const currentCycle = await this.kashYield.getCurrentBatchCycle();
+    return typeof currentCycle === 'bigint' ? currentCycle : BigInt(currentCycle.toString());
+  }
+
   /** Step 1: Call performUpkeep() (Phase 1 indicative). Batch must be phase 0 with requests. */
   private async runStepPhase1(batchCycle: bigint): Promise<void> {
+    const phaseBefore = Number(await this.kashYield.batchPhase(batchCycle));
+    if (phaseBefore >= 1) {
+      console.log(
+        `   ℹ️  Phase 1 already done for batch ${batchCycle} (phase ${phaseBefore}) — skipping performUpkeep.\n`,
+      );
+      return;
+    }
+
+    const currentCycle = await this.getCurrentBatchCycleBn();
+    if (currentCycle !== batchCycle) {
+      throw new Error(
+        `Refusing performUpkeep: bot targets cycle ${batchCycle} but chain current cycle is ${currentCycle}. ` +
+          `performUpkeep would run Phase 1 on ${currentCycle}, not ${batchCycle}.`,
+      );
+    }
+
     console.log('🔄 Step phase1: Calling performUpkeep()...');
     const receipt1 = await execTx('performUpkeep (phase 1)', () => this.kashYield.performUpkeep('0x'));
     console.log(`   ✅ Phase 1 done in block ${receipt1.blockNumber}\n`);
+
+    const phaseAfter = Number(await this.kashYield.batchPhase(batchCycle));
+    if (phaseAfter !== 1) {
+      throw new Error(
+        `Phase 1 verify failed: expected batchPhase[${batchCycle}] === 1 after performUpkeep, got ${phaseAfter}.`,
+      );
+    }
   }
 
   /** Step 2: Run target-state ops (HL + Aave). Batch must be phase 1.
@@ -460,6 +499,17 @@ export class BatchProcessor {
    * to phase 2, so Phase 2 cannot enter an InsufficientEthForRedeems state due to partial ops.
    * Uses computeTotalRedeemAsset from opsContext — same formula as the ops playbook steps. */
   private async runStepMarkDone(batchCycle: bigint, lockedNAV?: bigint): Promise<void> {
+    const phaseNum = Number(await this.kashYield.batchPhase(batchCycle));
+    if (phaseNum >= 2) {
+      console.log(
+        `   ℹ️  Batch ${batchCycle} already past ops (phase ${phaseNum}) — skipping markBatchOpsDone.\n`,
+      );
+      return;
+    }
+    if (phaseNum !== 1) {
+      throw new Error(`Cannot markBatchOpsDone: batch ${batchCycle} is in phase ${phaseNum}, expected phase 1.`);
+    }
+
     const decimals = isBtc ? 8 : 18;
     const cover = await vaultCoversRedeemPayout(
       this.kashYield,
