@@ -36,7 +36,7 @@ A capital-efficient yield strategy protocol. Users deposit ETH or wBTC and recei
 |--------|-----------|
 | Batch cycle | Configurable via `setCycleDurationSeconds(uint256)` (default 86400 s = 24 h) |
 | Mint valuation | Phase 1 via Chainlink price feed |
-| NAV | Bot calls `updateNAV()` **before** Phase 1 (pre-Phase-1 MTM) and **again after** capital ops (**settlement** MTM); then `markBatchOpsDone()`; Phase 2 uses latest `currentNAV` |
+| NAV | Bot calls `updateNAV()` before Phase 1 and again after ops (settlement MTM); `markBatchOpsDone(batchCycle, G)` locks gross redeem **G** at Phase-1 NAV; Phase 2 **mint** uses settlement `currentNAV`, **redeem** pays **G** pro-rata |
 | Distribution | Phase 2 mints KASH to minters, sends assets to redeemers; no user claim step |
 | Exchange registry | `perpExchanges[string] → address`; `activePerpExchange` routes all exchange calls |
 | Adapter registration | First adapter: immediate. Subsequent adapters: `setPerpExchange` starts 24h timelock; `confirmPerpExchange` registers |
@@ -49,7 +49,7 @@ A capital-efficient yield strategy protocol. Users deposit ETH or wBTC and recei
 ### Off-chain bot
 
 1. **Processing window** (last 10 minutes of each cycle by default): Bot runs five-step batch flow (`phase1` → `ops` → `nav` → `mark-done` → `phase2`) via `performUpkeep` and related calls. See [bot/README.md](bot/README.md).
-2. **Ops between Phase 1 and Phase 2:** Target-state engine deploys or unwinds capital (Aave + Hyperliquid) before settlement NAV and Phase 2 distribution — not event-driven post-batch reactions.
+2. **Ops between Phase 1 and Phase 2:** Target-state engine deploys or unwinds capital (Aave + Hyperliquid) before settlement NAV, **`markBatchOpsDone(batchCycle, G)`**, and Phase 2 distribution — not event-driven post-batch reactions.
 
 ## 🕐 Batch Cycle and Time Windows
 
@@ -141,7 +141,7 @@ Open http://localhost:3000. Root `/` is the landing page; `/app` is the mint/red
 ### For Users
 
 1. **Deposit (Mint)** – Send ETH/wETH (ETH product) or approve wBTC (BTC product) and call `requestMint()`. Requests are queued until the next batch cycle.
-2. **Batch** – At the end of each cycle (configurable, default 24 h), the bot calls `processBatch()`; Phase 1 (Chainlink valuation), owner/bot runs Aave/exchange ops and `updateNAV()` + `markBatchOpsDone()`, Phase 2 distributes KASH to minters.
+2. **Batch** – At the end of each cycle (configurable, default 24 h), the bot runs Phase 1, ops, settlement `updateNAV()`, `markBatchOpsDone(batchCycle, G)`, and Phase 2 (mint at settlement NAV; redeem from locked **G**).
 3. **Redeem** – Approve KASH and call `requestRedeem(kashAmount)`. After the next batch, redeemers receive ETH or wBTC.
 
 ### NAV Calculation

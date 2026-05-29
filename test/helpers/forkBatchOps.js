@@ -83,9 +83,38 @@ async function manualBtcMintOps({
   return { protocolFeeBtc, deployBtc, borrowUsdc, btcPrice, deployUsd, shortSizeAsset };
 }
 
+async function computeBatchGrossRedeemAsset(kashYield, batchCycle, nav) {
+  const totalKash = BigInt((await kashYield.batchTotalRedeemKash(batchCycle)).toString());
+  if (totalKash === 0n) return 0n;
+  const info = await kashYield.getBatchInfo(batchCycle);
+  const redeemCount = Number(info[4]);
+  let isBtc = false;
+  try {
+    await kashYield.wbtcAddress();
+    isBtc = true;
+  } catch {
+    isBtc = false;
+  }
+  const price = BigInt(
+    (await (isBtc ? kashYield.getBtcPrice() : kashYield.getEthPrice())).toString(),
+  );
+  const factor = 10n ** BigInt(isBtc ? 8 : 18);
+  const navDenom = 10n ** 18n;
+  let total = 0n;
+  for (let i = 0; i < redeemCount; i++) {
+    const addr = await kashYield.batchRedeemUsers(batchCycle, i);
+    const req = await kashYield.getPendingRedeemRequest(addr, batchCycle);
+    const kashAmt = BigInt(req.kashAmount.toString());
+    if (kashAmt === 0n) continue;
+    const usdValue = (kashAmt * nav) / navDenom;
+    total += (usdValue * factor) / price;
+  }
+  return total;
+}
+
 async function settleMintPhase2({ kashYield, bot, batchCycle, nav }) {
   await kashYield.connect(bot).updateNAV(nav, 0n, 0n, 0n);
-  await kashYield.connect(bot).markBatchOpsDone(batchCycle);
+  await kashYield.connect(bot).markBatchOpsDone(batchCycle, 0);
   await kashYield.connect(bot).performUpkeep("0x");
 }
 
@@ -95,5 +124,6 @@ module.exports = {
   usdcBorrowForAssetUsd,
   manualEthMintOps,
   manualBtcMintOps,
+  computeBatchGrossRedeemAsset,
   settleMintPhase2,
 };

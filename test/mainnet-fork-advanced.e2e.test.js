@@ -11,6 +11,7 @@ const {
   mintProtocolFee,
   usdcBorrowForAssetUsd,
   manualEthMintOps,
+  computeBatchGrossRedeemAsset,
   settleMintPhase2,
 } = require("./helpers/forkBatchOps");
 
@@ -160,7 +161,7 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
 
   async function settlePhase2(batchCycle, nav = NAV_1) {
     await kashYieldEth.connect(bot).updateNAV(nav, 0n, 0n, 0n);
-    await kashYieldEth.connect(bot).markBatchOpsDone(batchCycle);
+    await kashYieldEth.connect(bot).markBatchOpsDone(batchCycle, 0);
     await kashYieldEth.connect(bot).performUpkeep("0x");
     expect(await kashYieldEth.batchProcessed(batchCycle)).to.be.true;
   }
@@ -493,8 +494,10 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     });
 
     const ethBefore = await ethers.provider.getBalance(user3.address);
-    await kashYieldEth.connect(bot).updateNAV(ethers.parseEther("1.1"), 0n, 0n, 0n);
-    await kashYieldEth.connect(bot).markBatchOpsDone(redeemCycle);
+    const settlementNav = ethers.parseEther("1.1");
+    await kashYieldEth.connect(bot).updateNAV(settlementNav, 0n, 0n, 0n);
+    const grossG = await computeBatchGrossRedeemAsset(kashYieldEth, redeemCycle, NAV_1);
+    await kashYieldEth.connect(bot).markBatchOpsDone(redeemCycle, grossG);
     await kashYieldEth.connect(bot).performUpkeep("0x"); // Phase 2
 
     const ethAfter = await ethers.provider.getBalance(user3.address);

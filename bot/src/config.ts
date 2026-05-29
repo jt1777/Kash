@@ -148,7 +148,7 @@ export const config = {
    * Optional NAV override when running single steps (`--locked-nav` / `LOCKED_NAV`).
    * • `--step=ops`: Phase-1-era NAV for playbook sizing (defaults to on-chain `currentNAV`).
    * • `--step=nav`: settlement `updateNAV` argument (defaults to `computeNewNAV()` at run time).
-   * • `--step=mark-done`: redeem-asset check sizing (defaults to on-chain `currentNAV` after nav).
+   * • `--step=mark-done`: **G** sizing at Phase-1 NAV (not settlement NAV); see `MARK_DONE_PAYOUT_TOLERANCE_ASSET`.
    * Example: --locked-nav=1050000000000000000  (= $1.05 per KASH, 18 decimals)
    */
   lockedNav: (() => {
@@ -164,6 +164,23 @@ export const config = {
    * raw MTM, covering small oracle/rounding gaps vs on-vault asset. Example: `3` = 3 bps.
    * `LOCKED_NAV` / `--locked-nav` overrides skip this (NAV is explicit). Default 0.
    */
+  /**
+   * Slack when comparing vault wBTC/ETH to G + fees + owner reserve (mark-done preflight).
+   * Native asset units: satoshis (BTC) or wei (ETH). Env: MARK_DONE_PAYOUT_TOLERANCE_ASSET.
+   * Defaults: 30 sat (BTC), 1e13 wei (ETH).
+   */
+  markDonePayoutToleranceAsset: (() => {
+    const raw = process.env.MARK_DONE_PAYOUT_TOLERANCE_ASSET;
+    if (raw !== undefined && raw.trim() !== '') {
+      try {
+        return BigInt(raw.trim());
+      } catch {
+        /* fall through to product default */
+      }
+    }
+    return productFromEnv() === 'btc' ? 30n : 10_000_000_000_000n;
+  })(),
+
   settlementNavBufferBps: (() => {
     const raw = process.env.SETTLEMENT_NAV_BUFFER_BPS ?? '0';
     const n = parseInt(raw, 10);

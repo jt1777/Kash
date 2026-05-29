@@ -140,6 +140,7 @@ contract KashYieldETH is ReentrancyGuard {
 
     uint256 public maxSwapSlippageBps     = 50;
     uint256 public constant MAX_SLIPPAGE_BPS = 500;
+    uint256 private constant REDEEM_PAYOUT_TOLERANCE = 1e13; // wei — rounding vs locked G
 
     // ── Fee config ────────────────────────────────────────────────────────
     uint256 public feeBps = 3;
@@ -185,7 +186,6 @@ contract KashYieldETH is ReentrancyGuard {
     mapping(uint256 => mapping(address => bool)) public isInBatchMint;
     mapping(uint256 => mapping(address => bool)) public isInBatchRedeem;
     mapping(uint256 => uint256) public batchMintEthDeployedToAave;
-
     mapping(address => uint256) public totalDepositedEthByUser;
     mapping(address => uint256) public totalRedeemedEthByUser;
 
@@ -516,8 +516,12 @@ contract KashYieldETH is ReentrancyGuard {
         emit BatchPhaseUpdated(batchCycle, 1, indicativeNAV);
     }
 
-    function markBatchOpsDone(uint256 batchCycle) external onlyBotOrKeeper {
+    function markBatchOpsDone(uint256 batchCycle, uint256 grossRedeemAssetAmount) external onlyBotOrKeeper {
         if (batchPhase[batchCycle] != 1) revert WrongPhase();
+        if (batchTotalRedeemKash[batchCycle] > 0) {
+            if (grossRedeemAssetAmount == 0) revert InsufficientEthForRedeems();
+            batchTotalRedeemValueUSD[batchCycle] = grossRedeemAssetAmount;
+        }
         batchPhase[batchCycle] = 2;
         emit BatchPhaseUpdated(batchCycle, 2, currentNAV);
     }
@@ -536,9 +540,32 @@ contract KashYieldETH is ReentrancyGuard {
         _processBatchPhase2(batchCycle);
     }
 
+    function _allocRedeemEth(
+        uint256 batchCycle,
+        address[] memory redeemers,
+        uint256 totalRedeemKash,
+        uint256 totalGrossRedeem
+    ) private view returns (uint256[] memory amounts, uint256 totalNet, uint256 totalFee) {
+        amounts = new uint256[](redeemers.length);
+        uint256 kashLeft = totalRedeemKash;
+        uint256 grossLeft = totalGrossRedeem;
+        for (uint256 i = 0; i < redeemers.length; i++) {
+            RedeemRequest memory req = userRedeemRequests[redeemers[i]][batchCycle];
+            if (req.kashAmount == 0) continue;
+            uint256 gross = kashLeft == req.kashAmount
+                ? grossLeft
+                : (totalGrossRedeem * req.kashAmount) / totalRedeemKash;
+            kashLeft -= req.kashAmount;
+            grossLeft -= gross;
+            uint256 fee = gross * feeBps / 10000;
+            amounts[i] = gross - fee;
+            totalNet += amounts[i];
+            totalFee += fee;
+        }
+    }
+
     function _processBatchPhase2(uint256 batchCycle) internal {
         uint256 exactNAV = currentNAV;
-        uint256 ethPrice = getEthPrice();
 
         address[] memory minters  = batchMintUsers[batchCycle];
         address[] memory redeemers = batchRedeemUsers[batchCycle];
@@ -554,22 +581,11 @@ contract KashYieldETH is ReentrancyGuard {
             }
         }
 
-        uint256[] memory redeemEthAmounts = new uint256[](redeemers.length);
-        uint256 totalRedeemEthNeeded = 0;
-        uint256 totalRedeemFeeEth = 0;
-        for (uint256 i = 0; i < redeemers.length; i++) {
-            RedeemRequest memory req = userRedeemRequests[redeemers[i]][batchCycle];
-            if (req.kashAmount > 0) {
-                uint256 usdValue = (req.kashAmount * exactNAV) / 1e18;
-                uint256 grossEthAmount = (usdValue * (10 ** ETH_DECIMALS)) / ethPrice;
-                uint256 feeEthAmount = grossEthAmount * feeBps / 10000;
-                redeemEthAmounts[i] = grossEthAmount - feeEthAmount;
-                totalRedeemEthNeeded += redeemEthAmounts[i];
-                totalRedeemFeeEth += feeEthAmount;
-            }
-        }
+        uint256 totalRedeemKash = batchTotalRedeemKash[batchCycle];
+        (uint256[] memory redeemEthAmounts, uint256 totalRedeemEthNeeded, uint256 totalRedeemFeeEth) =
+            _allocRedeemEth(batchCycle, redeemers, totalRedeemKash, batchTotalRedeemValueUSD[batchCycle]);
         uint256 totalProtocolFeeEth = totalMintFeeEth + totalRedeemFeeEth;
-        if (address(this).balance < ownerEthReserve + totalProtocolFeeEth + totalRedeemEthNeeded) revert InsufficientEthForRedeems();
+        if (address(this).balance + REDEEM_PAYOUT_TOLERANCE < ownerEthReserve + totalProtocolFeeEth + totalRedeemEthNeeded) revert InsufficientEthForRedeems();
         ownerEthReserve += totalProtocolFeeEth;
         protocolFeeEthReserve += totalProtocolFeeEth;
 
@@ -578,7 +594,6 @@ contract KashYieldETH is ReentrancyGuard {
         batchPhase[batchCycle] = 3;
         emit BatchProcessed(batchCycle, batchTotalMintValueUSD[batchCycle], batchTotalRedeemValueUSD[batchCycle], exactNAV);
 
-        uint256 totalRedeemKash = batchTotalRedeemKash[batchCycle];
         int256 netKash = int256(totalMintKash) - int256(totalRedeemKash);
         if (netKash > 0) kashTokenEth.mint(address(this), uint256(netKash));
         else if (netKash < 0) kashTokenEth.burn(address(this), uint256(-netKash));

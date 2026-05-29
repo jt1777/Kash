@@ -34,6 +34,8 @@ Set `PRODUCT=eth` or `PRODUCT=btc` to select the contract (reads from `bot/.env`
 | `11a-swap-asset-for-usdc.js` | Swap ETH/wBTC → USDC via spot DEX *(rising price)* |
 | `11b-swap-usdc-for-asset.js` | Swap USDC → ETH/wBTC via spot DEX *(falling price)* |
 | `12-withdraw-asset-from-perp.js` | Withdraw ETH/wBTC from perp DEX to contract *(Aster path)* |
+| `14-hl-sync-state.js` | Reconcile HL adapter mirror from HL API |
+| `16-phase2-redeem-shortfall.js` | Read-only: vault wBTC/ETH vs Phase 2 need (locked **G** when `batchPhase >= 2`) |
 
 ---
 

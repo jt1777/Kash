@@ -218,6 +218,101 @@ export async function computeTotalRedeemAsset(
   return total;
 }
 
+/** Sum mint protocol fees (asset units) for a batch — matches Phase 2 `totalMintFee*`. */
+export async function computeBatchMintFeeAsset(
+  kashYield: ethers.Contract,
+  batchCycle: bigint,
+): Promise<bigint> {
+  const info = await kashYield.getBatchInfo(batchCycle);
+  const mintUsersCount = BigInt(info.mintUsersCount.toString());
+  if (mintUsersCount === 0n) return 0n;
+  const feeBps = BigInt((await kashYield.feeBps()).toString());
+  let total = 0n;
+  for (let i = 0n; i < mintUsersCount; i++) {
+    const addr: string = await kashYield.batchMintUsers(batchCycle, i);
+    const req = await kashYield.getPendingMintRequest(addr, batchCycle);
+    const amountIn = BigInt(req.amountIn.toString());
+    if (amountIn === 0n) continue;
+    total += (amountIn * feeBps) / 10000n;
+  }
+  return total;
+}
+
+/**
+ * Phase 2 balance gate using on-chain locked gross redeem G (Phase-1 NAV sizing).
+ * Required vault asset = ownerReserve + mintProtocolFees + G.
+ * `toleranceAsset` adds slack on the vault side (few sats / wei) for rounding and oracle noise.
+ */
+export async function vaultCoversRedeemPayoutFromGross(
+  kashYield: ethers.Contract,
+  provider: ethers.Provider,
+  batchCycle: bigint,
+  grossRedeemAsset: bigint,
+  isBtc: boolean,
+  toleranceAsset: bigint = config.markDonePayoutToleranceAsset,
+): Promise<{
+  covers: boolean;
+  grossRedeemAsset: bigint;
+  mintFeeAsset: bigint;
+  contractBalance: bigint;
+  required: bigint;
+  ownerAssetReserve: bigint;
+  toleranceAsset: bigint;
+  shortfall: bigint;
+}> {
+  if (grossRedeemAsset === 0n) {
+    return {
+      covers: true,
+      grossRedeemAsset: 0n,
+      mintFeeAsset: 0n,
+      contractBalance: 0n,
+      required: 0n,
+      ownerAssetReserve: 0n,
+      toleranceAsset,
+      shortfall: 0n,
+    };
+  }
+
+  const mintFeeAsset = await computeBatchMintFeeAsset(kashYield, batchCycle);
+  const contractAddr = await kashYield.getAddress();
+  let contractBalance = 0n;
+  let ownerAssetReserve = 0n;
+  if (isBtc) {
+    try {
+      const wbtcAddr: string = await kashYield.wbtcAddress();
+      const wbtc = new ethers.Contract(
+        wbtcAddr,
+        ['function balanceOf(address) view returns (uint256)'],
+        provider,
+      );
+      contractBalance = BigInt((await wbtc.balanceOf(contractAddr)).toString());
+      ownerAssetReserve = BigInt((await kashYield.ownerWbtcReserve()).toString());
+    } catch {
+      contractBalance = 0n;
+    }
+  } else {
+    contractBalance = BigInt((await provider.getBalance(contractAddr)).toString());
+    try {
+      ownerAssetReserve = BigInt((await kashYield.ownerEthReserve()).toString());
+    } catch {
+      ownerAssetReserve = 0n;
+    }
+  }
+
+  const required = ownerAssetReserve + mintFeeAsset + grossRedeemAsset;
+  const shortfall = required > contractBalance ? required - contractBalance : 0n;
+  return {
+    covers: contractBalance + toleranceAsset >= required,
+    grossRedeemAsset,
+    mintFeeAsset,
+    contractBalance,
+    required,
+    ownerAssetReserve,
+    toleranceAsset,
+    shortfall,
+  };
+}
+
 /** Same balance gate as `runStepMarkDone` / Phase 2 `InsufficientWbtcForRedeems`. */
 export async function vaultCoversRedeemPayout(
   kashYield: ethers.Contract,

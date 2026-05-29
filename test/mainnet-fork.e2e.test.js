@@ -27,6 +27,7 @@ const hre         = require("hardhat");
 const {
   manualEthMintOps,
   manualBtcMintOps,
+  computeBatchGrossRedeemAsset,
   settleMintPhase2,
 } = require("./helpers/forkBatchOps");
 
@@ -279,7 +280,8 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
 
       // ── NAV + mark done + Phase 2 ─────────────────────────────────────────
       await kashYieldEth.connect(bot).updateNAV(NAV_1, 0n, 0n, 0n);
-      await kashYieldEth.connect(bot).markBatchOpsDone(redeemCycle);
+      const grossG = await computeBatchGrossRedeemAsset(kashYieldEth, redeemCycle, NAV_1);
+      await kashYieldEth.connect(bot).markBatchOpsDone(redeemCycle, grossG);
       await kashYieldEth.connect(bot).performUpkeep("0x");
       expect(await kashYieldEth.batchProcessed(redeemCycle)).to.be.true;
 
@@ -489,7 +491,8 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
 
       // NAV + mark done + Phase 2.
       await kashYieldBtc.connect(bot).updateNAV(NAV_1, 0n, 0n, 0n);
-      await kashYieldBtc.connect(bot).markBatchOpsDone(redeemCycle);
+      const grossG = await computeBatchGrossRedeemAsset(kashYieldBtc, redeemCycle, NAV_1);
+      await kashYieldBtc.connect(bot).markBatchOpsDone(redeemCycle, grossG);
       await kashYieldBtc.connect(bot).performUpkeep("0x");
       expect(await kashYieldBtc.batchProcessed(redeemCycle)).to.be.true;
 

@@ -2,10 +2,10 @@
  * 16-phase2-redeem-shortfall — Read-only: wBTC/ETH required for Phase 2 vs on-vault balance.
  *
  * Matches _processBatchPhase2 checks:
- *   KashYieldBtc:  wbtc.balanceOf(vault) >= ownerWbtcReserve + totalRedeemBtcNeeded
- *   KashYieldETH:  address(vault).balance >= ownerEthReserve + totalRedeemEthNeeded
+ *   balance >= ownerReserve + mintProtocolFees + G (locked in batchTotalRedeemValueUSD at mark-done)
  *
- * totalRedeem*Needed is summed per redeemer on-chain. This script:
+ * When batchPhase >= 2, batchTotalRedeemValueUSD holds gross asset G (8/18 dec), not Phase-1 USD.
+ * Otherwise falls back to MTM currentNAV per-redeemer estimate:
  *   - Prefer exact sum via batchRedeemUsers + getPendingRedeemRequest when the array is small
  *     enough to fit in an eth_call (override with PHASE2_SHORTFALL_MAX_REDEEMERS).
  *   - Otherwise use the linear aggregate from batchTotalRedeemKash (same formula as the
@@ -32,6 +32,9 @@ const VIEW_ABI = [
   "function getBatchInfo(uint256) view returns (uint256,uint256,bool,uint256,uint256,uint256)",
   "function batchPhase(uint256) view returns (uint8)",
   "function batchTotalRedeemKash(uint256) view returns (uint256)",
+  "function batchTotalRedeemValueUSD(uint256) view returns (uint256)",
+  "function batchMintUsers(uint256,uint256) view returns (address)",
+  "function getPendingMintRequest(address,uint256) view returns (tuple(address user,uint256 amountIn,uint256 amountInUSD,uint256 batchCycle))",
   "function currentNAV() view returns (uint256)",
   "function feeBps() view returns (uint256)",
   "function getBtcPrice() view returns (uint256)",
@@ -66,6 +69,21 @@ async function exactNeededFromList(v, batchCycle, redeemerCount, nav, feeBps, pr
     total += (usdAfterFee * factor) / price;
   }
   return { total, redeemerCount };
+}
+
+async function computeMintFeeAsset(v, batchCycle) {
+  const info = await v.getBatchInfo(batchCycle);
+  const mintUsersCount = Number(info[3]);
+  const feeBps = BigInt((await v.feeBps()).toString());
+  let total = 0n;
+  for (let i = 0; i < mintUsersCount; i++) {
+    const addr = await v.batchMintUsers(batchCycle, i);
+    const req = await v.getPendingMintRequest(addr, batchCycle);
+    const amountIn = BigInt(req.amountIn.toString());
+    if (amountIn === 0n) continue;
+    total += (amountIn * feeBps) / 10000n;
+  }
+  return total;
 }
 
 async function main() {
@@ -112,6 +130,10 @@ async function main() {
   }
 
   const batchKash = BigInt((await v.batchTotalRedeemKash(batchCycle)).toString());
+  const grossLockedG =
+    phase >= 2
+      ? BigInt((await v.batchTotalRedeemValueUSD(batchCycle)).toString())
+      : 0n;
 
   console.log("\n  ── Batch ─────────────────────────────────────────────────");
   console.log(`  Vault:              ${vault}`);
@@ -121,6 +143,7 @@ async function main() {
   console.log(`  redeemUsersCount:   ${redeemUsersCount}`);
   console.log(`  batchTotalRedeemKash (mapping): ${ethers.formatUnits(batchKash, 18)} KASH`);
   console.log(`  getBatchInfo[5] totalRedeemKash: ${ethers.formatUnits(totalRedeemKashOnChain, 18)} KASH`);
+  console.log(`  locked G (batchTotalRedeemValueUSD when phase>=2): ${fmtAsset(grossLockedG)}`);
 
   if (batchKash !== totalRedeemKashOnChain) {
     console.log(
@@ -136,31 +159,43 @@ async function main() {
   );
 
   let totalRedeemAssetNeeded;
+  let mintFeeAsset = 0n;
   let method;
 
-  if (redeemUsersCount <= maxIter) {
+  if (grossLockedG > 0n) {
+    totalRedeemAssetNeeded = grossLockedG;
+    mintFeeAsset = await computeMintFeeAsset(v, batchCycle);
+    method = "locked G (batchTotalRedeemValueUSD after mark-done)";
+  } else if (redeemUsersCount <= maxIter) {
     try {
       const { total } = await exactNeededFromList(v, batchCycle, redeemUsersCount, nav, feeBps, price, DECIMALS);
       totalRedeemAssetNeeded = total;
-      method = `exact (iterated ≤${maxIter} redeemers, batchRedeemUsers eth_call ok)`;
+      method = `MTM exact (iterated ≤${maxIter} redeemers, no G set)`;
     } catch (e) {
       totalRedeemAssetNeeded = aggregateNeeded(batchKash, nav, feeBps, price, DECIMALS);
-      method = `aggregate (batchRedeemUsers failed: ${e.shortMessage || e.message})`;
+      method = `MTM aggregate (batchRedeemUsers failed: ${e.shortMessage || e.message})`;
     }
   } else {
     totalRedeemAssetNeeded = aggregateNeeded(batchKash, nav, feeBps, price, DECIMALS);
-    method = `aggregate (redeemUsersCount ${redeemUsersCount} > PHASE2_SHORTFALL_MAX_REDEEMERS=${maxIter})`;
+    method = `MTM aggregate (redeemUsersCount ${redeemUsersCount} > PHASE2_SHORTFALL_MAX_REDEEMERS=${maxIter})`;
   }
 
-  const required = ownerReserve + totalRedeemAssetNeeded;
-  const missing = required > have ? required - have : 0n;
+  if (mintFeeAsset === 0n && Number(info[3]) > 0) {
+    mintFeeAsset = await computeMintFeeAsset(v, batchCycle);
+  }
+
+  const tolerance = BigInt(process.env.MARK_DONE_PAYOUT_TOLERANCE_ASSET || (IS_BTC ? "30" : "10000000000000"));
+  const required = ownerReserve + mintFeeAsset + totalRedeemAssetNeeded;
+  const missing = required > have + tolerance ? required - have - tolerance : 0n;
 
   console.log("\n  ── Phase 2 balance check (mirror contract) ───────────────");
   console.log(`  owner${IS_BTC ? "Wbtc" : "Eth"}Reserve:     ${fmtAsset(ownerReserve)}`);
-  console.log(`  totalRedeem*Needed:  ${fmtAsset(totalRedeemAssetNeeded)}  ← ${method}`);
-  console.log(`  required (reserve +): ${fmtAsset(required)}`);
+  console.log(`  mint protocol fees:  ${fmtAsset(mintFeeAsset)}`);
+  console.log(`  gross redeem (G):    ${fmtAsset(totalRedeemAssetNeeded)}  ← ${method}`);
+  console.log(`  payout tolerance:    ${fmtAsset(tolerance)}`);
+  console.log(`  required (all):      ${fmtAsset(required)}`);
   console.log(`  vault ${ASSET_SYMBOL} (have): ${fmtAsset(have)}`);
-  console.log(`  missing:             ${fmtAsset(missing)}`);
+  console.log(`  missing (after tol): ${fmtAsset(missing)}`);
   if (missing > 0n) {
     console.log("\n  → Fund the vault with at least the missing amount, then retry Phase 2.");
   } else if (phase === 2 && !processed) {

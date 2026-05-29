@@ -4,7 +4,9 @@ import { protocolActionName } from '../contracts/protocolActionCodes';
 import { config } from '../config';
 import {
   snapshotOpsContext,
+  computeTotalRedeemAsset,
   vaultCoversRedeemPayout,
+  vaultCoversRedeemPayoutFromGross,
   getAaveBorrowedAmountV3,
   getAaveSuppliedAmountV3,
   readHyperliquidAdapterAddress,
@@ -278,9 +280,9 @@ export class BatchProcessor {
       }
       if (step === 'mark-done') {
         if (phaseNum !== 1) throw new Error(`Batch ${batchCycle} is in phase ${phaseNum}; run step nav first.`);
-        const settlementNav =
+        const phase1Nav =
           config.lockedNav ?? BigInt((await this.kashYield.currentNAV()).toString());
-        await this.runStepMarkDone(batchCycle, settlementNav);
+        await this.runStepMarkDone(batchCycle, phase1Nav);
         return;
       }
       if (step === 'phase2') {
@@ -308,7 +310,7 @@ export class BatchProcessor {
       const settlementNav = await this.computeNewNAV({ applySettlementBuffer: true });
       console.log(`   Settlement NAV: $${ethers.formatEther(settlementNav)} per KASH\n`);
       await this.runStepNav(batchCycle, settlementNav, 'Step settlement nav');
-      await this.runStepMarkDone(batchCycle, settlementNav);
+      await this.runStepMarkDone(batchCycle, preOpsNav);
       await this.runPhase2ForBatch(batchCycle);
       return;
     }
@@ -331,7 +333,7 @@ export class BatchProcessor {
       const settlementNav = await this.computeNewNAV({ applySettlementBuffer: true });
       console.log(`   Settlement NAV: $${ethers.formatEther(settlementNav)} per KASH\n`);
       await this.runStepNav(batchCycle, settlementNav, 'Step settlement nav');
-      await this.runStepMarkDone(batchCycle, settlementNav);
+      await this.runStepMarkDone(batchCycle, config.lockedNav ?? phase1EraNav);
       await this.runPhase2ForBatch(batchCycle);
       return;
     }
@@ -450,6 +452,7 @@ export class BatchProcessor {
     } else if (scenario === 'test_aave_loop') {
       await runTestAaveLoopPlaybook(ctx);
     }
+
   }
 
   /**
@@ -495,10 +498,8 @@ export class BatchProcessor {
   }
 
   /** Step 4: Call markBatchOpsDone(batchCycle). Batch must be phase 1.
-   * Verifies the contract holds enough ETH/wBTC to cover all pending redemptions before advancing
-   * to phase 2, so Phase 2 cannot enter an InsufficientEthForRedeems state due to partial ops.
-   * Uses computeTotalRedeemAsset from opsContext — same formula as the ops playbook steps. */
-  private async runStepMarkDone(batchCycle: bigint, lockedNAV?: bigint): Promise<void> {
+   * Verifies vault wBTC/ETH covers owner reserve + mint fees + on-chain gross redeem G before Phase 2. */
+  private async runStepMarkDone(batchCycle: bigint, phase1EraNAV?: bigint): Promise<void> {
     const phaseNum = Number(await this.kashYield.batchPhase(batchCycle));
     if (phaseNum >= 2) {
       console.log(
@@ -511,31 +512,67 @@ export class BatchProcessor {
     }
 
     const decimals = isBtc ? 8 : 18;
-    const cover = await vaultCoversRedeemPayout(
+    const redeemKash = BigInt((await this.kashYield.batchTotalRedeemKash(batchCycle)).toString());
+    let grossForCheck = 0n;
+
+    if (redeemKash > 0n) {
+      if (phase1EraNAV == null) {
+        throw new Error(
+          `Cannot markBatchOpsDone: batch ${batchCycle} needs gross redeem G — pass --locked-nav (Phase-1 NAV) or run the full batch after ops.`,
+        );
+      }
+      const assetDecimals = isBtc ? 8n : 18n;
+      const price = isBtc
+        ? BigInt((await this.kashYield.getBtcPrice()).toString())
+        : BigInt((await this.kashYield.getEthPrice()).toString());
+      grossForCheck = await computeTotalRedeemAsset(
+        this.kashYield,
+        batchCycle,
+        phase1EraNAV,
+        price,
+        assetDecimals,
+      );
+      if (grossForCheck === 0n) {
+        throw new Error(
+          `Cannot markBatchOpsDone: batch ${batchCycle} has redeem KASH but gross redeem asset is 0 at Phase-1 NAV.`,
+        );
+      }
+    }
+
+    const grossForTx = grossForCheck;
+
+    const cover = await vaultCoversRedeemPayoutFromGross(
       this.kashYield,
       this.provider,
       batchCycle,
-      lockedNAV,
+      grossForCheck,
       isBtc,
     );
 
-    if (cover.totalRedeemAsset > 0n) {
+    if (cover.grossRedeemAsset > 0n) {
       if (!cover.covers) {
         throw new Error(
           `Cannot markBatchOpsDone: contract holds ${ethers.formatUnits(cover.contractBalance, decimals)} ` +
           `but Phase 2 needs ${ethers.formatUnits(cover.required, decimals)} ` +
-          `(gross redeem ${ethers.formatUnits(cover.totalRedeemAsset, decimals)} + owner reserve ${ethers.formatUnits(cover.ownerAssetReserve, decimals)}). ` +
+          `(G ${ethers.formatUnits(cover.grossRedeemAsset, decimals)} + mint fees ${ethers.formatUnits(cover.mintFeeAsset, decimals)} + owner reserve ${ethers.formatUnits(cover.ownerAssetReserve, decimals)}; ` +
+          `short ${ethers.formatUnits(cover.shortfall, decimals)}, tolerance ${ethers.formatUnits(cover.toleranceAsset, decimals)}). ` +
           `Withdraw more ${isBtc ? 'wBTC' : 'ETH'} from Aave (or reduce owner reserve) before proceeding.`
         );
       }
+      const tolNote =
+        cover.shortfall > 0n && cover.shortfall <= cover.toleranceAsset
+          ? ` (within ${ethers.formatUnits(cover.toleranceAsset, decimals)} tolerance, short ${ethers.formatUnits(cover.shortfall, decimals)})`
+          : '';
       console.log(
         `   ✅ Balance check passed: contract has ${ethers.formatUnits(cover.contractBalance, decimals)} ` +
-          `(need ${ethers.formatUnits(cover.required, decimals)} = gross redeem ${ethers.formatUnits(cover.totalRedeemAsset, decimals)} + owner reserve ${ethers.formatUnits(cover.ownerAssetReserve, decimals)})`,
+          `(need ${ethers.formatUnits(cover.required, decimals)} = G ${ethers.formatUnits(cover.grossRedeemAsset, decimals)} + mint fees ${ethers.formatUnits(cover.mintFeeAsset, decimals)} + owner reserve ${ethers.formatUnits(cover.ownerAssetReserve, decimals)})${tolNote}`,
       );
     }
 
     console.log('📋 Step mark-done: Marking batch ops done...');
-    await execTx('markBatchOpsDone', () => this.kashYield.markBatchOpsDone(batchCycle));
+    await execTx('markBatchOpsDone', () =>
+      this.kashYield.markBatchOpsDone(batchCycle, grossForTx),
+    );
     console.log('   ✅ markBatchOpsDone\n');
   }
 

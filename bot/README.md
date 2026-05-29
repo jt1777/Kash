@@ -109,6 +109,25 @@ See `.env.example` for all required variables. Key ones:
 | `HL_WITHDRAW_WAIT_POLL_MS` | Poll interval for HL withdraw wait (ms) | `20000` |
 | `HL_WITHDRAW_FEE_TOLERANCE_USDC` | Balanced/falling tail: max USDC gap covered via `coverUsdcShortfall` before Aave repay | `1` |
 | `SMALL_SWAP_SKIP_MAX_USDC` | Rising tail — see [Redeem tail / spot dust thresholds](#redeem-tail--spot-dust-thresholds) | `2` |
+| `SETTLEMENT_NAV_BUFFER_BPS` | Shrink post-ops settlement NAV before `updateNAV` (mint leg only; bps). Default `0` | `0` |
+| `MARK_DONE_PAYOUT_TOLERANCE_ASSET` | Slack for mark-done + Phase 2 vs **G** + fees + owner reserve (native units: sat / wei). See [Payout tolerance](#payout-tolerance-g--fees--owner-reserve) | BTC: `30`, ETH: `1e13` |
+
+### Payout tolerance (G + fees + owner reserve)
+
+After ops, **mark-done** and on-chain Phase 2 compare vault wBTC/ETH to **locked G** (Phase-1 NAV) plus mint protocol fees and owner reserve. A few wei/sats of rounding or oracle noise should not block the batch.
+
+| Layer | Default slack |
+|--------|----------------|
+| **Bot** (`runStepMarkDone`) | `MARK_DONE_PAYOUT_TOLERANCE_ASSET` — **30** sat (BTC), **1e13** wei (ETH) if unset |
+| **Contract** (Phase 2) | Same defaults baked in (`REDEEM_PAYOUT_TOLERANCE`); redeploy required to change on-chain |
+| **`16-phase2-redeem-shortfall.js`** | Reads the same env for “missing” after tolerance |
+
+```bash
+# Example: allow up to 50 satoshi slack on BTC batches
+MARK_DONE_PAYOUT_TOLERANCE_ASSET=50
+```
+
+This is **not** for real ops shortfalls (missing 0.0001 wBTC). Increase only for known dust; otherwise fix the tail / Aave withdraw gap.
 
 ### Redeem tail / spot dust thresholds
 
@@ -133,7 +152,7 @@ Handles the daily two-phase batch on KashYield (`performUpkeep` → ops → sett
 - Waits for the processing window (23:50–23:59 UTC) when configured
 - Pre–Phase-1 and post-ops **`updateNAV`**
 - **`runStepOps`** → **`runTargetStateEngine`** → **`opsExec`** delta pipelines (sole automated mint/redeem ops path)
-- **`markBatchOpsDone`** preflight (vault asset vs gross redeem need)
+- **`markBatchOpsDone(batchCycle, G)`** preflight (vault vs **G** + mint fees + owner reserve; locks **G** on-chain)
 - Phase 2 distribution via `performUpkeep` / `processBatchPhase2ForCycle`
 - **Pipeline guards** — single-instance lock, Phase 1 cycle alignment, idempotent mark-done (see below)
 
@@ -168,7 +187,7 @@ Order: **Aave deposit** → **`markMint*Deployed`** → **borrow to LTV** → **
 
 #### Redeem ops (`redeem_hl`)
 
-1. **Core:** proportional **close short** → **HL settlement** (`withdraw3` + on-chain adapter pull to KashYield; settlement is not complete until HL spot is at target **and** adapter ERC-20 USDC is drained **and** vault ops float covers strategy Aave repay). Settlement syncs the adapter from the HL API before sizing `withdraw3`; **at most one `withdraw3` per `npm start`**.
+1. **Core:** proportional **close short** → **HL settlement** (`withdraw3` + on-chain adapter pull to KashYield; mechanical settlement is complete when HL spot is at target **and** adapter ERC-20 USDC is drained — vault USDC vs strategy Aave debt gaps are handled by redeem tail classification, not owner reserve subsidy before classify). Settlement syncs the adapter from the HL API before sizing `withdraw3`; **at most one `withdraw3` per `npm start`**.
 2. **Tail** (after settlement wait): **balanced / falling / rising** — Aave repay, Aave withdraw, optional **11a** / **11b** spot swaps; **`coverUsdcShortfall`** for small HL withdraw fee gaps (`HL_WITHDRAW_FEE_TOLERANCE_USDC`).
 
 See [`targetStateEngine.ts`](src/batch/targetStateEngine.ts) and [`opsExec.ts`](src/batch/opsExec.ts).
@@ -181,7 +200,7 @@ Gating lives in **`runStepOps`** only (not in `targetStateEngine`). Uses **net**
 |-----------|----------------|
 | **Net mint &lt; $10** | Skip Aave/HL; deposited wBTC/ETH **stays on the vault** (dust). KASH still minted in Phase 2. |
 | **Net redeem ≥ $10** | Full redeem ops (HL + Aave tail). |
-| **Net redeem &lt; $10**, vault **covers** payout | Skip ops; Phase 2 pays redeemers from **vault wBTC/ETH** (`vaultCoversRedeemPayout` — same check as mark-done). |
+| **Net redeem &lt; $10**, vault **covers** payout | Skip ops; **`markBatchOpsDone`** locks **G** at Phase-1 NAV, then Phase 2 pays from vault. |
 | **Net redeem &lt; $10**, vault **insufficient** | Full redeem ops. |
 
 **Dust layer:** Skipped net mints accumulate idle vault asset (backs NAV, not deployed to Aave/HL). Small net redeems that skip ops draw down that vault slice without unwinding the levered book — intentional pairing for micro flows. The **frontend** blocks mint requests **&lt; $10** (oracle USD); **redemptions have no minimum**.
@@ -372,26 +391,35 @@ Shows:
 ### Five-step batch flow
 The batch is split into five steps so each can be run individually. If any step errors, fix the issue and re-run that step (or the next). Default remains a full run (all five in sequence).
 
-**Two `updateNAV` calls per full batch (starting from phase 0):** (1) **pre-Phase-1** MTM so on-chain Phase 1 sees fresh `currentNAV`; (2) **post-ops settlement** MTM so Phase 2 mint/redeem uses balances after fees and slippage.
+**Two `updateNAV` calls per full batch (starting from phase 0):** (1) **pre-Phase-1** MTM so on-chain Phase 1 sees fresh `currentNAV`; (2) **post-ops settlement** MTM so Phase 2 **mint** KASH uses balances after fees and slippage. **Redeem** payout uses a separate locked gross asset amount **G** (see below).
 
 | Step | Name        | Action |
 |------|-------------|--------|
 | —    | *(pre-Phase-1)* | `computeNewNAV` → **`updateNAV`** (Phase-1-era MTM on-chain) |
 | 1    | `phase1`    | `performUpkeep()` after the above (Phase 1; batch moves to phase 1). Skipped if already phase ≥ 1; refused if `batchCycle ≠ currentCycle`. |
 | 2    | `ops`       | **`runStepOps`** (skip gates + target-state mint/redeem); sizing uses **Phase-1-era** NAV |
-| 3    | `nav`       | `computeNewNAV` post-ops → **`updateNAV` (settlement)** for Phase 2 |
-| 4    | `mark-done` | `markBatchOpsDone(batchCycle)` (batch moves to phase 2). Skipped if already phase ≥ 2. |
-| 5    | `phase2`    | Phase 2 distribution at **settlement** `currentNAV` |
+| 3    | `nav`       | `computeNewNAV` post-ops → **`updateNAV` (settlement)** — updates `currentNAV` for Phase 2 **mint** leg |
+| 4    | `mark-done` | `markBatchOpsDone(batchCycle, G)` — preflight vault vs **G** + mint fees + owner reserve; stores **G** on-chain; batch → phase 2. Skipped if already phase ≥ 2. |
+| 5    | `phase2`    | Mint at **settlement** `currentNAV`; redeem wBTC/ETH pro-rata from locked **G** |
 
-#### Pre-Phase-1 vs settlement NAV
+#### Pre-Phase-1 vs settlement NAV (dual NAV)
 
-The bot computes NAV from live Aave/Hyperliquid state **before Phase 1** and calls **`updateNAV`** so `batchTotalRedeemValueUSD` / net signals use today’s MTM. **After ops**, it recomputes NAV and calls **`updateNAV` again** so Phase 2 aligns with post-trade balances. Phase 1 chain totals and Phase 2 payout can differ by the NAV and supply change over the ops window — not by a single “locked pre-ops” number that ignores realized costs.
+| Leg | NAV / sizing | On-chain |
+|-----|----------------|----------|
+| Phase 1 signals, ops sizing, redeem tail, **G** | **Phase-1-era** `currentNAV` (after pre-Phase-1 `updateNAV`) | `computeTotalRedeemAsset` at ops time |
+| **mark-done** preflight | Same **G** (computed at Phase-1 NAV, passed in tx) | `markBatchOpsDone(batchCycle, G)` writes **G** into `batchTotalRedeemValueUSD` (asset units, 8/18 dec) |
+| Phase 2 **mint** KASH | **Settlement** `currentNAV` (after post-ops `updateNAV`) | `exactNAV = currentNAV()` in `_processBatchPhase2` |
+| Phase 2 **redeem** payout | Locked **G**, not settlement NAV | Pro-rata by KASH; last redeemer gets remainder |
+
+Before **mark-done**, `batchTotalRedeemValueUSD` is Phase-1 **redeem USD** (18 dec). After **mark-done**, that slot holds **G** in wBTC/ETH units until Phase 2 completes.
 
 **Manual `--step=phase1`:** runs pre-Phase-1 `updateNAV` + `performUpkeep()` (two txs for that step).
 
-**`--locked-nav`:** overrides **Phase-1-era** sizing on `--step=ops` if needed; overrides **settlement** `updateNAV` on `--step=nav`; on **`--step=mark-done`** overrides the redeem-asset check (default: on-chain `currentNAV` after `nav`).
+**`--locked-nav`:** overrides **Phase-1-era** NAV on `--step=ops` and when computing **G** on `--step=mark-done`; overrides settlement `updateNAV` on `--step=nav`. It does **not** change redeem payout after **G** is locked (unless you re-run mark-done on a still-phase-1 batch with a new override).
 
-**Implication for full redemptions:** the playbook still targets enough asset on the vault for Phase 2 at **settlement** NAV; use `scripts/ops/16-phase2-redeem-shortfall.js` when borderline.
+**Ops playbook** still targets enough vault wBTC/ETH for **G** at Phase-1 NAV. **`scripts/ops/16-phase2-redeem-shortfall.js`** mirrors the on-chain Phase 2 balance check (uses locked **G** when `batchPhase >= 2`).
+
+**Payout tolerance:** see [Payout tolerance (G + fees + owner reserve)](#payout-tolerance-g--fees--owner-reserve) and `MARK_DONE_PAYOUT_TOLERANCE_ASSET` in [`.env.example`](.env.example).
 
 **How the bot picks the target batch (no batch number needed)**  
 The bot does not detect "failure" directly; it detects **incomplete** batches from on-chain state. Each run it:
@@ -414,16 +442,13 @@ Use this when a batch is stuck at **phase 1** (ops incomplete or mark-done block
 1. **Pre–Phase-1** — fresh MTM so Phase 1 on-chain signals use today’s portfolio.
 2. **Post-ops settlement** — MTM after trades/fees so Phase 2 mint/redeem matches realized balances.
 
-**On recovery — it can make things worse if you repeat full runs blindly.**
+**On recovery — repeating full runs can still waste gas and bump settlement NAV.**
 
-When you resume from **phase 1** with `npm start -- --batch=N` (no `--step`), the bot **always** runs ops → **settlement `updateNAV` again** → mark-done → phase2 — even when every ops step was `[Δ skip]`. Each settlement write:
+When you resume from **phase 1** with `npm start -- --batch=N` (no `--step`), the bot **always** runs ops → **settlement `updateNAV` again** → mark-done → phase2 — even when every ops step was `[Δ skip]`. Each settlement write updates **`currentNAV`** (Phase 2 **mint** sizing only).
 
-- Updates on-chain **`currentNAV`** from live MTM (BTC price, portfolio, settlement buffer).
-- Raises **mark-done**’s required vault wBTC/ETH (`totalRedeemAsset` ∝ NAV × pending KASH).
+**mark-done** required vault wBTC/ETH is **`G` + mint protocol fees + owner reserve**, where **G** is fixed at **Phase-1 NAV** when `markBatchOpsDone` runs — **not** settlement NAV. Re-running settlement `updateNAV` alone does **not** raise the mark-done bar for redeems (legacy behavior before the G lock did, and caused false “almost there” loops).
 
-So if the vault is **already short** wBTC for payout, **re-running the full batch without fixing the asset gap first** can **raise the bar every time** while leaving the hole unchanged. That is what happened when mark-done failed, then runs 2–3 wrote higher settlement NAV (~$1.00 → ~$1.02 → ~$1.06) while ~0.00001224 wBTC was still missing.
-
-**Rule:** after `Cannot markBatchOpsDone`, do **not** loop full `npm start`. Fix the wBTC/ETH gap once, then finish with targeted steps (below).
+**Rule:** after `Cannot markBatchOpsDone`, do **not** loop full `npm start` hoping NAV moves fix it. Fix the wBTC/ETH gap for **G** (use `16-phase2-redeem-shortfall.js`), then finish with targeted steps (below).
 
 #### Default recovery command
 
@@ -459,11 +484,11 @@ Check for batch `<cycle>`:
 
 - On-chain: Aave/HL may look “done”, but vault wBTC can still be below Phase 2 need; USDC may sit on vault unused.
 - **Fix:** complete the missing tail action (often **swap ops USDC → wBTC** via falling-tail / 11b path, or owner script), **then** one completion run.
-- **Do not** assume a small manual wBTC transfer fixes mark-done — if you also run settlement `updateNAV` again, required wBTC rises in parallel (same ~$ gap can persist).
+- **Do not** assume a small manual wBTC transfer fixes mark-done without checking **G** + fees + owner reserve (`16-phase2-redeem-shortfall.js`).
 
 **2. `Cannot markBatchOpsDone` (vault wBTC/ETH below gross redeem + owner reserve)**
 
-- mark-done uses **settlement NAV** (or on-chain `currentNAV` after `--step=nav`).
+- mark-done locks **G** into `batchTotalRedeemValueUSD` (asset units) at Phase-1 NAV, plus mint protocol fees and owner reserve.
 - **Fix gap first** (11b / swap / withdraw remaining from Aave if any), **then** finish without re-bumping NAV repeatedly:
 
 ```bash
@@ -472,7 +497,7 @@ PRODUCT=btc SKIP_PROCESSING_WINDOW_CHECK=true npm start -- --batch=<cycle> --ste
 PRODUCT=btc SKIP_PROCESSING_WINDOW_CHECK=true npm start -- --batch=<cycle> --step=phase2
 ```
 
-Only re-run `--step=nav` if settlement NAV was never written or you intentionally want a fresh MTM (understand it changes Phase 2 sizing).
+Only re-run `--step=nav` if settlement NAV was never written or you intentionally want a fresh MTM (changes Phase 2 **mint** sizing only; redeem **G** is already locked if mark-done succeeded).
 
 **3. Partial step runs (`--step=hl`, `--step=ops` only)**
 
@@ -513,7 +538,7 @@ On **normal** redeem runs (not dirty recovery), the bot syncs the adapter from t
 #### What not to do
 
 - Loop `npm start -- --batch=N` after mark-done failure hoping it self-heals.
-- Send tiny manual wBTC to the contract without checking mark-done math vs settlement NAV.
+- Send tiny manual wBTC to the contract without checking mark-done math vs locked **G** (`16-phase2-redeem-shortfall.js`).
 - Use `--step=hl` on a full redeem that still needs Aave tail.
 - Confuse `phase=1` with `processed=true` — phase 1 means mid-pipeline, not paid out.
 
@@ -573,7 +598,7 @@ npm start -- --batch=20523 --step=aave --allow-processed
 | `--step=1` … `--step=5` | — | Numeric shorthand for steps 1–5 |
 | `--batch=N` | `BATCH_CYCLE=N` | Target a specific batch cycle number |
 | `--allow-processed` | `ALLOW_PROCESSED_BATCH=true` | Allow ops steps on an already-finalized batch |
-| `--locked-nav=<bigint>` | `LOCKED_NAV=<bigint>` | Optional override (18‑dec): ops sizing, settlement `nav`, or `mark-done` check — see batch flow section |
+| `--locked-nav=<bigint>` | `LOCKED_NAV=<bigint>` | Optional override (18‑dec): Phase-1 ops sizing and **G** on `mark-done`; settlement `nav` on `--step=nav` — see [dual NAV](#pre-phase-1-vs-settlement-nav-dual-nav) |
 
 If the batch is in the wrong phase for the requested step, the bot exits with a clear message (e.g. `"Batch 20524 is in phase 0; run step phase1 first"`). Fix the prerequisite step, then re-run.
 
@@ -583,7 +608,7 @@ When stepping through manually, `--locked-nav` is **optional** at each step:
 
 - **`--step=ops`**: defaults to on-chain `currentNAV` after pre-Phase-1 `updateNAV`; pass `--locked-nav` only if that on-chain value is wrong for recovery.
 - **`--step=nav`**: defaults to `computeNewNAV()` at run time (**settlement**); pass `--locked-nav` to force the `updateNAV` argument.
-- **`--step=mark-done`**: defaults to on-chain `currentNAV` after settlement `nav`.
+- **`--step=mark-done`**: computes **G** at Phase-1 NAV (on-chain `currentNAV` after pre-Phase-1 `updateNAV`, or `--locked-nav`). Pass `--locked-nav` if that value is wrong for recovery. Settlement `nav` is **not** used for **G**.
 
 ```bash
 npm start -- --batch=20523 --step=phase1
@@ -626,7 +651,7 @@ The NAV path runs **`computeNewNAV` / `estimatePortfolioValueUSD`** for **pre-Ph
 
 ### USD → token amounts in ops
 
-Aave/HL steps in **`opsExec.ts`** use **token amounts** (wBTC 8 dec, ETH 18 dec, USDC 6 dec). Batch **net USD** (18 dec) is converted per step using Chainlink **`getBtcPrice()` / `getEthPrice()`**. Redeem **`totalRedeemAsset`** and mark-done use the same NAV era as ops sizing (`phase1EraNAV` at ops time; settlement NAV at mark-done).
+Aave/HL steps in **`opsExec.ts`** use **token amounts** (wBTC 8 dec, ETH 18 dec, USDC 6 dec). Batch **net USD** (18 dec) is converted per step using Chainlink **`getBtcPrice()` / `getEthPrice()`**. **`markBatchOpsDone(batchCycle, G)`** stores gross redeem **G** at Phase-1 NAV; Phase 2 redeems pay **G** pro-rata by KASH. Mint leg and settlement **`updateNAV`** still use post-ops MTM **`currentNAV`**.
 
 ## License
 

@@ -102,7 +102,7 @@ export const kashYieldABI = [
   { inputs: [{ name: "batchCycle", type: "uint256" }], name: "cancelRedeemRequest", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "performData", type: "bytes" }], name: "performUpkeep", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "batchCycle", type: "uint256" }], name: "processBatchPhase2ForCycle", outputs: [], stateMutability: "nonpayable", type: "function" },
-  { inputs: [{ name: "batchCycle", type: "uint256" }], name: "markBatchOpsDone", outputs: [], stateMutability: "nonpayable", type: "function" },
+  { inputs: [{ name: "batchCycle", type: "uint256" }, { name: "grossRedeemAssetAmount", type: "uint256" }], name: "markBatchOpsDone", outputs: [], stateMutability: "nonpayable", type: "function" },
   // Aave (ETH-only)
   { inputs: [{ name: "amount", type: "uint256" }], name: "depositToAave", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "amount", type: "uint256" }], name: "withdrawFromAave", outputs: [], stateMutability: "nonpayable", type: "function" },
