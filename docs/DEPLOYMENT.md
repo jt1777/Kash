@@ -712,3 +712,45 @@ HL trading steps (`04`–`07`) use the **Hyperliquid API** on mainnet; deposit/w
 - Audit contracts before significant TVL.
 - Keep `exchangeSwitchDelay` non-zero on mainnet unless you explicitly accept operational risk on future adapter changes.
 - **`directDepositMode = false`** on mainnet so user NAV USDC is not routed to the bot EOA via HL defaults.
+
+---
+
+## Post-deploy operational notes
+
+Items called out elsewhere in this guide but easy to miss during cutover:
+
+### Hyperliquid `approveAgent` (per adapter)
+
+Step **Hyperliquid adapter setup (production)** describes **`directDepositMode = false`** and **`setOperator`**, but **HL agent approval is not a single Hardhat tx**. For each **HyperliquidAdapter** (ETH and BTC), the **bot EOA** must be authorised to sign API actions (`order`, `withdraw3`, etc.) on the HL account tied to the **adapter contract address**. Use your Hyperliquid runbook or REST **`/exchange`** **`approveAgent`** flow. Until that is done, `npm start` may record on-chain intent without real HL fills.
+
+External reference: [Hyperliquid docs](https://hyperliquid.gitbook.io/hyperliquid-docs/).
+
+### Wrong `botAddress` after deploy
+
+Deploy scripts set **`botAddress`** from **`BOT_ADDRESS`**. If you omitted it or used the wrong address, fix with the **owner** key (root `.env`):
+
+```bash
+# ETH vault
+KASH_YIELD_ETH_ADDRESS=<KASH_YIELD_ETH> BOT_ADDRESS=<bot_wallet> \
+  npx hardhat run scripts/setBotAddress.js --network arbitrumOne
+
+# BTC vault
+PRODUCT=btc KASH_YIELD_BTC_ADDRESS=<KASH_YIELD_BTC> BOT_ADDRESS=<bot_wallet> \
+  npx hardhat run scripts/setBotAddress.js --network arbitrumOne
+```
+
+Verify on-chain: `owner() ≠ botAddress()` and `botAddress()` matches **`bot/.env`** `PRIVATE_KEY`.
+
+### `rescueERC20` and USDC on the vault
+
+**`rescueERC20`** lets the **owner** transfer arbitrary ERC-20 balances held by the vault. **wBTC and ETH (deposit assets) are blocked**; **USDC is not**. That means owner can pull **all on-vault USDC**, including float that backs user NAV — not only **`ownerUsdcReserve`**. Use only for mis-sent tokens, wind-down, or other cases you accept the risk for.
+
+- Policy and trust model: [SECURITY.md](SECURITY.md)
+- Ops script (owner key, repo root): `bot/scripts/ops/15-rescue-usdc-from-contract.js`
+
+```bash
+PRODUCT=btc npx hardhat run bot/scripts/ops/15-rescue-usdc-from-contract.js --network arbitrumOne
+# Optional: AMOUNT=8.5 RESCUE_TO=0x...
+```
+
+Prefer **`markOwnerUsdcDeposit`** / **`coverUsdcShortfall`** / batch ops for normal treasury and working-float USDC.
