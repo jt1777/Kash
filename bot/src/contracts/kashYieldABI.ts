@@ -93,8 +93,6 @@ export const kashYieldABI = [
   { inputs: [], name: "activePerpExchange", outputs: [{ name: "", type: "string" }], stateMutability: "view", type: "function" },
   { inputs: [{ name: "", type: "string" }], name: "perpExchanges", outputs: [{ name: "", type: "address" }], stateMutability: "view", type: "function" },
   { inputs: [], name: "getEthPrice", outputs: [{ name: "", type: "uint256" }], stateMutability: "view", type: "function" },
-  { inputs: [], name: "getReservedEth", outputs: [{ name: "", type: "uint256" }], stateMutability: "view", type: "function" },
-  { inputs: [], name: "getReservedBtc", outputs: [{ name: "", type: "uint256" }], stateMutability: "view", type: "function" },
   // User + batch
   { inputs: [{ name: "amount", type: "uint256" }], name: "requestMint", outputs: [], stateMutability: "payable", type: "function" },
   { inputs: [{ name: "kashAmount", type: "uint256" }], name: "requestRedeem", outputs: [], stateMutability: "nonpayable", type: "function" },

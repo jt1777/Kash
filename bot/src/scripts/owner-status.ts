@@ -2,7 +2,7 @@
  * Owner Status Script
  *
  * Shows protocol state for KashYieldETH or KashYieldBtc:
- * - Asset in contract: total vs getReserved* (pending mints + gross redeem estimate) vs owner/protocol-fee reserve
+ * - Asset in contract: total vs pending-batch estimate (mints + redeem) vs owner/protocol-fee reserve
  * - Aave: supplied ETH/wBTC, borrowed USDC
  * - KASH token: total supply (circulation) vs KASH on vault (pending redeems only)
  *
@@ -38,11 +38,9 @@ const ERC20_ABI = [
 const RESERVED_LOOKBACK = 10;
 
 /**
- * Mirror KashYield `getReservedBtc` / `getReservedEth`: for unprocessed cycles in the same 11-cycle
- * lookback, sum pending mint wBTC/ETH plus **estimated** wBTC/ETH owed on pending redeems
- * (batchTotalRedeemKash × currentNAV / oracle price). Redeem protocol fees are retained
- * as owner reserve during Phase 2, so the reserved estimate is gross rather than after-fee.
- * higher `currentNAV` increases the redeem leg and thus "reserved" vs raw mint only.
+ * Off-chain pending-batch footprint (11-cycle lookback): pending mint wBTC/ETH plus redeem
+ * obligation. Phase ≥2 uses locked gross G in `batchTotalRedeemValueUSD`; earlier phases estimate
+ * from batchTotalRedeemKash × currentNAV / oracle price (gross, not after-fee).
  */
 async function reservedAssetBreakdown(
   kashYield: ethers.Contract,
@@ -68,9 +66,13 @@ async function reservedAssetBreakdown(
     mintSum += BigInt(mintRaw.toString());
     const totalRedeemKash = BigInt((await kashYield.batchTotalRedeemKash(cycle)).toString());
     if (totalRedeemKash > 0n) {
-      const redeemUsdEstimate = (totalRedeemKash * nav) / 10n ** 18n;
-      const redeemAssetEstimate = (redeemUsdEstimate * 10n ** assetDec) / price;
-      redeemEst += redeemAssetEstimate;
+      const phase = Number((await kashYield.batchPhase(cycle)).toString());
+      if (phase >= 2) {
+        redeemEst += BigInt((await kashYield.batchTotalRedeemValueUSD(cycle)).toString());
+      } else {
+        const redeemUsdEstimate = (totalRedeemKash * nav) / 10n ** 18n;
+        redeemEst += (redeemUsdEstimate * 10n ** assetDec) / price;
+      }
     }
   }
   return { mintSum, redeemEst, total: mintSum + redeemEst };
@@ -110,13 +112,11 @@ async function main() {
 
   // ─── 1. Asset in Contract ───────────────────────────────────────────────
   let totalInContract: bigint;
-  let reserved: bigint;
 
   if (isBtc) {
     const wbtcAddress = await kashYield.wbtcAddress();
     const wbtc = new ethers.Contract(wbtcAddress, ERC20_ABI, provider);
     totalInContract = await wbtc.balanceOf(vaultAddress);
-    reserved = await kashYield.getReservedBtc();
     const br = await reservedAssetBreakdown(kashYield, true);
     const ownerAssetReserve = await kashYield.ownerWbtcReserve().catch(() => 0n);
     const protocolFeeReserve = await kashYield.protocolFeeWbtcReserve().catch(() => 0n);
@@ -125,9 +125,9 @@ async function main() {
     console.log('📦 Asset in Contract (wBTC)');
     console.log('  Total:            ', ethers.formatUnits(totalInContract, 8), 'wBTC');
     console.log(
-      '  Reserved (total): ',
-      ethers.formatUnits(reserved, 8),
-      'wBTC  ← getReservedBtc()',
+      '  Pending batches:  ',
+      ethers.formatUnits(br.total, 8),
+      'wBTC (11-cycle lookback, informational)',
     );
     console.log(
       '    · Pending mints: ',
@@ -135,13 +135,10 @@ async function main() {
       'wBTC (batchTotalMintBtc, unprocessed cycles)',
     );
     console.log(
-      '    · Redeem est.:   ',
+      '    · Redeem:        ',
       ethers.formatUnits(br.redeemEst, 8),
-      'wBTC (KASH×currentNAV/BTC price, gross incl. protocol fee — not Phase 2 exactNAV)',
+      'wBTC (locked G if phase≥2, else KASH×currentNAV/BTC price)',
     );
-    if (br.total !== reserved) {
-      console.log('    ⚠️  Breakdown sum ≠ on-chain reserved (unexpected); trust getReservedBtc.');
-    }
     console.log(
       '  Contract (user NAV):',
       ethers.formatUnits(userNavVault, 8),
@@ -158,7 +155,6 @@ async function main() {
     );
   } else {
     totalInContract = await provider.getBalance(vaultAddress);
-    reserved = await kashYield.getReservedEth();
     const br = await reservedAssetBreakdown(kashYield, false);
     const ownerAssetReserve = await kashYield.ownerEthReserve().catch(() => 0n);
     const protocolFeeReserve = await kashYield.protocolFeeEthReserve().catch(() => 0n);
@@ -167,15 +163,16 @@ async function main() {
     console.log('📦 Asset in Contract (ETH)');
     console.log('  Total:            ', ethers.formatEther(totalInContract), 'ETH');
     console.log(
-      '  Reserved (total): ',
-      ethers.formatEther(reserved),
-      'ETH  ← getReservedEth()',
+      '  Pending batches:  ',
+      ethers.formatEther(br.total),
+      'ETH (11-cycle lookback, informational)',
     );
     console.log('    · Pending mints: ', ethers.formatEther(br.mintSum), 'ETH');
-    console.log('    · Redeem est.:   ', ethers.formatEther(br.redeemEst), 'ETH');
-    if (br.total !== reserved) {
-      console.log('    ⚠️  Breakdown sum ≠ on-chain reserved (unexpected); trust getReservedEth.');
-    }
+    console.log(
+      '    · Redeem:        ',
+      ethers.formatEther(br.redeemEst),
+      'ETH (locked G if phase≥2, else KASH×currentNAV/ETH price)',
+    );
     console.log(
       '  Contract (user NAV):',
       ethers.formatEther(userNavVault),

@@ -156,10 +156,8 @@ contract KashYieldETH is ReentrancyGuard {
     uint256 public protocolFeeEthReserve;
 
     // ── Batch state ───────────────────────────────────────────────────────
-    uint256 public currentBatchCycle;
     mapping(uint256 => bool)    public batchProcessed;
     mapping(uint256 => uint256) public batchIndicativeNAV;
-    mapping(uint256 => uint256) public batchExactNAV;
     mapping(uint256 => uint8)   public batchPhase;
 
     struct MintRequest {
@@ -225,7 +223,6 @@ contract KashYieldETH is ReentrancyGuard {
         botAddress = _botAddress;
         kashTokenEth = new KashTokenEth();
         kashTokenEth.transferOwnership(address(this));
-        currentBatchCycle = block.timestamp / cycleDurationSeconds;
 
         // Hard-coded mainnet addresses
         aavePoolAddress = 0x794a61358D6845594F94dc1DB02A252b5b4814aD;
@@ -589,7 +586,6 @@ contract KashYieldETH is ReentrancyGuard {
         ownerEthReserve += totalProtocolFeeEth;
         protocolFeeEthReserve += totalProtocolFeeEth;
 
-        batchExactNAV[batchCycle] = exactNAV;
         batchProcessed[batchCycle] = true;
         batchPhase[batchCycle] = 3;
         emit BatchProcessed(batchCycle, batchTotalMintValueUSD[batchCycle], batchTotalRedeemValueUSD[batchCycle], exactNAV);
@@ -840,25 +836,6 @@ contract KashYieldETH is ReentrancyGuard {
 
     function getCurrentBatchCycle() external view returns (uint256) {
         return block.timestamp / cycleDurationSeconds;
-    }
-
-    function getReservedEth() public view returns (uint256) {
-        uint256 currentCycle = block.timestamp / cycleDurationSeconds;
-        uint256 reserved = 0;
-        uint256 ethPrice = getEthPrice();
-        // Sum reservations across the current cycle and the last 10 past cycles so that
-        // Pending mint/redeem obligations for NAV and ops; owner asset pulls are limited to ownerEthReserve.
-        uint256 lookback = 10;
-        for (uint256 i = 0; i <= lookback; i++) {
-            if (i > currentCycle) break;
-            uint256 cycle = currentCycle - i;
-            if (batchProcessed[cycle]) continue;
-            reserved += batchTotalMintEth[cycle];
-            uint256 redeemUsdEstimate = (batchTotalRedeemKash[cycle] * currentNAV) / 1e18;
-            uint256 redeemEthEstimate = (redeemUsdEstimate * (10 ** ETH_DECIMALS)) / ethPrice;
-            reserved += redeemEthEstimate;
-        }
-        return reserved;
     }
 
     function markMintEthDeployed(uint256 batchCycle, uint256 amount) external onlyBotOrKeeper {

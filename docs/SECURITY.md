@@ -262,16 +262,16 @@ require(block.timestamp - updatedAt < MAX_ORACLE_STALENESS, "Stale price");
 
 ---
 
-### 9. Reserved balance lookback edge case
+### 9. Pending-batch observability lookback edge case
 
-**Behavior:** `getReservedEth` / `getReservedBtc` sum unprocessed batches in the last **11 cycles** only.
+**Behavior:** `npm run owner:status` estimates unprocessed batch footprint over the last **11 cycles** only (off-chain; not enforced on-chain). Owner asset pulls are capped by **`ownerWbtcReserve` / `ownerEthReserve`** only.
 
-**Risk:** If a batch remains unprocessed for >11 cycles (bot outage, ops failure, griefing), older pending obligations may **drop out of reserved** while assets still sit on vault → owner excess withdraw math weakens for that cohort.
+**Risk:** If a batch remains unprocessed for >11 cycles (bot outage, ops failure, griefing), status tooling may under-report older pending obligations. Stale batches still hold vault assets until Phase 2 completes.
 
 **Recommendations:**
 
-- Extend lookback or tie reserved to explicit pending request storage until processed/cancelled
 - Monitoring: alert on unprocessed batches older than N cycles
+- Ops: use per-cycle `batchPhase`, `batchTotalRedeemValueUSD` (locked G), and mark-done checks — not a global reserved view
 
 ---
 

@@ -82,14 +82,12 @@ async function main() {
   }
 
   let bal: bigint;
-  let reserved: bigint;
   let ownerAssetReserve = 0n;
 
   if (isBtc) {
     const wbtcAddress: string = await kashYield.wbtcAddress();
     const wbtc = new ethers.Contract(wbtcAddress, ERC20_ABI, provider);
     bal = BigInt((await wbtc.balanceOf(vaultAddr)).toString());
-    reserved = BigInt((await kashYield.getReservedBtc()).toString());
     try {
       ownerAssetReserve = BigInt((await kashYield.ownerWbtcReserve()).toString());
     } catch {
@@ -97,7 +95,6 @@ async function main() {
     }
   } else {
     bal = BigInt((await provider.getBalance(vaultAddr)).toString());
-    reserved = BigInt((await kashYield.getReservedEth()).toString());
     try {
       ownerAssetReserve = BigInt((await kashYield.ownerEthReserve()).toString());
     } catch {
@@ -113,9 +110,6 @@ async function main() {
     isBtc ? ethers.formatUnits(v, 8) : ethers.formatEther(v);
 
   console.log(`Vault ${assetLabel} balance: ${fmt(bal)}`);
-  console.log(
-    `getReserved${isBtc ? 'Btc' : 'Eth'}():       ${fmt(reserved)}`,
-  );
   console.log(
     `owner${isBtc ? 'Wbtc' : 'Eth'}Reserve:       ${fmt(ownerAssetReserve)}`,
   );

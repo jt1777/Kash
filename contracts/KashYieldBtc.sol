@@ -147,10 +147,8 @@ contract KashYieldBtc is ReentrancyGuard {
     uint256 public protocolFeeWbtcReserve;
 
     // ── Batch state ───────────────────────────────────────────────────────
-    uint256 public currentBatchCycle;
     mapping(uint256 => bool)    public batchProcessed;
     mapping(uint256 => uint256) public batchIndicativeNAV;
-    mapping(uint256 => uint256) public batchExactNAV;
     mapping(uint256 => uint8)   public batchPhase;
 
     struct MintRequest {
@@ -216,7 +214,6 @@ contract KashYieldBtc is ReentrancyGuard {
         botAddress = _botAddress;
         kashTokenBtc = new KashTokenBtc();
         kashTokenBtc.transferOwnership(address(this));
-        currentBatchCycle = block.timestamp / cycleDurationSeconds;
 
         // Hard-coded mainnet addresses
         aavePoolAddress = 0x794a61358D6845594F94dc1DB02A252b5b4814aD;
@@ -818,25 +815,6 @@ contract KashYieldBtc is ReentrancyGuard {
 
     function getCurrentBatchCycle() external view returns (uint256) {
         return block.timestamp / cycleDurationSeconds;
-    }
-
-    function getReservedBtc() public view returns (uint256) {
-        uint256 currentCycle = block.timestamp / cycleDurationSeconds;
-        uint256 reserved = 0;
-        uint256 btcPrice = getBtcPrice();
-        // Sum reservations across the current cycle and the last 10 past cycles so that
-        // Pending mint/redeem obligations for NAV and ops; owner asset pulls are limited to ownerWbtcReserve.
-        uint256 lookback = 10;
-        for (uint256 i = 0; i <= lookback; i++) {
-            if (i > currentCycle) break;
-            uint256 cycle = currentCycle - i;
-            if (batchProcessed[cycle]) continue;
-            reserved += batchTotalMintBtc[cycle];
-            uint256 redeemUsdEstimate = (batchTotalRedeemKash[cycle] * currentNAV) / 1e18;
-            uint256 redeemBtcEstimate = (redeemUsdEstimate * (10 ** WBTC_DECIMALS)) / btcPrice;
-            reserved += redeemBtcEstimate;
-        }
-        return reserved;
     }
 
     function markMintBtcDeployed(uint256 batchCycle, uint256 amount) external onlyBotOrKeeper {
