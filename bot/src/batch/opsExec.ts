@@ -499,7 +499,7 @@ function getHlSettlementInboundMinBps(): bigint {
   }
 }
 
-/** Lenient floor for "HL landed" vs expected (e.g. expect 24, accept 23 after fee / rounding). */
+/** Lenient floor for "HL landed" vs expected (e.g. expect 24, accept ~22.9 after ~$1.1 fee slack). */
 function minHlInboundReceivedUsdc6(expected: bigint, feeTolerance: bigint): bigint {
   if (expected === 0n) return 0n;
   const afterFee = expected > feeTolerance ? expected - feeTolerance : 0n;
@@ -512,12 +512,12 @@ function noteExpectedHlInbound(state: HlSettlementWaitState, amount: bigint): vo
 }
 
 function getHlWithdrawFeeToleranceUsdc6(): bigint {
-  const raw = process.env.HL_WITHDRAW_FEE_TOLERANCE_USDC || '1';
+  const raw = process.env.HL_WITHDRAW_FEE_TOLERANCE_USDC || '1.1';
   try {
     const parsed = ethers.parseUnits(raw, 6);
     return parsed >= 0n ? parsed : 0n;
   } catch {
-    return 1_000_000n; // 1 USDC default fallback
+    return 1_100_000n; // 1.1 USDC default fallback (HL ~$1 + bridge/rounding)
   }
 }
 
@@ -2010,8 +2010,8 @@ function hlSettlementWithdrawAmount(ctx: OpsContext, targetHlUsdc: bigint): bigi
 
 /**
  * HL API withdraw3 (L1→Arbitrum): bridge exactly HL excess above target — no fee padding on the request.
- * HL’s ~$1 withdraw fee is handled via actual KashYield receipt + coverUsdcShortfall on tail repay;
- * overdrawing (excess + fee) would drain HL spot below Aave borrow over repeated redeems.
+ * HL’s ~$1 withdraw fee (+ small bridge/transfer slack) is handled via actual KashYield receipt +
+ * coverUsdcShortfall on tail repay; overdrawing (excess + fee) would drain HL spot below Aave borrow
  */
 function hlOffchainWithdraw3Amount(
   ctx: OpsContext,

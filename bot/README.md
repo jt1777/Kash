@@ -107,7 +107,7 @@ See `.env.example` for all required variables. Key ones:
 | `HL_WITHDRAW_WAIT_ENABLED` | After redeem, run HL USDC settlement wait (`withdraw3` + adapter pull). Set `false` for dirty-batch recovery (see [Batch recovery runbook](#batch-recovery-runbook)) | `true` |
 | `HL_WITHDRAW_WAIT_MAX_MS` | Max wait for HL settlement — HL spot/adapter done **and** KashYield **ΔUSDC** ≥ expected withdraw3/pull (minus fee/min-bps); not fooled by pre-existing ops float (ms) | `900000` |
 | `HL_WITHDRAW_WAIT_POLL_MS` | Poll interval for HL withdraw wait (ms) | `20000` |
-| `HL_WITHDRAW_FEE_TOLERANCE_USDC` | Settlement inbound + balanced/falling: fee slack (expect 24, accept ~23 landed) | `1` |
+| `HL_WITHDRAW_FEE_TOLERANCE_USDC` | Settlement inbound + balanced/falling: fee slack (HL ~$1 + bridge; expect 24, accept ~22.9 landed) | `1.1` |
 | `HL_SETTLEMENT_INBOUND_MIN_BPS` | Min % of expected HL inbound on KashYield vs baseline (9500 = 95%) | `9500` |
 | `SMALL_SWAP_SKIP_MAX_USDC` | Rising tail — see [Redeem tail / spot dust thresholds](#redeem-tail--spot-dust-thresholds) | `2` |
 | `SETTLEMENT_NAV_BUFFER_BPS` | Shrink post-ops settlement NAV before `updateNAV` (mint leg only; bps). Default `0` | `0` |
@@ -188,7 +188,7 @@ Order: **Aave deposit** → **`markMint*Deployed`** → **borrow to LTV** → **
 
 #### Redeem ops (`redeem_hl`)
 
-1. **Core:** proportional **close short** → **HL settlement** (`withdraw3` + on-chain adapter pull to KashYield). Settlement completes when HL spot is at target, adapter ERC-20 is drained, **and** KashYield **USDC increased** since wait start by ~expected inbound (e.g. withdraw3 **$24** → **$23** landed is OK via `HL_WITHDRAW_FEE_TOLERANCE_USDC` / `HL_SETTLEMENT_INBOUND_MIN_BPS`). Full strategy repay is **not** required before tail — **rising** uses **11a** for the shortfall. Pre-existing ops USDC alone does **not** satisfy wait when a withdraw is expected. Syncs adapter from HL API before `withdraw3`; **at most one `withdraw3` per `npm start`**.
+1. **Core:** proportional **close short** → **HL settlement** (`withdraw3` + on-chain adapter pull to KashYield). Settlement completes when HL spot is at target, adapter ERC-20 is drained, **and** KashYield **USDC increased** since wait start by ~expected inbound (e.g. withdraw3 **$24** → **~$22.9** landed is OK via `HL_WITHDRAW_FEE_TOLERANCE_USDC` / `HL_SETTLEMENT_INBOUND_MIN_BPS`). Full strategy repay is **not** required before tail — **rising** uses **11a** for the shortfall. Pre-existing ops USDC alone does **not** satisfy wait when a withdraw is expected. Syncs adapter from HL API before `withdraw3`; **at most one `withdraw3` per `npm start`**.
 2. **Tail** (after settlement wait): **balanced / falling / rising** — Aave repay, Aave withdraw, optional **11a** / **11b** spot swaps; **`coverUsdcShortfall`** for small HL withdraw fee gaps (`HL_WITHDRAW_FEE_TOLERANCE_USDC`).
 
 See [`targetStateEngine.ts`](src/batch/targetStateEngine.ts) and [`opsExec.ts`](src/batch/opsExec.ts).
