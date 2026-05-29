@@ -105,9 +105,10 @@ See `.env.example` for all required variables. Key ones:
 | `HL_DEPOSIT_WAIT_MAX_MS` | Max wait for HL deposit credit (ms) | `180000` |
 | `HL_DEPOSIT_WAIT_POLL_MS` | Poll interval for HL deposit wait (ms) | `10000` |
 | `HL_WITHDRAW_WAIT_ENABLED` | After redeem, run HL USDC settlement wait (`withdraw3` + adapter pull). Set `false` for dirty-batch recovery (see [Batch recovery runbook](#batch-recovery-runbook)) | `true` |
-| `HL_WITHDRAW_WAIT_MAX_MS` | Max wait for HL withdraw settlement (ms) | `360000` |
+| `HL_WITHDRAW_WAIT_MAX_MS` | Max wait for HL settlement — HL spot/adapter done **and** KashYield **ΔUSDC** ≥ expected withdraw3/pull (minus fee/min-bps); not fooled by pre-existing ops float (ms) | `900000` |
 | `HL_WITHDRAW_WAIT_POLL_MS` | Poll interval for HL withdraw wait (ms) | `20000` |
-| `HL_WITHDRAW_FEE_TOLERANCE_USDC` | Balanced/falling tail: max USDC gap covered via `coverUsdcShortfall` before Aave repay | `1` |
+| `HL_WITHDRAW_FEE_TOLERANCE_USDC` | Settlement inbound + balanced/falling: fee slack (expect 24, accept ~23 landed) | `1` |
+| `HL_SETTLEMENT_INBOUND_MIN_BPS` | Min % of expected HL inbound on KashYield vs baseline (9500 = 95%) | `9500` |
 | `SMALL_SWAP_SKIP_MAX_USDC` | Rising tail — see [Redeem tail / spot dust thresholds](#redeem-tail--spot-dust-thresholds) | `2` |
 | `SETTLEMENT_NAV_BUFFER_BPS` | Shrink post-ops settlement NAV before `updateNAV` (mint leg only; bps). Default `0` | `0` |
 | `MARK_DONE_PAYOUT_TOLERANCE_ASSET` | Slack for mark-done + Phase 2 vs **G** + fees + owner reserve (native units: sat / wei). See [Payout tolerance](#payout-tolerance-g--fees--owner-reserve) | BTC: `30`, ETH: `1e13` |
@@ -187,7 +188,7 @@ Order: **Aave deposit** → **`markMint*Deployed`** → **borrow to LTV** → **
 
 #### Redeem ops (`redeem_hl`)
 
-1. **Core:** proportional **close short** → **HL settlement** (`withdraw3` + on-chain adapter pull to KashYield; mechanical settlement is complete when HL spot is at target **and** adapter ERC-20 USDC is drained — vault USDC vs strategy Aave debt gaps are handled by redeem tail classification, not owner reserve subsidy before classify). Settlement syncs the adapter from the HL API before sizing `withdraw3`; **at most one `withdraw3` per `npm start`**.
+1. **Core:** proportional **close short** → **HL settlement** (`withdraw3` + on-chain adapter pull to KashYield). Settlement completes when HL spot is at target, adapter ERC-20 is drained, **and** KashYield **USDC increased** since wait start by ~expected inbound (e.g. withdraw3 **$24** → **$23** landed is OK via `HL_WITHDRAW_FEE_TOLERANCE_USDC` / `HL_SETTLEMENT_INBOUND_MIN_BPS`). Full strategy repay is **not** required before tail — **rising** uses **11a** for the shortfall. Pre-existing ops USDC alone does **not** satisfy wait when a withdraw is expected. Syncs adapter from HL API before `withdraw3`; **at most one `withdraw3` per `npm start`**.
 2. **Tail** (after settlement wait): **balanced / falling / rising** — Aave repay, Aave withdraw, optional **11a** / **11b** spot swaps; **`coverUsdcShortfall`** for small HL withdraw fee gaps (`HL_WITHDRAW_FEE_TOLERANCE_USDC`).
 
 See [`targetStateEngine.ts`](src/batch/targetStateEngine.ts) and [`opsExec.ts`](src/batch/opsExec.ts).
@@ -263,30 +264,15 @@ Before running the bot in production:
 
 ## Mainnet Hyperliquid Setup (Important)
 
-Real Hyperliquid trading is off-chain (API), not an Arbitrum contract call. The adapter must be configured correctly.
+Real Hyperliquid trading is off-chain (API), not an Arbitrum contract call. Production mainnet uses **`directDepositMode = false`** (adapter contract = HL account; bot signs as **HL agent**). Full deploy order, two-wallet split, and agent/operator setup: **[DEPLOYMENT.md](../docs/DEPLOYMENT.md)** (sections *Two wallets on mainnet*, *Hyperliquid adapter setup (production)*, Steps 4a / B3).
 
-### 1) Use direct deposit mode on adapter
+**Summary**
 
-After deploying `HyperliquidAdapter`, set:
-- `directDepositMode=true`
-- `hlAccount=<bot EOA>`
+1. **Owner** (root `.env`): deploy vaults with `BOT_ADDRESS=<bot>`, set `setDirectDepositMode(false, 0x0)` on each adapter, optional `HL_ADAPTER_OPERATOR_ADDRESS` at adapter deploy.
+2. **Bot** (`bot/.env`): same address as `KashYield*.botAddress()`; `HYPERLIQUID_API_PRIVATE_KEY` for HL API after `approveAgent` for the adapter’s HL account.
+3. **Withdrawals:** HL `withdraw3` / UI must use **`destination =` HyperliquidAdapter address**, not the bot EOA.
 
-From repo root:
-
-```bash
-npx hardhat console --network arbitrumOne
-```
-
-```javascript
-const [signer] = await ethers.getSigners()
-const adapter = await ethers.getContractAt("HyperliquidAdapter", "<HL_ADAPTER_ADDRESS_ETH>", signer)
-await (await adapter.setDirectDepositMode(true, "<BOT_EOA_ADDRESS>")).wait()
-console.log(await adapter.directDepositMode(), await adapter.hlAccount())
-```
-
-Why: contract-address HL users cannot directly sign API actions (`order`, `withdraw3`, `approveAgent`) unless pre-authorized agent plumbing already exists.
-
-### 2) Bot `.env` for real HL
+### 1) Bot `.env` for real HL
 
 Add these in `bot/.env`:
 
@@ -306,7 +292,7 @@ HL_EVENT_RELAY_STRICT=false          # if true, fail ops step when relay fails
 SHORT_LEVERAGE=1
 ```
 
-### 3) Inline HL relay during `npm start` (new)
+### 2) Inline HL relay during `npm start` (new)
 
 The batch ops playbooks execute Hyperliquid API actions inline during `npm start` for:
 - `EXCHANGE_OPEN_SHORT`
@@ -316,11 +302,11 @@ The batch ops playbooks execute Hyperliquid API actions inline during `npm start
 
 After each HL order, the bot syncs adapter state (`syncBalances` + `syncPosition`) on Arbitrum.
 
-For direct-deposit mode, after `depositToHyperliquid` the bot also transfers USDC from `hlAccount` to `hlBridgeAddress` (same run), so collateral is pushed to HL L1.
+With **`directDepositMode = false`**, deposits bridge to the **adapter** HL account (not the bot EOA). Do not enable `directDepositMode = true` on mainnet unless you accept bot-wallet HL custody risk (see DEPLOYMENT.md Option B, reference only).
 
 If `HL_EVENT_RELAY_ENABLED=false`, on-chain intent txs still run but no real HL API trades are executed.
 
-### 4) Relay scripts (optional recovery/backfill)
+### 3) Relay scripts (optional recovery/backfill)
 
 Scripts are still available for operational recovery:
 - `bot/scripts/ops/13-hl-event-relay.js` — event backfill/watch relay
@@ -328,7 +314,7 @@ Scripts are still available for operational recovery:
 
 Use them when you need to replay missed events, recover after downtime, or reconcile state manually.
 
-### 5) Known operational caveat
+### 4) Known operational caveat
 
 `DRY_RUN_OPS=true npm start` skips only ops tx execution but still runs phase1/nav/mark-done/phase2 on-chain.  
 Do not use that mode on live user batches unless you explicitly intend that behavior.

@@ -461,7 +461,7 @@ export class BatchProcessor {
    *
    * **NAV vs Phase 2 (`_processBatchPhase2`):**
    * - `updateNAV` writes `newNAV` into **`currentNAV`**.
-   * - **Phase 2** reads **`exactNAV = currentNAV()`** once and uses it for mint and redeem legs.
+   * - **Phase 2** reads **`exactNAV = currentNAV()`** once for mint KASH; redeems pay locked **G** from mark-done.
    * - **Settlement** `updateNAV` (after ops) should run before `markBatchOpsDone` / Phase 2 so Phase 2 aligns
    *   with post-fee / post-slippage MTM.
    * - **Chainlink `getEthPrice()` / `getBtcPrice()`** are read again at Phase 2; small timing drift vs bot snapshots.

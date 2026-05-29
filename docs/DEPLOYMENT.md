@@ -12,6 +12,45 @@ This guide covers production deployment of **KashYieldETH** and **KashYieldBtc**
 
 ---
 
+## Two wallets on mainnet (required)
+
+Use **two different Arbitrum addresses**. Do not reuse the deployer key for batch ops or Hyperliquid API signing.
+
+| Role | Wallet | Keys / env | On-chain identity |
+|------|--------|------------|-------------------|
+| **Owner** | Cold / multisig (high security) | Root `.env` → **`PRIVATE_KEY`** only for **owner** scripts | `KashYield*.owner()` — config, reserves, `setSpotDex`, `setHyperliquid`, timelocks, `ownerWithdraw*` |
+| **Bot / keeper** | Hot operator (limited funds) | **`bot/.env` → `PRIVATE_KEY`** and **`HYPERLIQUID_API_PRIVATE_KEY`** (same bot address) | `KashYield*.botAddress()` — `performUpkeep`, batch ops, `markBatchOpsDone`, Aave/HL moves via vault |
+
+**Deploy wiring**
+
+- **`scripts/deploy-arbitrum-sepolia.js`** and **`scripts/deploy-kashyieldbtc.js`** set **`owner = msg.sender`** (whoever signs the deploy tx with root `PRIVATE_KEY`).
+- Pass **`BOT_ADDRESS=<bot_wallet>`** on the deploy command so the vault’s **`botAddress`** is the bot, **not** the owner.
+
+```bash
+# Example — owner signs deploy; bot is a different address
+BOT_ADDRESS=0xYourBotWalletOnly \
+npx hardhat run scripts/deploy-arbitrum-sepolia.js --network arbitrumOne
+```
+
+**After deploy, verify (Hardhat console or Arbiscan “Read contract”)**
+
+```javascript
+const ky = await ethers.getContractAt("KashYieldETH", "<KASH_YIELD_ETH_ADDRESS>")
+console.log("owner:", await ky.owner())
+console.log("botAddress:", await ky.botAddress())
+// owner !== botAddress
+```
+
+**Optional third address:** `keeperRegistry` via `setKeeperRegistry(bot)` if you use Chainlink Automation with a dedicated keeper; otherwise leave **`0x0`** and the **bot** alone calls batch functions.
+
+**Hyperliquid (this deployment: no direct deposit mode)**
+
+- Set **`directDepositMode = false`** on each **HyperliquidAdapter** (Steps 4a / B3). The HL account is the **adapter contract address**, not the bot EOA.
+- The **bot** still signs HL API trades (`HYPERLIQUID_API_PRIVATE_KEY`) after **HL agent approval** for that adapter account — see **Hyperliquid adapter setup (production)** below.
+- Do **not** set `directDepositMode = true` unless you accept bot-EOA custody risk (Option B in Step 4a is documented for reference only).
+
+---
+
 ## Critical rules — read before deploying
 
 1. **`WETH_ADDRESS` must be canonical WETH9** on Arbitrum (`0x82aF49447D8a07e3bd95BD0d56f35241523fBab1`) — it must support `deposit()` / `withdraw()`.
@@ -48,6 +87,10 @@ This guide covers production deployment of **KashYieldETH** and **KashYieldBtc**
    ```
 
 6. **Contract size (EIP-170, 24576 bytes).** `hardhat.config.js` enables the Solidity optimizer (`runs: 1`), `viaIR: true`, and `metadata.bytecodeHash: "none"`. `ProtocolInteraction` uses **`uint8` action codes** (see `contracts/libraries/ProtocolActionCodes.sol`). After `npx hardhat compile`, confirm there is no “contract code size exceeds 24576 bytes” warning before deploy.
+
+7. **`BOT_ADDRESS` must differ from owner.** If you omit `BOT_ADDRESS`, deploy scripts default **`botAddress = deployer`**, which collapses owner and bot into one key — avoid on mainnet.
+
+8. **Redeploy = new vault + new KASH token.** Each `KashYieldETH` / `KashYieldBtc` deploy creates a **new** `KashToken*` in the constructor. Update **`frontend/lib/contracts/addresses.ts`** fallbacks only after you intend to cut over; finish in-flight batches on **old** vaults before switching bot/frontend env. Latest bytecode includes **`markBatchOpsDone(batchCycle, grossRedeemAssetAmount)`** (locked redeem **G**), owner-reserve-only `ownerWithdraw*`, and removed `getReserved*` / stale `currentBatchCycle` storage — incompatible with older deployed vaults for mid-batch resume.
 
 ---
 
@@ -132,10 +175,13 @@ The `UniswapV3Adapter` implements `ISpotDex` and wraps `SwapRouter02`. Typical r
 
 ## Environment setup
 
-### Root `.env` (Arbitrum One)
+### Root `.env` — owner / deployer only (Arbitrum One)
+
+Used by Hardhat **deploy** and **owner** configuration scripts (`setSpotDex`, `setHyperliquid`, `setExchangeSwitchDelay`, adapter `setDirectDepositMode`, etc.). **Do not** put the bot hot key here unless you intentionally use one wallet for everything.
 
 ```env
-PRIVATE_KEY=your_hardware_wallet_deployer_key
+# OWNER — signs deploy + owner-only txs (hardware wallet / multisig)
+PRIVATE_KEY=0x...
 
 ARBITRUM_ONE_RPC_URL=https://arb1.g.alchemy.com/v2/YOUR_API_KEY
 ARBISCAN_API_KEY=your_arbiscan_api_key
@@ -160,14 +206,18 @@ HL_BRIDGE_ADDRESS=0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7
 # HL_ADAPTER_ADDRESS_BTC=
 ```
 
-### `bot/.env` (Arbitrum One)
+### `bot/.env` — bot operator only (Arbitrum One)
+
+**Separate file, separate key.** Must match **`botAddress`** on the vault you operate. Never commit this file.
 
 ```env
-PRIVATE_KEY=your_bot_operator_key
-HYPERLIQUID_API_PRIVATE_KEY=your_bot_operator_key
+# BOT — batch ops + HL API (hot wallet; not the owner)
+PRIVATE_KEY=0x...
+HYPERLIQUID_API_PRIVATE_KEY=0x...
 HYPERLIQUID_API_URL=https://api.hyperliquid.xyz
 
 RPC_URL=https://arb1.g.alchemy.com/v2/YOUR_API_KEY
+CHAIN_ID=42161
 
 PRODUCT=eth
 KASH_YIELD_ETH_ADDRESS=<KashYieldETH>
@@ -207,10 +257,35 @@ NEXT_PUBLIC_KASH_TOKEN_BTC=<KashTokenBtc>
 
 ## Pre-launch checklist
 
+- [ ] `npx hardhat compile` — no EIP-170 size errors on `KashYieldETH` / `KashYieldBtc`.
 - [ ] Smart contract audit completed (or accepted risk documented).
+- [ ] **Two wallets:** owner `PRIVATE_KEY` (root `.env`) ≠ bot `PRIVATE_KEY` (`bot/.env`); on-chain `owner()` ≠ `botAddress()`.
+- [ ] **`BOT_ADDRESS`** set on both vault deploy commands to the **bot** address (not omitted).
+- [ ] **`directDepositMode = false`** on **both** HL adapters; HL withdrawals target **adapter** address.
+- [ ] HL **agent** approved for bot on each adapter’s HL account; adapter **`operator`** = bot (deploy env or `setOperator`).
 - [ ] `exchangeSwitchDelay` is **not** `0` on mainnet unless you deliberately want no timelock for **future** adapter proposals (default **86400** = 24h; optional **172800** = 48h via `setExchangeSwitchDelay`).
-- [ ] Deployer is hardware wallet or multisig; **bot** key is separate.
-- [ ] Contracts verified on Arbiscan.
+- [ ] Contracts verified on Arbiscan; `diagnose-eth.js` (and BTC ops smoke) clean.
+- [ ] `bot/.env` + `frontend/.env.local` point at **new** vault/token addresses; `npm run build` in `bot/` before `npm start`.
+
+---
+
+## Hyperliquid adapter setup (production, `directDepositMode = false`)
+
+Complete **per product** (ETH adapter, then BTC adapter) **before** the first live `npm start` batch.
+
+1. **Custody mode (owner key)** — Step 4a / B3: `setDirectDepositMode(false, 0x0)`.
+2. **Adapter operator (owner key)** — allow the bot to call `syncBalances` / `syncPosition`:
+   - At deploy: set `HL_ADAPTER_OPERATOR_ADDRESS=<bot_wallet>` in the environment when running `deploy-hyperliquid-adapter.js`, **or**
+   - After deploy (owner console):
+
+```javascript
+await (await adapter.setOperator("<BOT_WALLET>")).wait()
+```
+
+3. **HL API agent (bot key)** — authorise the **bot EOA** to trade on the HL account tied to the **adapter address** via Hyperliquid’s `approveAgent` (REST `/exchange`). The adapter contract cannot sign HL payloads; the bot signs orders/`withdraw3` as agent. If agent setup is incomplete, `npm start` may emit on-chain intent without real HL fills.
+4. **Withdrawals** — bot `withdraw3` and manual HL UI must use **`destination =` HyperliquidAdapter address** (see **Hyperliquid USDC withdrawals and custody** above).
+
+> **Note:** `bot/README.md` “Mainnet Hyperliquid Setup” §1 historically described **`directDepositMode = true`** for simpler bootstrap. **This deployment uses the opposite (production) path.** Follow this guide and Step 4a / B3, not that subsection.
 
 ---
 
@@ -286,14 +361,11 @@ Save to root `.env`:
 HL_ADAPTER_ADDRESS_ETH=<HyperliquidAdapter from output>
 ```
 
-### Step 4a — Hyperliquid adapter custody mode (`directDepositMode`)
+### Step 4a — Hyperliquid adapter custody mode (required: `directDepositMode = false`)
 
-Pick **one** pattern and complete the matching HL setup **before** relying on mainnet ops.
+**Use this for your deployment.** Sign with the **owner** key (root `.env` `PRIVATE_KEY`). Then complete **Hyperliquid adapter setup (production)** (agent + operator).
 
-**Option A — Production-style (recommended): adapter as Hyperliquid account**
-
-- Set **`directDepositMode = false`** so USDC deposits use the **bridge → adapter-as-HL-account** path and HL ledger identity aligns with the adapter contract.
-- Complete **HL agent authorisation** (and any other HL prerequisites) so the bot can execute API trades and **`withdraw3` with `destination =`** the adapter. If this is incomplete, deposits/sync/withdraw flows will not match this guide’s expectations.
+- Set **`directDepositMode = false`** so USDC uses **bridge → adapter-as-HL-account** and HL ledger identity matches the adapter contract.
 - From repo root:
 
 ```bash
@@ -309,29 +381,18 @@ console.log("directDepositMode =", await adapter.directDepositMode())
 console.log("hlAccount =", await adapter.hlAccount())
 ```
 
-**Readback:** `directDepositMode` is **`false`**.
+**Readback:** `directDepositMode` is **`false`**; `hlAccount` is zero / unused for deposits.
 
-**Option B — Bootstrap / simplified: bot EOA as Hyperliquid account**
+**Deploy-time operator (recommended):** when running Step 4, set `HL_ADAPTER_OPERATOR_ADDRESS=<BOT_WALLET>` so `setOperator` runs in `deploy-hyperliquid-adapter.js`.
 
-- Set **`directDepositMode = true`** and **`hlAccount =`** bot EOA. This avoids adapter signing/agent work early on but **increases operational risk**: the HL web app often defaults withdrawals to the **bot wallet**, not the adapter (see **Hyperliquid USDC withdrawals and custody** above).
-- From repo root:
+<details>
+<summary>Reference only — Option B (`directDepositMode = true`, not for this deployment)</summary>
 
-```bash
-npx hardhat console --network arbitrumOne
-```
+Bootstrap mode sets **`directDepositMode = true`** and **`hlAccount =` bot EOA**. Simpler HL agent setup but **high risk**: HL UI often withdraws to the **bot wallet**, not the adapter. Do **not** use for production vaults described in this guide.
 
-```javascript
-const [signer] = await ethers.getSigners()
-const adapter = await ethers.getContractAt("HyperliquidAdapter", "<HL_ADAPTER_ADDRESS_ETH>", signer)
-const tx = await adapter.setDirectDepositMode(true, "<BOT_EOA_ADDRESS>")
-const receipt = await tx.wait()
-console.log("directDepositMode =", await adapter.directDepositMode())
-console.log("hlAccount =", await adapter.hlAccount())
-```
+</details>
 
-**Readback:** `directDepositMode` is **`true`** and **`hlAccount`** matches your bot EOA (may be checksummed).
-
-**How to confirm success (both options)**
+**How to confirm success**
 
 - **`receipt.status === 1`** — transaction succeeded (in Hardhat/ethers v6 this appears as `status: 1n` or `1` on the receipt object). **`status: 0`** means the call reverted.
 - **`receipt.contractAddress === null`** — normal for this step: you are calling an existing adapter, not deploying a new contract.
@@ -487,9 +548,7 @@ HL_ADAPTER_ADDRESS_BTC=<HyperliquidAdapter from output>
 
 ### Step B3 — Hyperliquid adapter custody mode (BTC adapter)
 
-Same **Option A / Option B** choice as **Step 4a**, but target **`HL_ADAPTER_ADDRESS_BTC`**.
-
-**Option A — `directDepositMode = false`**
+Same as **Step 4a**: owner key, **`directDepositMode = false`**, then **Hyperliquid adapter setup (production)** for **`HL_ADAPTER_ADDRESS_BTC`**.
 
 ```bash
 npx hardhat console --network arbitrumOne
@@ -504,18 +563,7 @@ console.log("directDepositMode =", await adapter.directDepositMode())
 console.log("hlAccount =", await adapter.hlAccount())
 ```
 
-**Option B — `directDepositMode = true`, `hlAccount =` bot EOA**
-
-```javascript
-const [signer] = await ethers.getSigners()
-const adapter = await ethers.getContractAt("HyperliquidAdapter", "<HL_ADAPTER_ADDRESS_BTC>", signer)
-const tx = await adapter.setDirectDepositMode(true, "<BOT_EOA_ADDRESS>")
-const receipt = await tx.wait()
-console.log("directDepositMode =", await adapter.directDepositMode())
-console.log("hlAccount =", await adapter.hlAccount())
-```
-
-**How to confirm success** — same receipt checks as Step 4a: **`receipt.status === 1`**, **`receipt.to`** equals **`HL_ADAPTER_ADDRESS_BTC`**, **`contractAddress`** stays **`null`**, Arbiscan shows **Success** for **`receipt.hash`**, and readback matches the option you chose (`false` vs `true` + `hlAccount`).
+Confirm **`operator`** is the bot (see deploy `HL_ADAPTER_OPERATOR_ADDRESS` or `setOperator`). Same receipt checks as Step 4a.
 
 ### Step B4 — BTC oracle
 
@@ -659,6 +707,8 @@ HL trading steps (`04`–`07`) use the **Hyperliquid API** on mainnet; deposit/w
 ## Security
 
 - Never commit `.env` or private keys.
-- Use a dedicated high-security deployer on mainnet; separate bot keys.
+- **Owner** (root `.env`) and **bot** (`bot/.env`) are different wallets with different key material.
+- Owner holds governance/config; bot holds only enough ETH for gas and never owns the vault `owner()` role.
 - Audit contracts before significant TVL.
 - Keep `exchangeSwitchDelay` non-zero on mainnet unless you explicitly accept operational risk on future adapter changes.
+- **`directDepositMode = false`** on mainnet so user NAV USDC is not routed to the bot EOA via HL defaults.

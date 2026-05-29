@@ -32,7 +32,8 @@ export type RedeemTail =
  * the path is treated as balanced (no swap needed).
  * Default: 10 bps = 0.1%.
  */
-const BALANCED_TOLERANCE_BPS = 10n;
+/** Must match balanced-tail classification band. */
+export const REDEEM_BALANCED_TOLERANCE_BPS = 10n;
 const WAD = 10n ** 18n;
 
 /** Slice of variable debt this batch unwinds (ceil partial repay); shared by classifier + ops execution. */
@@ -137,7 +138,7 @@ export function classifyRedeemTail(ctx: OpsContext): RedeemTail {
   }
 
   const diff = contractUsdc > aaveDebt ? contractUsdc - aaveDebt : aaveDebt - contractUsdc;
-  const toleranceUsdc = (aaveDebt * BALANCED_TOLERANCE_BPS) / 10000n;
+  const toleranceUsdc = (aaveDebt * REDEEM_BALANCED_TOLERANCE_BPS) / 10000n;
 
   if (diff <= toleranceUsdc) return 'balanced';
   if (contractUsdc > aaveDebt) return 'falling';
