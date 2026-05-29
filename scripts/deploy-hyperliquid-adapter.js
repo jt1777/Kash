@@ -13,8 +13,8 @@
 //   HYPERLIQUID_ADDRESS=0x...  USDC_ADDRESS=0x...  IS_ETH_ASSET=true  KASH_YIELD_ADDRESS=0x...  \
 //   npx hardhat run scripts/deploy-hyperliquid-adapter.js --network arbitrumOne
 //
-// Required env vars:
-//   HYPERLIQUID_ADDRESS  — real HL bridge address
+// Required env vars (HL **bridge**, not the adapter — use setHyperliquid.js for the adapter later):
+//   HL_BRIDGE_ADDRESS or MOCK_HL_ADDRESS or HYPERLIQUID_ADDRESS — Bridge2 on Arbitrum
 //   USDC_ADDRESS         — USDC address
 //   WBTC_ADDRESS         — wBTC address (BTC product only; ignored when IS_ETH_ASSET=true)
 //   KASH_YIELD_ADDRESS   — KashYieldETH or KashYieldBtc address (authorised to call capital-movement functions)
@@ -36,7 +36,12 @@ async function main() {
   console.log("Deploying HyperliquidAdapter to", network);
   console.log("Deployer:", deployer.address);
 
-  const hlAddress        = process.env.HYPERLIQUID_ADDRESS;
+  // Bridge2 on Arbitrum One (not the deployed HyperliquidAdapter — that goes to setHyperliquid.js later).
+  const hlAddress =
+    process.env.HL_BRIDGE_ADDRESS ||
+    process.env.MOCK_HL_ADDRESS ||
+    process.env.HYPERLIQUID_BRIDGE_ADDRESS ||
+    process.env.HYPERLIQUID_ADDRESS;
   const usdcAddress      = process.env.USDC_ADDRESS;
   const wbtcAddress      = process.env.WBTC_ADDRESS;
   const isEth            = (process.env.IS_ETH_ASSET || "").toLowerCase() === "true";
@@ -49,7 +54,8 @@ async function main() {
 
   if (!hlAddress || !hre.ethers.isAddress(hlAddress)) {
     throw new Error(
-      "Set HYPERLIQUID_ADDRESS in .env — the real Hyperliquid bridge address."
+      "Set HL bridge address — HL_BRIDGE_ADDRESS, MOCK_HL_ADDRESS, or HYPERLIQUID_ADDRESS " +
+        "(Arbitrum One Bridge2: 0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7)."
     );
   }
   if (!usdcAddress || !hre.ethers.isAddress(usdcAddress)) {

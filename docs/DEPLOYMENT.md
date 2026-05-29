@@ -289,6 +289,36 @@ await (await adapter.setOperator("<BOT_WALLET>")).wait()
 
 ---
 
+## Mainnet deployment overview
+
+**All contracts and configuration steps are below** (ETH: Steps **1–11**, then BTC: Steps **B1–B9**). Use this table as a map; each step includes the exact `npx hardhat run …` command.
+
+| Order | What | Script / action | Step |
+|------:|------|-----------------|------|
+| 0 | Compile | `npx hardhat compile` | [1](#step-1--compile) |
+| 1 | **UniswapV3Adapter** (shared ETH + BTC spot) | `scripts/deploy-uniswap-adapter.js` | [2](#step-2--deploy-uniswapv3adapter) |
+| 2 | **KashYieldETH** + **KashTokenEth** | `scripts/deploy-arbitrum-sepolia.js` | [3](#step-3--deploy-kashyieldeth) |
+| 3 | **HyperliquidAdapter** (ETH) | `scripts/deploy-hyperliquid-adapter.js` (`IS_ETH_ASSET=true`) | [4](#step-4--deploy-hyperliquidadapter-eth) |
+| 4 | HL custody `directDepositMode=false` | Hardhat console / `setDirectDepositMode` | [4a](#step-4a--hyperliquid-adapter-custody-mode-required-directdepositmode--false) |
+| 5 | ETH oracle (explicit) | `scripts/setEthOracle.js` | [5](#step-5--set-chainlink-eth-oracle-recommended) |
+| 6 | Exchange switch delay (optional) | `scripts/setExchangeSwitchDelay.js` | [6](#step-6--exchange-switch-delay-optional) |
+| 7 | Register + activate HL on ETH vault | `setHyperliquid.js`, `setActivePerpExchange.js` | [7](#step-7--register-and-activate-hl-eth) |
+| 8 | Whitelist Uniswap + set spot DEX (ETH) | `setAllowedSpotDexRouter.js`, `setSpotDex.js` | [8](#step-8--whitelist-uniswap-adapter-and-set-spot-dex-eth) |
+| 9 | Cycle duration (ETH) | `scripts/setCycleDuration.js` | [9](#step-9--set-cycle-duration-eth) |
+| 10 | Verify on Arbiscan | `npx hardhat verify …` | [10](#step-10--verify-on-arbiscan) |
+| 11 | Smoke test | `scripts/diagnose-eth.js` | [11](#step-11--post-deployment-verification-eth) |
+| 12 | **KashYieldBtc** + **KashTokenBtc** | `scripts/deploy-kashyieldbtc.js` | [B1](#step-b1--deploy-kashyieldbtc) |
+| 13 | **HyperliquidAdapter** (BTC) | `scripts/deploy-hyperliquid-adapter.js` (`IS_ETH_ASSET=false`) | [B2](#step-b2--deploy-hyperliquidadapter-btc) |
+| 14 | HL custody (BTC adapter) | Hardhat console / `setDirectDepositMode` | [B3](#step-b3--hyperliquid-adapter-custody-mode-btc-adapter) |
+| 15 | Register + activate HL on BTC vault | `setHyperliquid.js`, `setActivePerpExchange.js` (`PRODUCT=btc`) | [B6](#step-b6--register-and-activate-hl-btc) |
+| 16 | Whitelist Uniswap + set spot DEX (BTC) | same adapter as ETH; `PRODUCT=btc` | [B7](#step-b7--whitelist-uniswap-adapter-and-set-spot-dex-btc) |
+| 17 | Cycle duration (BTC) | `setCycleDuration.js` (`PRODUCT=btc`) | [B8](#step-b8--set-cycle-duration-btc) |
+| 18 | Verify BTC contracts | `npx hardhat verify …` | [B9](#step-b9--verify-on-arbiscan-btc) |
+
+**Scripts named `deploy-arbitrum-sepolia.js` and `MOCK_HL_ADDRESS` are historical** — on mainnet use `--network arbitrumOne` and the live HL Bridge2 address (`0x2Df1…`).
+
+---
+
 ## Deployment — ETH product (`KashYieldETH`)
 
 > **Order matters.** Deploy **UniswapV3Adapter** first, then **KashYieldETH**, then **HyperliquidAdapter** (the adapter constructor needs the KashYield address). Do **not** set `HL_ADAPTER_ADDRESS_ETH` in `.env` when running `deploy-arbitrum-sepolia.js` for the first time, or the vault may bind an old adapter at deploy time.
@@ -345,13 +375,14 @@ NEXT_PUBLIC_KASH_TOKEN_ETH=<KashTokenEth from output>
 
 ### Step 4 — Deploy HyperliquidAdapter (ETH)
 
-Pass the **Bridge2** address as **`MOCK_HL_ADDRESS`** (the deploy script name is historical; on mainnet this is the live bridge).
+Pass the **Bridge2** address as **`HL_BRIDGE_ADDRESS`**, **`MOCK_HL_ADDRESS`**, or **`HYPERLIQUID_ADDRESS`** (same value; pick one).
 
 ```bash
 MOCK_HL_ADDRESS=0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7 \
 USDC_ADDRESS=0xaf88d065e77c8cC2239327C5EDb3A432268e5831 \
 IS_ETH_ASSET=true \
 KASH_YIELD_ADDRESS=<KASH_YIELD_ETH_ADDRESS from step 3> \
+HL_ADAPTER_OPERATOR_ADDRESS=<BOT_WALLET from bot/.env> \
 npx hardhat run scripts/deploy-hyperliquid-adapter.js --network arbitrumOne
 ```
 
@@ -389,6 +420,21 @@ console.log("hlAccount =", await adapter.hlAccount())
 <summary>Reference only — Option B (`directDepositMode = true`, not for this deployment)</summary>
 
 Bootstrap mode sets **`directDepositMode = true`** and **`hlAccount =` bot EOA**. Simpler HL agent setup but **high risk**: HL UI often withdraws to the **bot wallet**, not the adapter. Do **not** use for production vaults described in this guide.
+
+```bash
+npx hardhat console --network arbitrumOne
+```
+
+```javascript
+const [signer] = await ethers.getSigners()
+const adapter = await ethers.getContractAt("HyperliquidAdapter", "<HL_ADAPTER_ADDRESS_ETH>", signer)
+const tx = await adapter.setDirectDepositMode(true, "<BOT_EOA_ADDRESS>")
+const receipt = await tx.wait()
+console.log("directDepositMode =", await adapter.directDepositMode())
+console.log("hlAccount =", await adapter.hlAccount())
+```
+
+**Readback:** `directDepositMode` is **`true`** and **`hlAccount`** matches your bot EOA (may be checksummed).
 
 </details>
 
@@ -537,6 +583,7 @@ USDC_ADDRESS=0xaf88d065e77c8cC2239327C5EDb3A432268e5831 \
 WBTC_ADDRESS=0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f \
 IS_ETH_ASSET=false \
 KASH_YIELD_BTC_ADDRESS=<KASH_YIELD_BTC_ADDRESS from step B1> \
+HL_ADAPTER_OPERATOR_ADDRESS=<BOT_WALLET from bot/.env> \
 npx hardhat run scripts/deploy-hyperliquid-adapter.js --network arbitrumOne
 ```
 
@@ -563,7 +610,38 @@ console.log("directDepositMode =", await adapter.directDepositMode())
 console.log("hlAccount =", await adapter.hlAccount())
 ```
 
-Confirm **`operator`** is the bot (see deploy `HL_ADAPTER_OPERATOR_ADDRESS` or `setOperator`). Same receipt checks as Step 4a.
+const [signer] = await ethers.getSigners()
+const adapter = await ethers.getContractAt("HyperliquidAdapter", "0xf055D8c8496f3B18807A74701E64d7a4cBEce016", signer)
+const tx = await adapter.setDirectDepositMode(false, "0x0000000000000000000000000000000000000000")
+const receipt = await tx.wait()
+console.log("directDepositMode =", await adapter.directDepositMode())
+console.log("hlAccount =", await adapter.hlAccount())
+
+
+
+Confirm **`operator`** is the bot (see deploy `HL_ADAPTER_OPERATOR_ADDRESS` or `setOperator`).
+
+**How to confirm success** — same receipt checks as Step 4a:
+
+- **`receipt.status === 1`** — transaction succeeded (in Hardhat/ethers v6 this appears as `status: 1n` or `1` on the receipt object). **`status: 0`** means the call reverted.
+- **`receipt.contractAddress === null`** — normal for this step: you are calling an existing adapter, not deploying a new contract.
+- **`receipt.to`** — must match your **`HL_ADAPTER_ADDRESS_BTC`** (the adapter you configured).
+- **On-chain check:** paste **`receipt.hash`** into Arbiscan; the UI should show **Success**.
+- **Readback:** `directDepositMode` is **`false`**; `hlAccount` is zero / unused for deposits.
+
+<details>
+<summary>Reference only — Option B (`directDepositMode = true`, not for this deployment)</summary>
+
+```javascript
+const [signer] = await ethers.getSigners()
+const adapter = await ethers.getContractAt("HyperliquidAdapter", "<HL_ADAPTER_ADDRESS_BTC>", signer)
+const tx = await adapter.setDirectDepositMode(true, "<BOT_EOA_ADDRESS>")
+const receipt = await tx.wait()
+console.log("directDepositMode =", await adapter.directDepositMode())
+console.log("hlAccount =", await adapter.hlAccount())
+```
+
+</details>
 
 ### Step B4 — BTC oracle
 
