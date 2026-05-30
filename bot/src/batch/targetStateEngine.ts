@@ -59,6 +59,16 @@ function suppliedUsd(ctx: OpsContext): bigint {
     : (ctx.aaveSupplied * ctx.price) / (10n ** 18n);
 }
 
+/** Post-loop mint estimates: collateral after swap+redeposit, final LTV debt target. */
+function mintLoopEndStateEstimates(ctx: OpsContext, addUsd: bigint) {
+  const ltv = BigInt(config.strategy.borrowLtvPct);
+  const supAfterUsd = suppliedUsd(ctx) + addUsd;
+  const round1BorrowUsd = (supAfterUsd * ltv) / 100n;
+  const finalSuppliedUsd = supAfterUsd + round1BorrowUsd;
+  const targetFinalDebtUsdc = (finalSuppliedUsd * ltv) / 100n / (10n ** 12n);
+  return { supAfterUsd, round1BorrowUsd, finalSuppliedUsd, targetFinalDebtUsdc };
+}
+
 /**
  * Mint targets mirror legacy `computeNetMintAaveDepositAmount` + LTV borrow goals.
  * Redeem targets use strategy unwind fraction on current supplied / short for diagnostics.
@@ -72,19 +82,18 @@ export async function computeTargets(
 
   if (scenario === 'net_mint_hl') {
     const depDelta = await computeNetMintAaveDepositAmount(ctx, netMintUSD);
-    const supAfterUsd = suppliedUsd(ctx);
     const addUsd =
       ctx.isBtc
         ? (depDelta * ctx.price) / (10n ** 8n)
         : (depDelta * ctx.price) / (10n ** 18n);
-    const targetBorrowUsdc = ((supAfterUsd + addUsd) * ltv) / 100n / (10n ** 12n);
+    const { targetFinalDebtUsdc } = mintLoopEndStateEstimates(ctx, addUsd);
 
     const shortIncInternal18 = mintShortIncrementInternal18(ctx, depDelta);
 
     return {
       deltaAaveDepositAsset: depDelta,
       targetHlShortInternal18: ctx.shortSize + shortIncInternal18,
-      targetAaveBorrowUsdc: targetBorrowUsdc,
+      targetAaveBorrowUsdc: targetFinalDebtUsdc,
     };
   }
 
@@ -103,7 +112,7 @@ export async function computeTargets(
 }
 
 /**
- * Structured mint deltas after deposit+borrow estimates (matches `hlDepositUsdcAmount` intent post-borrow).
+ * Structured mint deltas after deposit + Aave loop (two borrows) — matches post-loop `hlDepositUsdcAmount`.
  * `openShortAssetEstimate` = batch Aave deposit × SHORT_LEVERAGE (at 1x, short notional = deposit USD).
  */
 export async function computeMintDeltas(
@@ -116,11 +125,9 @@ export async function computeMintDeltas(
     ctx.isBtc
       ? (depositAsset * ctx.price) / (10n ** 8n)
       : (depositAsset * ctx.price) / (10n ** 18n);
-  const supAfterUsd = suppliedUsd(ctx) + addUsd;
-  const ltv = BigInt(config.strategy.borrowLtvPct);
-  const targetDebtUsdc = (supAfterUsd * ltv) / 100n / (10n ** 12n);
+  const { targetFinalDebtUsdc } = mintLoopEndStateEstimates(ctx, addUsd);
   let borrowDeltaUsdcEstimate =
-    targetDebtUsdc > ctx.aaveDebt ? targetDebtUsdc - ctx.aaveDebt : 0n;
+    targetFinalDebtUsdc > ctx.aaveDebt ? targetFinalDebtUsdc - ctx.aaveDebt : 0n;
   const avail = await getAaveAvailableBorrowUsdc6(ctx);
   if (borrowDeltaUsdcEstimate > avail) {
     borrowDeltaUsdcEstimate = avail;
@@ -161,7 +168,7 @@ function logMintDeltas(d: MintDeltas, ctx: OpsContext): void {
   const lev = config.strategy.shortLeverage;
   console.log(
     `   Δborrow(usdc, est)=${ethers.formatUnits(d.borrowDeltaUsdcEstimate, 6)} USDC ` +
-      `(Aave headroom-capped); ΔhlDeposit(usdc, est)=${ethers.formatUnits(d.hlDepositUsdcEstimate, 6)} USDC`,
+      `(post-loop total, Aave headroom-capped); ΔhlDeposit(usdc, est)=${ethers.formatUnits(d.hlDepositUsdcEstimate, 6)} USDC`,
   );
   console.log(
     `   ΔopenShort(asset, est)=${ethers.formatUnits(d.openShortAssetEstimate, Number(ctx.assetDecimals))} ${ctx.assetSymbol} ` +

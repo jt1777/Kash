@@ -140,7 +140,7 @@ export async function executeDeltaPipeline(
   return ctx;
 }
 
-/** NET_MINT: collateral deposit → borrow → HL USDC collateral → extend short (Δ derived at execute from targets + fresh ctx). */
+/** NET_MINT: deposit → borrow → Aave loop (swap → redeposit → re-borrow) → HL USDC → extend short. */
 export async function executeMintDeltaPipeline(
   ctx: OpsContext,
   netMintUSD: bigint,
@@ -150,6 +150,9 @@ export async function executeMintDeltaPipeline(
     [
       { deltaId: 'Δmint deposit→Aave', step: aaveDepositNetMint(netMintUSD) },
       { deltaId: 'Δmint borrow→LTV', step: aaveBorrow },
+      { deltaId: 'Δmint loop swap USDC→asset', step: aaveLoopSwapAllUsdcToAsset },
+      { deltaId: 'Δmint loop deposit→Aave', step: aaveLoopDepositAllAsset },
+      { deltaId: 'Δmint loop borrow→LTV', step: aaveBorrow },
       { deltaId: 'Δmint USDC→HL', step: hlDepositUsdc },
       { deltaId: 'Δmint openShort', step: hlOpenShort(shortTargets) },
     ],
@@ -751,6 +754,47 @@ export const aaveBorrow: OpStep = {
       console.log(`         ${fmtUsdc(toBorrow)}`);
     }
     await execTx('borrowFromAave', () => ctx.kashYield.borrowFromAave(ctx.aaveUsdcAddress, toBorrow, aaveTxOverrides()));
+  },
+};
+
+/**
+ * Aave leverage loop (round 2): swap all borrowed USDC → asset via spot DEX, then redeposit + re-borrow.
+ * Runs on mint after the first `aaveBorrow`; also used by `OPS_SCENARIO=test_aave_loop`.
+ */
+export const aaveLoopSwapAllUsdcToAsset: OpStep = {
+  id: 'mint_aave_loop_swap',
+  substep: 'aave',
+  refreshCtx: true,
+  describe: (ctx) => `swap all ${fmtUsdc(ctx.contractUsdc)} USDC → ${ctx.assetSymbol} (Aave leverage loop)`,
+  canSkip: async (ctx) => {
+    if (ctx.contractUsdc === 0n) return true;
+    const spotDex = await ctx.kashYield.spotDexAddress().catch(() => null);
+    if (!spotDex || spotDex === ethers.ZeroAddress) {
+      console.warn('         ⚠️  spotDexAddress not configured — skipping Aave loop swap');
+      return true;
+    }
+    return false;
+  },
+  execute: async (ctx) => {
+    const amount = ctx.contractUsdc;
+    if (amount === 0n) return;
+    console.log(`         swap ${fmtUsdc(amount)} → ${ctx.assetSymbol}`);
+    await execTx('swapFromUsdc', () => ctx.kashYield.swapFromUsdc(amount, swapTxOverrides()));
+  },
+};
+
+/** Deposit all ops-visible asset to Aave (loop round 2 collateral top-up). */
+export const aaveLoopDepositAllAsset: OpStep = {
+  id: 'mint_aave_loop_deposit',
+  substep: 'aave',
+  refreshCtx: true,
+  describe: (ctx) => `deposit all ${fmtAsset(ctx.contractAsset, ctx)} to Aave (Aave leverage loop)`,
+  canSkip: async (ctx) => ctx.contractAsset === 0n,
+  execute: async (ctx) => {
+    const amount = ctx.contractAsset;
+    if (amount === 0n) return;
+    console.log(`         ${fmtAsset(amount, ctx)}`);
+    await execTx('depositToAave', () => ctx.kashYield.depositToAave(amount, aaveTxOverrides()));
   },
 };
 
@@ -2294,9 +2338,17 @@ export async function waitForHlWithdrawSettlementIfNeeded(
   );
 }
 
-/** Ordered mint OpSteps — deposit → borrow → HL USDC collateral → open short (parity with legacy playbook). */
+/** Ordered mint OpSteps — deposit → borrow → Aave loop → HL USDC collateral → open short. */
 export function buildMintOpSteps(netMintUSD: bigint, shortTargets: MintHlShortTargets): OpStep[] {
-  return [aaveDepositNetMint(netMintUSD), aaveBorrow, hlDepositUsdc, hlOpenShort(shortTargets)];
+  return [
+    aaveDepositNetMint(netMintUSD),
+    aaveBorrow,
+    aaveLoopSwapAllUsdcToAsset,
+    aaveLoopDepositAllAsset,
+    aaveBorrow,
+    hlDepositUsdc,
+    hlOpenShort(shortTargets),
+  ];
 }
 
 /** Redeem core: proportional HL close; USDC pull is target-state settlement after core. */

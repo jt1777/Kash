@@ -5,7 +5,13 @@
 import { ethers } from 'ethers';
 import { config } from '../config';
 import type { OpsContext } from './opsContext';
-import { runPlaybook, type OpStep, aaveDeposit, aaveBorrow } from './opsExec';
+import {
+  runPlaybook,
+  type OpStep,
+  aaveBorrow,
+  aaveLoopSwapAllUsdcToAsset,
+  aaveLoopDepositAllAsset,
+} from './opsExec';
 
 function fmtUsdc(v: bigint): string {
   return ethers.formatUnits(v, 6) + ' USDC';
@@ -17,44 +23,13 @@ function fmtUsd(v: bigint): string {
   return '$' + ethers.formatEther(v);
 }
 
-const dexSwapAllUsdcToAsset: OpStep = {
-  id: 'dex_swap_usdc_to_asset',
-  substep: 'aave',
-  refreshCtx: true,
-  describe: (ctx) => `swap all ${fmtUsdc(ctx.contractUsdc)} USDC → ${ctx.assetSymbol} (test loop)`,
-  canSkip: async (ctx) => {
-    if (ctx.contractUsdc === 0n) return true;
-    const spotDex = await ctx.kashYield.spotDexAddress().catch(() => null);
-    if (!spotDex || spotDex === ethers.ZeroAddress) {
-      console.warn('         ⚠️  spotDexAddress not configured — skipping test-loop swap');
-      return true;
-    }
-    return false;
-  },
-  execute: async (ctx) => {
-    const amount = ctx.contractUsdc;
-    if (amount === 0n) return;
-    console.log(`         swap ${fmtUsdc(amount)} → ${ctx.assetSymbol}`);
-    const tx = await ctx.kashYield.swapFromUsdc(amount);
-    await tx.wait();
-    console.log('      → swapFromUsdc confirmed');
-  },
-};
-
 export function buildAaveLoopPlaybook(): OpStep[] {
-  const depositForLoop = (id: string): OpStep => ({
-    ...aaveDeposit,
-    id,
-    refreshCtx: true,
-    canSkip: async (ctx) => ctx.contractAsset === 0n,
-  });
-
   return [
-    depositForLoop('aave_deposit_round1'),
-    { ...aaveBorrow, id: 'aave_borrow_round1', refreshCtx: true },
-    dexSwapAllUsdcToAsset,
-    depositForLoop('aave_deposit_round2'),
-    { ...aaveBorrow, id: 'aave_borrow_round2', refreshCtx: true },
+    { ...aaveLoopDepositAllAsset, id: 'aave_deposit_round1' },
+    { ...aaveBorrow, id: 'aave_borrow_round1' },
+    { ...aaveLoopSwapAllUsdcToAsset, id: 'dex_swap_usdc_to_asset' },
+    { ...aaveLoopDepositAllAsset, id: 'aave_deposit_round2' },
+    { ...aaveBorrow, id: 'aave_borrow_round2' },
   ];
 }
 

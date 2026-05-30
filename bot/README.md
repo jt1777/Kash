@@ -180,11 +180,14 @@ These run automatically on every `npm start` (including orphan resume and `--ste
 
 #### Mint ops (`net_mint_hl`, net ≥ skip threshold)
 
-Order: **Aave deposit** → **`markMint*Deployed`** → **borrow to LTV** → **HL USDC deposit** → **wait for HL credit** → **open/extend short**.
+Order: **Aave deposit** → **`markMint*Deployed`** → **borrow to LTV** → **Aave loop** (swap all USDC → asset via spot DEX, redeposit, re-borrow to LTV) → **HL USDC deposit** → **wait for HL credit** → **open/extend short**.
 
+- After the loop, HL receives **`min(contractUsdc, aaveDebt)`** — typically the full post-loop borrow (~119% of round-1 borrow at 70% LTV, e.g. $119 USDC after a $100 deposit).
 - No on-chain **`spotBuyOnHyperliquid`** on the automated mint path (USDC collateral + perp short only).
 - Short increment ≈ **batch Aave deposit USD × `SHORT_LEVERAGE`** (via `batchMintDeployedToAave`), not gross deployable USD × leverage.
 - After `depositToHyperliquid`, the bot polls HL until USDC is credited before `openShort` (`HL_DEPOSIT_WAIT_*`).
+
+**Manual equivalent** (one step per script): `01 → 02 → 02a → 03 → 05` — see [`scripts/ops/README.md`](scripts/ops/README.md). **`OPS_SCENARIO=test_aave_loop`** runs the full two-round loop (deposit through second borrow) without HL steps.
 
 #### Redeem ops (`redeem_hl`)
 
@@ -614,7 +617,7 @@ Ops sub-steps (`--step=hl` / `--step=aave`) filter steps inside **`opsExec`** de
   - **NET_MINT:** HL USDC deposit, wait for credit, open/extend short (no spot buy).
   - **NET_REDEEM:** close short, HL USDC settlement to KashYield.
 - **Aave only:** `npm start -- --step=aave` or `BATCH_STEP=aave npm start`
-  - **NET_MINT:** deposit to Aave, borrow USDC.
+  - **NET_MINT:** deposit to Aave, borrow USDC, **Aave loop** (swap USDC→asset, redeposit, re-borrow), deposit USDC to HL, open short.
   - **NET_REDEEM:** tail — repay, withdraw, optional 11a/11b (after HL core when running full ops).
 
 Sub‑$10 skip gates in **`runStepOps`** apply before any sub-step runs. If ops is skipped entirely, `--step=hl` / `--step=aave` on that batch have nothing to do.

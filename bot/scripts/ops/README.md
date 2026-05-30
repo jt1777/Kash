@@ -21,6 +21,7 @@ Set `PRODUCT=eth` or `PRODUCT=btc` to select the contract (reads from `bot/.env`
 | **— MINT OPS —** | |
 | `01-deposit-to-aave.js` | Deposit ETH/wBTC from contract → Aave collateral |
 | `02-borrow-usdc-from-aave.js` | Borrow USDC from Aave against deposited collateral |
+| `02a-aave-loop.js` | **Round 2 leverage loop:** swap all contract USDC → asset, deposit to Aave, borrow incremental USDC to LTV. Prerequisite: `01` + `02` |
 | `03-deposit-usdc-to-perp.js` | Deposit USDC to perp DEX spot wallet *(HL path)* |
 | `03b-deposit-asset-to-perp.js` | Deposit ETH/wBTC to perp DEX as collateral *(Aster path)* |
 | `04-spot-buy-asset.js` | Buy spot ETH/wBTC on perp DEX with USDC *(HL path)* |
@@ -46,7 +47,10 @@ On Hyperliquid, collateral is always USDC and **only USDC can be withdrawn**.
 Spot ETH/wBTC exists only as an internal ledger balance and must be sold back to USDC
 before withdrawing.
 
-**Mint sequence:** `01 → 02 → 03 → 04 → 05`
+**Mint sequence:** `01 → 02 → 02a → 03 → 05` (skip `04` spot buy — USDC collateral + perp short only)
+
+**Aave leverage loop test (manual):** run `01`, then `02`, then `02a`. Example at 70% LTV on a $100 deposit: after `02a`, Aave holds ~$170 collateral and ~$119 USDC debt; vault holds ~$119 USDC ready for script `03`.
+
 **Redeem sequence:** `06 → 07 → 08 → 09 → 10`
 **Falling price top-up (if ETH shortfall):** `11b`
 **Rising price top-up (if USDC shortfall):** `11a → 09`
@@ -94,7 +98,7 @@ All scripts read from `bot/.env`. Common overrides:
 | `PRODUCT` | `eth` or `btc` | `eth` |
 | `AMOUNT` | Override auto-computed amount | auto |
 | `FRACTION` | Percentage for close/withdraw scripts (1–100) | required |
-| `BORROW_LTV_PCT` | LTV for script 02 | `70` |
+| `BORROW_LTV_PCT` | LTV for scripts 02 and 02a | `70` |
 | `SHORT_LEVERAGE` | Leverage multiplier for script 05 suggestion | `1.7` |
 | `AUTO` | `true` to auto-compute in scripts 11a/11b | `false` |
 | `BATCH_CYCLE` | Override batch cycle for script 11b AUTO mode | current |
