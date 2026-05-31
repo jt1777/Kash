@@ -6,6 +6,7 @@ import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 import { kashTokenABI } from '@/lib/contracts/kashTokenABI';
 import { formatEther } from 'viem';
 import { useMemo } from 'react';
+import { useStrategyYield } from '@/hooks/useStrategyYield';
 
 type Product = 'eth' | 'btc';
 
@@ -22,6 +23,14 @@ export function StatsCard({ product = 'eth' }: { product?: Product }) {
     functionName: 'getNAV',
   });
 
+  const {
+    data: strategyYield,
+    refetch: refetchYield,
+    isFetching: isYieldFetching,
+    isError: isYieldError,
+    error: yieldError,
+  } = useStrategyYield(product);
+
   const { data: kashBalance, refetch: refetchKashBalance, isFetching: isKashBalanceFetching } = useReadContract({
     address: kashToken,
     abi: kashTokenABI,
@@ -29,27 +38,18 @@ export function StatsCard({ product = 'eth' }: { product?: Product }) {
     args: address ? [address] : undefined,
   });
 
-  const { data: kashTotalSupply } = useReadContract({
-    address: kashToken,
-    abi: kashTokenABI,
-    functionName: 'totalSupply',
-  });
-
   const navDisplay = useMemo(() => {
     if (nav === undefined) return '1.000000';
-    const microUnits = 10n ** 12n; // 10^(18-6): wei per 0.000001 NAV
+    const microUnits = 10n ** 12n;
     const roundedMicro = (nav + microUnits / 2n) / microUnits;
     const whole = roundedMicro / 1_000_000n;
     const frac = roundedMicro % 1_000_000n;
     return `${whole}.${frac.toString().padStart(6, '0')}`;
   }, [nav]);
 
-  const totalNavDisplay = useMemo(() => {
-    if (nav === undefined || kashTotalSupply === undefined) return '—';
-    // totalNAV (USD, 18 dec) = totalSupply (18 dec) * nav (18 dec) / 1e18
-    const totalUsd = (kashTotalSupply * nav) / 10n ** 18n;
-    return `$${Number(formatEther(totalUsd)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  }, [nav, kashTotalSupply]);
+  const paYieldDisplay = strategyYield?.paYieldDisplay ?? '—';
+  const paYieldColor =
+    strategyYield && strategyYield.paYieldPct >= 0 ? 'text-green-600' : 'text-red-600';
 
   return (
     <>
@@ -91,19 +91,50 @@ export function StatsCard({ product = 'eth' }: { product?: Product }) {
 
       <div className="bg-white rounded-xl shadow-md p-6 border border-gray-100">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-sm text-gray-500 font-medium">Total NAV</span>
-          <div className="w-8 h-8 bg-green-100 rounded-lg flex items-center justify-center">
-            <svg className="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+          <span className="text-sm text-gray-500 font-medium">P.A. Yield</span>
+          <button
+            type="button"
+            onClick={() => void refetchYield()}
+            disabled={isYieldFetching}
+            className="text-xs font-medium text-indigo-600 hover:text-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition flex items-center gap-1"
+            title="Refresh indicative strategy APY"
+            aria-label="Refresh indicative strategy APY"
+          >
+            <svg
+              className={`w-4 h-4 shrink-0 ${isYieldFetching ? 'animate-spin' : ''}`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              aria-hidden
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+              />
             </svg>
-          </div>
+            Refresh
+          </button>
         </div>
-        <p className="text-3xl font-bold text-gray-900 leading-tight">
-          {totalNavDisplay}
+        <p className={`text-3xl font-bold leading-tight ${paYieldColor}`}>
+          {isYieldFetching && !strategyYield ? '…' : paYieldDisplay}
         </p>
         <p className="text-xs text-gray-500 mt-1">
-          Total contract value (USD)
+          Indicative strategy APY from HL funding and Aave rates (not guaranteed)
         </p>
+        {strategyYield && (
+          <p className="text-xs text-gray-400 mt-2 leading-relaxed">
+            HL {isBtc ? 'BTC' : 'ETH'} funding × {strategyYield.multipliers.shortMult.toFixed(1)} − USDC
+            borrow × {strategyYield.multipliers.debtMult.toFixed(2)} + {isBtc ? 'wBTC' : 'ETH'} supply ×{' '}
+            {strategyYield.multipliers.collateralMult.toFixed(1)}
+          </p>
+        )}
+        {isYieldError && (
+          <p className="text-xs text-amber-600 mt-2">
+            {yieldError instanceof Error ? yieldError.message : 'Could not load yield'}
+          </p>
+        )}
       </div>
 
       <div className="bg-white rounded-xl shadow-md p-6 border border-gray-100">
