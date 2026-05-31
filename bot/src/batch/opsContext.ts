@@ -26,6 +26,11 @@ export interface OpsContext {
   aaveDebt: bigint;        // USDC 6 dec
   /** Optional debt floor to preserve for partial strategy unwinds; repay only debt above this. */
   aaveDebtFloor?: bigint;  // USDC 6 dec
+  /**
+   * Pre-batch HL short (18-dec internal) for this redeem ops run — set once at engine entry so
+   * re-runs do not apply `strategyRedeemFraction` to an already-reduced short.
+   */
+  redeemInitialShortInternal18?: bigint;
 
   /** Hyperliquid balances */
   hlUsdcBalance: bigint;   // USDC 6 dec (spot wallet)

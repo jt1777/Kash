@@ -26,8 +26,11 @@ import {
   executeMintDeltaPipeline,
   executeRedeemCoreDeltaPipeline,
   executeRedeemTailDeltaPipeline,
+  appearsRedeemCloseShortAlreadyApplied,
   mintShortIncrementInternal18,
   openShortAssetEstimateFromDeposit,
+  resolveRedeemInitialShortInternal18,
+  type RedeemHlShortTargets,
 } from './opsExec';
 
 const WAD = 10n ** 18n;
@@ -228,7 +231,17 @@ export async function runTargetStateEngine(
       '   ─── Redeem deltas (execution order: Δredeem hl_close_short → HL settlement (withdraw3 + target pull) → tail phases) ───\n',
     );
 
-    await executeRedeemCoreDeltaPipeline(ctx);
+    const redeemShortTargets: RedeemHlShortTargets = {
+      initialShortInternal18: resolveRedeemInitialShortInternal18(ctx),
+    };
+    ctx.redeemInitialShortInternal18 = redeemShortTargets.initialShortInternal18;
+    if (appearsRedeemCloseShortAlreadyApplied(ctx)) {
+      console.log(
+        `   ↪ HL close appears already applied for this batch — using pre-batch short ${ethers.formatUnits(redeemShortTargets.initialShortInternal18, 18)} ${ctx.assetSymbol} for idempotent sizing`,
+      );
+    }
+
+    await executeRedeemCoreDeltaPipeline(ctx, redeemShortTargets);
 
     let freshCtx = await snapshotOpsContext(ctx.kashYield, ctx.provider, ctx.signer, ctx.batchCycle, lockedNAV);
     freshCtx.aaveDebtFloor = strategyAaveDebtFloor(freshCtx);

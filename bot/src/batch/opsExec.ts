@@ -87,6 +87,7 @@ export async function runPlaybook(
     if (step.refreshCtx) {
       const nextCtx = await snapshotOpsContext(ctx.kashYield, ctx.provider, ctx.signer, ctx.batchCycle, ctx.lockedNAV);
       nextCtx.aaveDebtFloor = ctx.aaveDebtFloor;
+      nextCtx.redeemInitialShortInternal18 = ctx.redeemInitialShortInternal18;
       ctx = nextCtx;
     }
   }
@@ -134,6 +135,7 @@ export async function executeDeltaPipeline(
     if (step.refreshCtx) {
       const nextCtx = await snapshotOpsContext(ctx.kashYield, ctx.provider, ctx.signer, ctx.batchCycle, ctx.lockedNAV);
       nextCtx.aaveDebtFloor = ctx.aaveDebtFloor;
+      nextCtx.redeemInitialShortInternal18 = ctx.redeemInitialShortInternal18;
       ctx = nextCtx;
     }
   }
@@ -161,8 +163,12 @@ export async function executeMintDeltaPipeline(
 }
 
 /** REDEEM core: proportional HL short close only. HL USDC → vault uses target-state settlement (withdraw3 + capped on-chain pull). */
-export async function executeRedeemCoreDeltaPipeline(ctx: OpsContext): Promise<OpsContext> {
-  return executeDeltaPipeline([{ deltaId: 'Δredeem hl_close_short', step: hlCloseShort }], ctx);
+export async function executeRedeemCoreDeltaPipeline(
+  ctx: OpsContext,
+  shortTargets: RedeemHlShortTargets,
+): Promise<OpsContext> {
+  ctx.redeemInitialShortInternal18 = shortTargets.initialShortInternal18;
+  return executeDeltaPipeline([{ deltaId: 'Δredeem hl_close_short', step: hlCloseShort(shortTargets) }], ctx);
 }
 
 /** REDEEM tail sequences (rising / falling / balanced). */
@@ -439,6 +445,77 @@ export interface MintHlShortTargets {
   initialShortInternal18: bigint;
   /** Pre-flight deposit estimate for sync logs/dry-run; execute reads on-chain batchMintDeployedToAave. */
   depositAssetEstimate: bigint;
+}
+
+/**
+ * Redeem short sizing: target = pipeline-start short × (1 − strategyRedeemFraction).
+ * Execute closes max(0, currentShort − target) so re-runs do not apply the fraction again.
+ */
+export interface RedeemHlShortTargets {
+  /** HL short (18-dec internal) before this batch's unwind close. */
+  initialShortInternal18: bigint;
+}
+
+export function redeemTargetHlShortInternal18(
+  targets: RedeemHlShortTargets,
+  strategyRedeemFraction: bigint,
+): bigint {
+  if (strategyRedeemFraction >= WAD) return 0n;
+  return (targets.initialShortInternal18 * (WAD - strategyRedeemFraction)) / WAD;
+}
+
+export function redeemCloseShortDeltaInternal(ctx: OpsContext, targets: RedeemHlShortTargets): bigint {
+  const target = redeemTargetHlShortInternal18(targets, ctx.strategyRedeemFraction);
+  return ctx.shortSize > target ? ctx.shortSize - target : 0n;
+}
+
+/** True when HL close likely already ran but Aave collateral has not yet been withdrawn (recovery re-run). */
+export function appearsRedeemCloseShortAlreadyApplied(ctx: OpsContext): boolean {
+  const f = ctx.strategyRedeemFraction;
+  if (f >= WAD || f === 0n || !ctx.shortIsActive || ctx.shortSize === 0n) return false;
+
+  const aave = ctx.aaveSupplied;
+  if (aave === 0n) return false;
+
+  const levScaled = BigInt(Math.round(config.strategy.shortLeverage * 1000));
+  const aaveUsd18 = assetAmountToUsd18(ctx, aave);
+  const shortUsd18 = (ctx.shortSize * ctx.price) / WAD;
+  const fullLevShortUsd18 = (aaveUsd18 * levScaled) / 1000n;
+  if (fullLevShortUsd18 === 0n) return false;
+
+  const postCloseShortUsd18 = (fullLevShortUsd18 * (WAD - f)) / WAD;
+  const tolBps = 2000n; // PnL / HL size grid / rounding
+  const low = (postCloseShortUsd18 * (10000n - tolBps)) / 10000n;
+  const high = (postCloseShortUsd18 * (10000n + tolBps)) / 10000n;
+  return shortUsd18 >= low && shortUsd18 <= high;
+}
+
+/**
+ * Resolve pre-batch short for idempotent close sizing.
+ * Uses ctx field / OPS_REDEEM_INITIAL_SHORT_INTERNAL18 when set; otherwise detects post-close-pre-tail state.
+ */
+export function resolveRedeemInitialShortInternal18(ctx: OpsContext): bigint {
+  const fromEnv = process.env.OPS_REDEEM_INITIAL_SHORT_INTERNAL18?.trim();
+  if (fromEnv) {
+    try {
+      return BigInt(fromEnv);
+    } catch {
+      console.warn(`   ⚠️  Invalid OPS_REDEEM_INITIAL_SHORT_INTERNAL18="${fromEnv}" — ignoring`);
+    }
+  }
+
+  if (ctx.redeemInitialShortInternal18 != null && ctx.redeemInitialShortInternal18 > 0n) {
+    return ctx.redeemInitialShortInternal18;
+  }
+
+  const f = ctx.strategyRedeemFraction;
+  if (f >= WAD || f === 0n || ctx.shortSize === 0n) return ctx.shortSize;
+
+  if (appearsRedeemCloseShortAlreadyApplied(ctx)) {
+    return (ctx.shortSize * WAD + (WAD - f) - 1n) / (WAD - f);
+  }
+
+  return ctx.shortSize;
 }
 
 function assetAmountToUsd18(ctx: OpsContext, assetAmount: bigint): bigint {
@@ -910,14 +987,19 @@ const hlOpenShort = (shortTargets: MintHlShortTargets): OpStep => ({
 // ---------------------------------------------------------------------------
 
 /** 06 — Close proportional share of the short; refreshes ctx so USDC balance is current */
-const hlCloseShort: OpStep = {
+const hlCloseShort = (shortTargets: RedeemHlShortTargets): OpStep => ({
   id: 'hl_close_short',
   substep: 'hl',
   refreshCtx: true,
   describe: (ctx) => {
     const pct = (Number(ctx.strategyRedeemFraction) / 1e16).toFixed(2);
-    const closeSize = (ctx.shortSize * ctx.strategyRedeemFraction) / BigInt(1e18);
-    return `close ${pct}% strategy unwind of ${ctx.assetSymbol} short (${fmtHlPerpSize(closeSize, ctx)} of ${fmtHlPerpSize(ctx.shortSize, ctx)}; gross redeem ${(Number(ctx.redeemFraction) / 1e16).toFixed(2)}%)`;
+    const closeSize = redeemCloseShortDeltaInternal(ctx, shortTargets);
+    const target = redeemTargetHlShortInternal18(shortTargets, ctx.strategyRedeemFraction);
+    return (
+      `close ${pct}% strategy unwind of ${ctx.assetSymbol} short ` +
+      `(${fmtHlPerpSize(closeSize, ctx)} to reach ${fmtHlPerpSize(target, ctx)} from ${fmtHlPerpSize(ctx.shortSize, ctx)}; ` +
+      `pre-batch ${fmtHlPerpSize(shortTargets.initialShortInternal18, ctx)}; gross redeem ${(Number(ctx.redeemFraction) / 1e16).toFixed(2)}%)`
+    );
   },
   canSkip: async (ctx) => {
     if (!ctx.shortIsActive) {
@@ -937,14 +1019,14 @@ const hlCloseShort: OpStep = {
       } catch { /* ignore */ }
       return true; // nothing to close
     }
-    return false;
+    return redeemCloseShortDeltaInternal(ctx, shortTargets) === 0n;
   },
   execute: async (ctx) => {
     const symbol = ctx.assetSymbol;
     const fullSize = ctx.shortSize;
-    let     closeSize = (fullSize * ctx.strategyRedeemFraction) / BigInt(1e18);
+    let closeSize = redeemCloseShortDeltaInternal(ctx, shortTargets);
     if (closeSize === 0n) {
-      console.log(`         strategy unwind is 0; no ${symbol} short close needed`);
+      console.log(`         strategy unwind already at target short; no ${symbol} close needed`);
       return;
     }
     const szDecimals = await fetchHlPerpSzDecimals(ctx, symbol);
@@ -961,7 +1043,7 @@ const hlCloseShort: OpStep = {
       await maybeRunHlEventRelay(ctx, receipt.hash, 'EXCHANGE_CLOSE_SHORT', { required: true });
     }
   },
-};
+});
 
 // ---------------------------------------------------------------------------
 // ─── REDEEM TAIL STEPS (falling / rising / balanced) ────────────────────────
@@ -2150,6 +2232,7 @@ export async function waitForHlWithdrawSettlementIfNeeded(
   await syncHlAdapterFromHyperliquidApi(fresh, true);
   fresh = await snapshotOpsContext(fresh.kashYield, fresh.provider, fresh.signer, fresh.batchCycle, lockedNAV);
   fresh.aaveDebtFloor = ctx.aaveDebtFloor;
+  fresh.redeemInitialShortInternal18 = ctx.redeemInitialShortInternal18;
 
   const initialHlUsdc = fresh.hlUsdcBalance;
   const targetHlUsdc = targetHlUsdc6(initialHlUsdc, fresh.strategyRedeemFraction);
@@ -2346,8 +2429,8 @@ export function buildMintOpSteps(netMintUSD: bigint, shortTargets: MintHlShortTa
 }
 
 /** Redeem core: proportional HL close; USDC pull is target-state settlement after core. */
-export function buildRedeemCoreOpSteps(): OpStep[] {
-  return [hlCloseShort];
+export function buildRedeemCoreOpSteps(shortTargets: RedeemHlShortTargets): OpStep[] {
+  return [hlCloseShort(shortTargets)];
 }
 
 export function buildRedeemTailOpStepsBalanced(): OpStep[] {
