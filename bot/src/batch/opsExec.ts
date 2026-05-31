@@ -1,4 +1,6 @@
 import { ethers } from 'ethers';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { resolve } from 'path';
 import { config } from '../config';
 import {
   snapshotOpsContext,
@@ -88,6 +90,9 @@ export async function runPlaybook(
       const nextCtx = await snapshotOpsContext(ctx.kashYield, ctx.provider, ctx.signer, ctx.batchCycle, ctx.lockedNAV);
       nextCtx.aaveDebtFloor = ctx.aaveDebtFloor;
       nextCtx.redeemInitialShortInternal18 = ctx.redeemInitialShortInternal18;
+      nextCtx.redeemInitialAaveSupplied = ctx.redeemInitialAaveSupplied;
+      nextCtx.redeemInitialHlUsdc6 = ctx.redeemInitialHlUsdc6;
+      nextCtx.redeemBaselineShortPerAaveWad = ctx.redeemBaselineShortPerAaveWad;
       ctx = nextCtx;
     }
   }
@@ -136,6 +141,9 @@ export async function executeDeltaPipeline(
       const nextCtx = await snapshotOpsContext(ctx.kashYield, ctx.provider, ctx.signer, ctx.batchCycle, ctx.lockedNAV);
       nextCtx.aaveDebtFloor = ctx.aaveDebtFloor;
       nextCtx.redeemInitialShortInternal18 = ctx.redeemInitialShortInternal18;
+      nextCtx.redeemInitialAaveSupplied = ctx.redeemInitialAaveSupplied;
+      nextCtx.redeemInitialHlUsdc6 = ctx.redeemInitialHlUsdc6;
+      nextCtx.redeemBaselineShortPerAaveWad = ctx.redeemBaselineShortPerAaveWad;
       ctx = nextCtx;
     }
   }
@@ -469,52 +477,176 @@ export function redeemCloseShortDeltaInternal(ctx: OpsContext, targets: RedeemHl
   return ctx.shortSize > target ? ctx.shortSize - target : 0n;
 }
 
-/** True when HL close likely already ran but Aave collateral has not yet been withdrawn (recovery re-run). */
+export interface RedeemOpsBaseline {
+  initialShortInternal18: bigint;
+  initialAaveSupplied: bigint;
+  initialHlUsdc6: bigint;
+  shortPerAaveRatioWad: bigint;
+}
+
+const REDEEM_BASELINE_CACHE_PATH = resolve(__dirname, '..', '..', '.cache', 'redeem-baselines.json');
+
+/** WAD-scaled short/aave ratio: (shortInternal18 * WAD) / aaveAsset. */
+export function redeemShortPerAaveRatioWad(ctx: OpsContext): bigint {
+  const aave = ctx.aaveSupplied;
+  if (aave === 0n || ctx.shortSize === 0n) return 0n;
+  return (ctx.shortSize * WAD) / aave;
+}
+
+function readRedeemBaselineCache(): Record<string, { initialShortInternal18: string; initialAaveSupplied: string; initialHlUsdc6: string; shortPerAaveRatioWad: string }> {
+  try {
+    if (!existsSync(REDEEM_BASELINE_CACHE_PATH)) return {};
+    return JSON.parse(readFileSync(REDEEM_BASELINE_CACHE_PATH, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function writeRedeemBaselineCache(batchCycle: bigint, baseline: RedeemOpsBaseline): void {
+  try {
+    const dir = resolve(REDEEM_BASELINE_CACHE_PATH, '..');
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    const all = readRedeemBaselineCache();
+    all[batchCycle.toString()] = {
+      initialShortInternal18: baseline.initialShortInternal18.toString(),
+      initialAaveSupplied: baseline.initialAaveSupplied.toString(),
+      initialHlUsdc6: baseline.initialHlUsdc6.toString(),
+      shortPerAaveRatioWad: baseline.shortPerAaveRatioWad.toString(),
+    };
+    writeFileSync(REDEEM_BASELINE_CACHE_PATH, JSON.stringify(all, null, 2));
+  } catch (e: any) {
+    console.warn(`   ⚠️  Could not write redeem baseline cache: ${e?.message ?? e}`);
+  }
+}
+
+/** Snapshot pre-batch short/Aave/HL at first ops touch of a batch cycle (persisted for re-runs). */
+export function captureRedeemOpsBaseline(ctx: OpsContext): RedeemOpsBaseline {
+  return {
+    initialShortInternal18: ctx.shortSize,
+    initialAaveSupplied: ctx.aaveSupplied,
+    initialHlUsdc6: ctx.hlUsdcBalance,
+    shortPerAaveRatioWad: redeemShortPerAaveRatioWad(ctx),
+  };
+}
+
+export function applyRedeemOpsBaselineToContext(ctx: OpsContext, baseline: RedeemOpsBaseline): void {
+  ctx.redeemInitialShortInternal18 = baseline.initialShortInternal18;
+  ctx.redeemInitialAaveSupplied = baseline.initialAaveSupplied;
+  ctx.redeemInitialHlUsdc6 = baseline.initialHlUsdc6;
+  ctx.redeemBaselineShortPerAaveWad = baseline.shortPerAaveRatioWad;
+}
+
+/**
+ * Load pre-batch baseline for this batch cycle, or capture + cache on first ops entry.
+ * `OPS_REDEEM_INITIAL_SHORT_INTERNAL18` overrides initial short only (recovery).
+ *
+ * Refuses to create a new baseline when the batch has already advanced past phase 1 (or is
+ * processed) without a cache entry — current short may already be post-close.
+ */
+export async function loadOrCaptureRedeemOpsBaseline(ctx: OpsContext): Promise<RedeemOpsBaseline> {
+  const fromEnv = process.env.OPS_REDEEM_INITIAL_SHORT_INTERNAL18?.trim();
+  if (fromEnv) {
+    try {
+      const initialShortInternal18 = BigInt(fromEnv);
+      const baseline: RedeemOpsBaseline = {
+        initialShortInternal18,
+        initialAaveSupplied: ctx.aaveSupplied,
+        initialHlUsdc6: ctx.hlUsdcBalance,
+        shortPerAaveRatioWad: redeemShortPerAaveRatioWad(ctx),
+      };
+      applyRedeemOpsBaselineToContext(ctx, baseline);
+      return baseline;
+    } catch {
+      console.warn(`   ⚠️  Invalid OPS_REDEEM_INITIAL_SHORT_INTERNAL18="${fromEnv}" — ignoring`);
+    }
+  }
+
+  const cached = readRedeemBaselineCache()[ctx.batchCycle.toString()];
+  if (cached) {
+    const baseline: RedeemOpsBaseline = {
+      initialShortInternal18: BigInt(cached.initialShortInternal18),
+      initialAaveSupplied: BigInt(cached.initialAaveSupplied),
+      initialHlUsdc6: BigInt(cached.initialHlUsdc6),
+      shortPerAaveRatioWad: BigInt(cached.shortPerAaveRatioWad),
+    };
+    applyRedeemOpsBaselineToContext(ctx, baseline);
+    return baseline;
+  }
+
+  await assertRedeemBaselineCaptureAllowed(ctx);
+
+  const baseline = captureRedeemOpsBaseline(ctx);
+  applyRedeemOpsBaselineToContext(ctx, baseline);
+  writeRedeemBaselineCache(ctx.batchCycle, baseline);
+  console.log(
+    `   ↪ Saved redeem baseline for batch ${ctx.batchCycle}: pre-batch short ${ethers.formatUnits(baseline.initialShortInternal18, 18)} ${ctx.assetSymbol}`,
+  );
+  return baseline;
+}
+
+/** Refuse snapshotting current short as pre-batch when ops likely already ran but cache is missing. */
+async function assertRedeemBaselineCaptureAllowed(ctx: OpsContext): Promise<void> {
+  let phase = 0;
+  let processed = false;
+  try {
+    phase = Number((await ctx.kashYield.batchPhase(ctx.batchCycle)).toString());
+  } catch {
+    /* older deployment */
+  }
+  try {
+    const info = await ctx.kashYield.getBatchInfo(ctx.batchCycle);
+    processed = Boolean(info.processed);
+  } catch {
+    /* ignore */
+  }
+
+  if (phase > 1 || processed) {
+    throw new Error(
+      `Redeem baseline cache missing for batch ${ctx.batchCycle} (phase ${phase}${processed ? ', processed' : ''}). ` +
+        'Refusing to snapshot current HL short as pre-batch baseline — ops may have already partially run. ' +
+        'Restore bot/.cache/redeem-baselines.json or set OPS_REDEEM_INITIAL_SHORT_INTERNAL18 to the pre-batch short (18-dec internal units).',
+    );
+  }
+}
+
+/**
+ * True when HL closeShort already ran for this batch: short/aave ratio dropped to ~(1−f)× pre-batch
+ * while Aave collateral has not yet been withdrawn (post-close, pre-tail).
+ *
+ * Does NOT use SHORT_LEVERAGE×Aave — after the Aave loop, short is ~1.7× initial deposit only,
+ * not 1.7× total supplied collateral (that mismatch caused the false skip).
+ */
 export function appearsRedeemCloseShortAlreadyApplied(ctx: OpsContext): boolean {
+  const baselineRatio = ctx.redeemBaselineShortPerAaveWad;
+  if (baselineRatio == null || baselineRatio === 0n) return false;
+
   const f = ctx.strategyRedeemFraction;
   if (f >= WAD || f === 0n || !ctx.shortIsActive || ctx.shortSize === 0n) return false;
 
   const aave = ctx.aaveSupplied;
   if (aave === 0n) return false;
 
-  const levScaled = BigInt(Math.round(config.strategy.shortLeverage * 1000));
-  const aaveUsd18 = assetAmountToUsd18(ctx, aave);
-  const shortUsd18 = (ctx.shortSize * ctx.price) / WAD;
-  const fullLevShortUsd18 = (aaveUsd18 * levScaled) / 1000n;
-  if (fullLevShortUsd18 === 0n) return false;
+  const currentRatio = redeemShortPerAaveRatioWad(ctx);
+  if (currentRatio === 0n) return false;
 
-  const postCloseShortUsd18 = (fullLevShortUsd18 * (WAD - f)) / WAD;
-  const tolBps = 2000n; // PnL / HL size grid / rounding
-  const low = (postCloseShortUsd18 * (10000n - tolBps)) / 10000n;
-  const high = (postCloseShortUsd18 * (10000n + tolBps)) / 10000n;
-  return shortUsd18 >= low && shortUsd18 <= high;
+  const postCloseRatio = (baselineRatio * (WAD - f)) / WAD;
+  const tolBps = 1500n;
+  const low = (postCloseRatio * (10000n - tolBps)) / 10000n;
+  const high = (postCloseRatio * (10000n + tolBps)) / 10000n;
+  if (currentRatio >= low && currentRatio <= high) return true;
+
+  // HL/Aave unwound without close: short/aave ratio rises (~baseline / (1−f)) — not "already closed".
+  const closeSkippedRatio = (baselineRatio * WAD) / (WAD - f);
+  if (currentRatio >= (closeSkippedRatio * (10000n - tolBps)) / 10000n) return false;
+
+  return false;
 }
 
-/**
- * Resolve pre-batch short for idempotent close sizing.
- * Uses ctx field / OPS_REDEEM_INITIAL_SHORT_INTERNAL18 when set; otherwise detects post-close-pre-tail state.
- */
+/** @deprecated Use {@link loadOrCaptureRedeemOpsBaseline} — kept for env override path. */
 export function resolveRedeemInitialShortInternal18(ctx: OpsContext): bigint {
-  const fromEnv = process.env.OPS_REDEEM_INITIAL_SHORT_INTERNAL18?.trim();
-  if (fromEnv) {
-    try {
-      return BigInt(fromEnv);
-    } catch {
-      console.warn(`   ⚠️  Invalid OPS_REDEEM_INITIAL_SHORT_INTERNAL18="${fromEnv}" — ignoring`);
-    }
-  }
-
   if (ctx.redeemInitialShortInternal18 != null && ctx.redeemInitialShortInternal18 > 0n) {
     return ctx.redeemInitialShortInternal18;
   }
-
-  const f = ctx.strategyRedeemFraction;
-  if (f >= WAD || f === 0n || ctx.shortSize === 0n) return ctx.shortSize;
-
-  if (appearsRedeemCloseShortAlreadyApplied(ctx)) {
-    return (ctx.shortSize * WAD + (WAD - f) - 1n) / (WAD - f);
-  }
-
   return ctx.shortSize;
 }
 
@@ -2187,6 +2319,10 @@ async function sweepRemainingHlUsdcAfterFullRedeem(
     await sleep(pollMs);
     const nextFresh = await snapshotOpsContext(fresh.kashYield, fresh.provider, fresh.signer, fresh.batchCycle, lockedNAV);
     nextFresh.aaveDebtFloor = fresh.aaveDebtFloor;
+    nextFresh.redeemInitialShortInternal18 = fresh.redeemInitialShortInternal18;
+    nextFresh.redeemInitialAaveSupplied = fresh.redeemInitialAaveSupplied;
+    nextFresh.redeemInitialHlUsdc6 = fresh.redeemInitialHlUsdc6;
+    nextFresh.redeemBaselineShortPerAaveWad = fresh.redeemBaselineShortPerAaveWad;
     fresh = nextFresh;
     console.log(`      ↪ sweep status: contractUsdc=${fmtUsdc(fresh.contractUsdc)}, hlUsdc=${fmtUsdc(fresh.hlUsdcBalance)}, adapterUsdc=${fmtUsdc(fresh.adapterUsdcErc20)}`);
   }
@@ -2233,6 +2369,9 @@ export async function waitForHlWithdrawSettlementIfNeeded(
   fresh = await snapshotOpsContext(fresh.kashYield, fresh.provider, fresh.signer, fresh.batchCycle, lockedNAV);
   fresh.aaveDebtFloor = ctx.aaveDebtFloor;
   fresh.redeemInitialShortInternal18 = ctx.redeemInitialShortInternal18;
+  fresh.redeemInitialAaveSupplied = ctx.redeemInitialAaveSupplied;
+  fresh.redeemInitialHlUsdc6 = ctx.redeemInitialHlUsdc6;
+  fresh.redeemBaselineShortPerAaveWad = ctx.redeemBaselineShortPerAaveWad;
 
   const initialHlUsdc = fresh.hlUsdcBalance;
   const targetHlUsdc = targetHlUsdc6(initialHlUsdc, fresh.strategyRedeemFraction);
@@ -2318,6 +2457,10 @@ export async function waitForHlWithdrawSettlementIfNeeded(
         if (received > 0n) {
           const nextFresh = await snapshotOpsContext(fresh.kashYield, fresh.provider, fresh.signer, fresh.batchCycle, lockedNAV);
           nextFresh.aaveDebtFloor = fresh.aaveDebtFloor;
+          nextFresh.redeemInitialShortInternal18 = fresh.redeemInitialShortInternal18;
+          nextFresh.redeemInitialAaveSupplied = fresh.redeemInitialAaveSupplied;
+          nextFresh.redeemInitialHlUsdc6 = fresh.redeemInitialHlUsdc6;
+          nextFresh.redeemBaselineShortPerAaveWad = fresh.redeemBaselineShortPerAaveWad;
           fresh = nextFresh;
           console.log(
             `      ↪ settlement post-delivery: contractUsdc=${fmtUsdc(fresh.contractUsdc)}, ` +
@@ -2344,6 +2487,10 @@ export async function waitForHlWithdrawSettlementIfNeeded(
     await sleep(pollMs);
     const nextFresh = await snapshotOpsContext(fresh.kashYield, fresh.provider, fresh.signer, fresh.batchCycle, lockedNAV);
     nextFresh.aaveDebtFloor = fresh.aaveDebtFloor;
+    nextFresh.redeemInitialShortInternal18 = fresh.redeemInitialShortInternal18;
+    nextFresh.redeemInitialAaveSupplied = fresh.redeemInitialAaveSupplied;
+    nextFresh.redeemInitialHlUsdc6 = fresh.redeemInitialHlUsdc6;
+    nextFresh.redeemBaselineShortPerAaveWad = fresh.redeemBaselineShortPerAaveWad;
     fresh = nextFresh;
     const vaultSf = usdcShortfallVsContract(fresh);
     const inboundDelta = hlSettlementInboundDelta(fresh, waitState);

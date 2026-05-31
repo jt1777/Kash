@@ -27,9 +27,10 @@ import {
   executeRedeemCoreDeltaPipeline,
   executeRedeemTailDeltaPipeline,
   appearsRedeemCloseShortAlreadyApplied,
+  loadOrCaptureRedeemOpsBaseline,
   mintShortIncrementInternal18,
   openShortAssetEstimateFromDeposit,
-  resolveRedeemInitialShortInternal18,
+  redeemTargetHlShortInternal18,
   type RedeemHlShortTargets,
 } from './opsExec';
 
@@ -231,13 +232,16 @@ export async function runTargetStateEngine(
       '   ─── Redeem deltas (execution order: Δredeem hl_close_short → HL settlement (withdraw3 + target pull) → tail phases) ───\n',
     );
 
+    const redeemBaseline = await loadOrCaptureRedeemOpsBaseline(ctx);
     const redeemShortTargets: RedeemHlShortTargets = {
-      initialShortInternal18: resolveRedeemInitialShortInternal18(ctx),
+      initialShortInternal18: redeemBaseline.initialShortInternal18,
     };
-    ctx.redeemInitialShortInternal18 = redeemShortTargets.initialShortInternal18;
     if (appearsRedeemCloseShortAlreadyApplied(ctx)) {
       console.log(
-        `   ↪ HL close appears already applied for this batch — using pre-batch short ${ethers.formatUnits(redeemShortTargets.initialShortInternal18, 18)} ${ctx.assetSymbol} for idempotent sizing`,
+        `   ↪ HL close already applied for batch ${ctx.batchCycle} — target short ${ethers.formatUnits(
+          redeemTargetHlShortInternal18(redeemShortTargets, ctx.strategyRedeemFraction),
+          18,
+        )} ${ctx.assetSymbol} (pre-batch ${ethers.formatUnits(redeemBaseline.initialShortInternal18, 18)})`,
       );
     }
 

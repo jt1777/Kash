@@ -31,6 +31,10 @@ export interface OpsContext {
    * re-runs do not apply `strategyRedeemFraction` to an already-reduced short.
    */
   redeemInitialShortInternal18?: bigint;
+  /** Pre-batch Aave supplied + HL USDC + short/aave ratio (WAD-scaled) for idempotent close detection. */
+  redeemInitialAaveSupplied?: bigint;
+  redeemInitialHlUsdc6?: bigint;
+  redeemBaselineShortPerAaveWad?: bigint;
 
   /** Hyperliquid balances */
   hlUsdcBalance: bigint;   // USDC 6 dec (spot wallet)
