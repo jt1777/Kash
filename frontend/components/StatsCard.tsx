@@ -28,7 +28,6 @@ export function StatsCard({ product = 'eth' }: { product?: Product }) {
     refetch: refetchYield,
     isFetching: isYieldFetching,
     isError: isYieldError,
-    error: yieldError,
   } = useStrategyYield(product);
 
   const { data: kashBalance, refetch: refetchKashBalance, isFetching: isKashBalanceFetching } = useReadContract({
@@ -117,22 +116,15 @@ export function StatsCard({ product = 'eth' }: { product?: Product }) {
             Refresh
           </button>
         </div>
-        <p className={`text-3xl font-bold leading-tight ${paYieldColor}`}>
+        <p className={`text-3xl font-bold leading-tight ${strategyYield ? paYieldColor : 'text-gray-900'}`}>
           {isYieldFetching && !strategyYield ? '…' : paYieldDisplay}
         </p>
         <p className="text-xs text-gray-500 mt-1">
-          Indicative strategy APY from HL funding and Aave rates (not guaranteed)
+          Indicative strategy APY from current market rates
         </p>
-        {strategyYield && (
-          <p className="text-xs text-gray-400 mt-2 leading-relaxed">
-            HL {isBtc ? 'BTC' : 'ETH'} funding × {strategyYield.multipliers.shortMult.toFixed(1)} − USDC
-            borrow × {strategyYield.multipliers.debtMult.toFixed(2)} + {isBtc ? 'wBTC' : 'ETH'} supply ×{' '}
-            {strategyYield.multipliers.collateralMult.toFixed(1)}
-          </p>
-        )}
         {isYieldError && (
           <p className="text-xs text-amber-600 mt-2">
-            {yieldError instanceof Error ? yieldError.message : 'Could not load yield'}
+            Could not load market rates — check connection and refresh
           </p>
         )}
       </div>

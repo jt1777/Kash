@@ -13,8 +13,6 @@ export const ARBITRUM_ONE_RPC =
       process.env.RPC_URL?.trim())) ||
   'https://arb1.arbitrum.io/rpc';
 
-const SECONDS_PER_YEAR = 31_536_000;
-
 /** Strategy leverage multipliers derived from LTV + short leverage (Aave loop book). */
 export function strategyMultipliers(ltvPct = 70, shortLeverage = 1.7) {
   const ltv = ltvPct / 100;
@@ -42,5 +40,3 @@ export function readStrategyEnvMultipliers() {
     Number.isFinite(shortLeverage) ? shortLeverage : 1.7,
   );
 }
-
-export { SECONDS_PER_YEAR };

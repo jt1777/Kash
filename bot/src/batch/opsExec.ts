@@ -1224,12 +1224,6 @@ const aaveWithdrawPartial: OpStep = {
   },
   execute: async (ctx) => {
     const sf = usdcShortfallVsContract(ctx);
-    if (ctx.contractUsdc === 0n && sf > 0n && !(await canSkipSmallSwapViaOwnerReserve(ctx, sf))) {
-      throw new Error(
-        `Cannot run rising-tail partial Aave withdraw with 0 vault USDC (strategy shortfall ${fmtUsdc(sf)}). ` +
-          'HL withdraw USDC has not landed on KashYield — wait for the bridge and re-run ops.',
-      );
-    }
     const cap = getSmallSwapSkipMaxUsdc6();
     const smallSkipOwner =
       sf > 0n && sf < cap && (await canSkipSmallSwapViaOwnerReserve(ctx, sf));

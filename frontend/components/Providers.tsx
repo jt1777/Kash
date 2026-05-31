@@ -10,7 +10,7 @@ import { ReactNode, useState, useMemo, useEffect } from 'react';
 export function Providers({ children }: { children: ReactNode }) {
   const [queryClient] = useState(() => new QueryClient());
   const [mounted, setMounted] = useState(false);
-  
+
   useEffect(() => {
     setMounted(true);
   }, []);
@@ -22,18 +22,11 @@ export function Providers({ children }: { children: ReactNode }) {
     return null;
   }, []);
 
-  // Don't render providers until mounted (client-side only)
-  if (!mounted || !config) {
-    return <>{children}</>;
-  }
-
-  return (
+  const app = !mounted || !config ? children : (
     <WagmiProvider config={config}>
-      <QueryClientProvider client={queryClient}>
-        <RainbowKitProvider>
-          {children}
-        </RainbowKitProvider>
-      </QueryClientProvider>
+      <RainbowKitProvider>{children}</RainbowKitProvider>
     </WagmiProvider>
   );
+
+  return <QueryClientProvider client={queryClient}>{app}</QueryClientProvider>;
 }

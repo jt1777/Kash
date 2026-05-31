@@ -33,7 +33,7 @@ export function computePaYield(inputs: PaYieldInputs): PaYieldBreakdown {
 }
 
 export function formatApyPct(value: number, digits = 2): string {
-  if (!Number.isFinite(value)) return '—';
+  if (value == null || !Number.isFinite(value)) return '—';
   const sign = value >= 0 ? '+' : '';
   return `${sign}${value.toFixed(digits)}%`;
 }

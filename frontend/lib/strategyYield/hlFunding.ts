@@ -23,7 +23,6 @@ export async function fetchHlFundingApyPct(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ type: 'metaAndAssetCtxs' }),
-    next: { revalidate: 60 },
   });
 
   if (!res.ok) {

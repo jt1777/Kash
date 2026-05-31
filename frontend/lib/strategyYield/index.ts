@@ -1,5 +1,5 @@
 export { AAVE_V3_POOL_ARBITRUM_ONE, readStrategyEnvMultipliers, strategyMultipliers } from './constants';
-export { fetchAaveReserveApyPct, rayPerSecondToApyPct } from './aaveRates';
+export { fetchAaveReserveApyPct, rayAnnualRateToApyPct } from './aaveRates';
 export { fetchHlFundingApyPct, hourlyFundingToApyPct } from './hlFunding';
 export { computePaYield, formatApyPct, type PaYieldBreakdown } from './computePaYield';
 

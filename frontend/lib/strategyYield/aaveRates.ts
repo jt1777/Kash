@@ -1,6 +1,6 @@
 import { createPublicClient, http, type Address } from 'viem';
 import { arbitrum } from 'viem/chains';
-import { AAVE_V3_POOL_ARBITRUM_ONE, ARBITRUM_ONE_RPC, SECONDS_PER_YEAR } from './constants';
+import { AAVE_V3_POOL_ARBITRUM_ONE, ARBITRUM_ONE_RPC } from './constants';
 
 const RAY = 10n ** 27n;
 
@@ -36,12 +36,12 @@ const aavePoolAbi = [
   },
 ] as const;
 
-/** Convert Aave RAY per-second rate to annualized APY (%). */
-export function rayPerSecondToApyPct(ray: bigint): number {
+/** Aave V3 reserve rate in RAY (27 dec) is an annual rate — convert to APY display (%). */
+export function rayAnnualRateToApyPct(ray: bigint): number {
   if (ray <= 0n) return 0;
-  const ratePerSecond = Number(ray) / Number(RAY);
-  if (!Number.isFinite(ratePerSecond) || ratePerSecond <= 0) return 0;
-  return (Math.pow(1 + ratePerSecond, SECONDS_PER_YEAR) - 1) * 100;
+  const annual = Number(ray) / Number(RAY);
+  if (!Number.isFinite(annual) || annual <= 0) return 0;
+  return annual * 100;
 }
 
 export async function fetchAaveReserveApyPct(
@@ -61,7 +61,7 @@ export async function fetchAaveReserveApyPct(
   });
 
   return {
-    supplyApyPct: rayPerSecondToApyPct(reserve.currentLiquidityRate),
-    borrowApyPct: rayPerSecondToApyPct(reserve.currentVariableBorrowRate),
+    supplyApyPct: rayAnnualRateToApyPct(reserve.currentLiquidityRate),
+    borrowApyPct: rayAnnualRateToApyPct(reserve.currentVariableBorrowRate),
   };
 }
