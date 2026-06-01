@@ -418,6 +418,13 @@ Multi-sig owner is the highest-leverage next step: industry standard, one transa
 
 ---
 
+**Detailed runbooks:**
+
+- **[Owner key compromise](./INCIDENT-RESPONSE-OWNER-KEY.md)** — pause, snapshot, rotate owner/bot/oracle, flatten strategy, user comms
+- **Bot / keeper key only** — same doc §0–15 min (stop bot, revoke HL agent); rotate `setBotAddress` from owner; attacker cannot `rescueERC20` or replace oracle without owner
+
+**Short checklist (any privileged key incident):**
+
 1. Pause vault
 2. Stop bot
 3. Snapshot on-chain + HL/Aave balances

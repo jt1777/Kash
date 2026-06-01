@@ -2241,23 +2241,20 @@ async function isRedeemHlSettlementReady(
 
 /**
  * On-chain adapter pull toward ideal HL USDC (target state 4).
- * When HL spot is above target, pull min(adapter budget, HL excess).
- * When HL spot is at target but the adapter still holds bridged USDC, pull up to Aave repay shortfall.
+ * `withdrawFromHyperliquid` only moves ERC-20 on the L2 adapter — not HL spot ledger.
+ * After withdraw3 lands, bridged USDC sits on the adapter while HL spot is already at target;
+ * capping by `hlUsdcAboveTarget` then stalls on ~dust ledger drift (~$0.04/retry).
+ * HL spot excess above target is bridged via withdraw3 in the wait loop, not this pull.
  */
-function hlSettlementWithdrawAmount(ctx: OpsContext, targetHlUsdc: bigint): bigint {
-  const pullBudget = hlUsdcPullBudget(ctx);
-  if (pullBudget === 0n) return 0n;
-  const above = hlUsdcAboveTarget(ctx, targetHlUsdc);
-  if (above > 0n) {
-    return pullBudget < above ? pullBudget : above;
-  }
+function hlSettlementWithdrawAmount(ctx: OpsContext, _targetHlUsdc: bigint): bigint {
   const dust = getHlSweepDustUsdc6();
-  if (ctx.adapterUsdcErc20 <= dust) return 0n;
+  const adapterBal = ctx.adapterUsdcErc20;
+  if (adapterBal <= dust) return 0n;
   const shortfall = usdcShortfallVsContract(ctx);
   if (shortfall > dust) {
-    return ctx.adapterUsdcErc20 < shortfall ? ctx.adapterUsdcErc20 : shortfall;
+    return adapterBal < shortfall ? adapterBal : shortfall;
   }
-  return ctx.adapterUsdcErc20;
+  return adapterBal;
 }
 
 /**
@@ -2448,8 +2445,8 @@ export async function waitForHlWithdrawSettlementIfNeeded(
       noteExpectedHlInbound(waitState, pullAmt);
       attempts++;
       console.log(
-        `      ↪ settlement retry #${attempts}: withdraw ${fmtUsdc(pullAmt)} from HL ` +
-          `(excess above target ${fmtUsdc(above)})`,
+        `      ↪ settlement retry #${attempts}: pull ${fmtUsdc(pullAmt)} from adapter ` +
+          `(adapter ${fmtUsdc(fresh.adapterUsdcErc20)}, HL excess above target ${fmtUsdc(above)})`,
       );
       try {
         const { received } = await execHlWithdrawToKashYield(fresh, `withdrawFromHyperliquid(retry#${attempts})`, pullAmt);
