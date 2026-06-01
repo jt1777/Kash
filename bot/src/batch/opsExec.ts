@@ -93,6 +93,7 @@ export async function runPlaybook(
       nextCtx.redeemInitialAaveSupplied = ctx.redeemInitialAaveSupplied;
       nextCtx.redeemInitialHlUsdc6 = ctx.redeemInitialHlUsdc6;
       nextCtx.redeemBaselineShortPerAaveWad = ctx.redeemBaselineShortPerAaveWad;
+      nextCtx.redeemSettlementInitialHlUsdc6 = ctx.redeemSettlementInitialHlUsdc6;
       ctx = nextCtx;
     }
   }
@@ -144,6 +145,7 @@ export async function executeDeltaPipeline(
       nextCtx.redeemInitialAaveSupplied = ctx.redeemInitialAaveSupplied;
       nextCtx.redeemInitialHlUsdc6 = ctx.redeemInitialHlUsdc6;
       nextCtx.redeemBaselineShortPerAaveWad = ctx.redeemBaselineShortPerAaveWad;
+      nextCtx.redeemSettlementInitialHlUsdc6 = ctx.redeemSettlementInitialHlUsdc6;
       ctx = nextCtx;
     }
   }
@@ -493,12 +495,42 @@ export function redeemShortPerAaveRatioWad(ctx: OpsContext): bigint {
   return (ctx.shortSize * WAD) / aave;
 }
 
-function readRedeemBaselineCache(): Record<string, { initialShortInternal18: string; initialAaveSupplied: string; initialHlUsdc6: string; shortPerAaveRatioWad: string }> {
+function readRedeemBaselineCache(): Record<
+  string,
+  {
+    initialShortInternal18: string;
+    initialAaveSupplied: string;
+    initialHlUsdc6: string;
+    shortPerAaveRatioWad: string;
+    settlementInitialHlUsdc6?: string;
+  }
+> {
   try {
     if (!existsSync(REDEEM_BASELINE_CACHE_PATH)) return {};
     return JSON.parse(readFileSync(REDEEM_BASELINE_CACHE_PATH, 'utf8'));
   } catch {
     return {};
+  }
+}
+
+function persistSettlementInitialHlUsdc6(batchCycle: bigint, settlementInitialHlUsdc6: bigint): void {
+  try {
+    const dir = resolve(REDEEM_BASELINE_CACHE_PATH, '..');
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    const all = readRedeemBaselineCache();
+    const key = batchCycle.toString();
+    all[key] = {
+      ...(all[key] ?? {
+        initialShortInternal18: '0',
+        initialAaveSupplied: '0',
+        initialHlUsdc6: '0',
+        shortPerAaveRatioWad: '0',
+      }),
+      settlementInitialHlUsdc6: settlementInitialHlUsdc6.toString(),
+    };
+    writeFileSync(REDEEM_BASELINE_CACHE_PATH, JSON.stringify(all, null, 2));
+  } catch (e: any) {
+    console.warn(`   ⚠️  Could not write settlement HL baseline cache: ${e?.message ?? e}`);
   }
 }
 
@@ -648,6 +680,47 @@ export function resolveRedeemInitialShortInternal18(ctx: OpsContext): bigint {
     return ctx.redeemInitialShortInternal18;
   }
   return ctx.shortSize;
+}
+
+/**
+ * HL spot USDC baseline for settlement target = baseline × (1 − strategyRedeemFraction).
+ * Captured at first settlement-wait entry (post close-short), not pre-batch ops entry.
+ */
+function resolveSettlementInitialHlUsdc6(ctx: OpsContext, feeTolerance: bigint): bigint {
+  const fromEnv = process.env.OPS_REDEEM_SETTLEMENT_INITIAL_HL_USDC6?.trim();
+  if (fromEnv) {
+    try {
+      return BigInt(fromEnv);
+    } catch {
+      console.warn(`   ⚠️  Invalid OPS_REDEEM_SETTLEMENT_INITIAL_HL_USDC6="${fromEnv}" — ignoring`);
+    }
+  }
+
+  if (ctx.redeemSettlementInitialHlUsdc6 != null && ctx.redeemSettlementInitialHlUsdc6 > 0n) {
+    return ctx.redeemSettlementInitialHlUsdc6;
+  }
+
+  const cached = readRedeemBaselineCache()[ctx.batchCycle.toString()]?.settlementInitialHlUsdc6;
+  if (cached) {
+    return BigInt(cached);
+  }
+
+  const dust = getHlSweepDustUsdc6();
+  // Re-run after withdraw3: vault holds bridged USDC, HL spot is at target — reconstruct baseline.
+  if (
+    appearsRedeemCloseShortAlreadyApplied(ctx) &&
+    ctx.contractUsdc > dust &&
+    ctx.contractUsdc >= ctx.hlUsdcBalance
+  ) {
+    const recovered = ctx.hlUsdcBalance + ctx.adapterUsdcErc20 + ctx.contractUsdc + feeTolerance;
+    console.log(
+      `   ↪ Recovered settlement HL baseline ${fmtUsdc(recovered)} ` +
+        `(spot ${fmtUsdc(ctx.hlUsdcBalance)} + adapter ${fmtUsdc(ctx.adapterUsdcErc20)} + vault ${fmtUsdc(ctx.contractUsdc)} + fee slack)`,
+    );
+    return recovered;
+  }
+
+  return ctx.hlUsdcBalance;
 }
 
 function assetAmountToUsd18(ctx: OpsContext, assetAmount: bigint): bigint {
@@ -2319,6 +2392,7 @@ async function sweepRemainingHlUsdcAfterFullRedeem(
     nextFresh.redeemInitialShortInternal18 = fresh.redeemInitialShortInternal18;
     nextFresh.redeemInitialAaveSupplied = fresh.redeemInitialAaveSupplied;
     nextFresh.redeemInitialHlUsdc6 = fresh.redeemInitialHlUsdc6;
+    nextFresh.redeemSettlementInitialHlUsdc6 = fresh.redeemSettlementInitialHlUsdc6;
     nextFresh.redeemBaselineShortPerAaveWad = fresh.redeemBaselineShortPerAaveWad;
     fresh = nextFresh;
     console.log(`      ↪ sweep status: contractUsdc=${fmtUsdc(fresh.contractUsdc)}, hlUsdc=${fmtUsdc(fresh.hlUsdcBalance)}, adapterUsdc=${fmtUsdc(fresh.adapterUsdcErc20)}`);
@@ -2369,9 +2443,27 @@ export async function waitForHlWithdrawSettlementIfNeeded(
   fresh.redeemInitialAaveSupplied = ctx.redeemInitialAaveSupplied;
   fresh.redeemInitialHlUsdc6 = ctx.redeemInitialHlUsdc6;
   fresh.redeemBaselineShortPerAaveWad = ctx.redeemBaselineShortPerAaveWad;
+  fresh.redeemSettlementInitialHlUsdc6 = ctx.redeemSettlementInitialHlUsdc6;
 
-  const initialHlUsdc = fresh.hlUsdcBalance;
-  const targetHlUsdc = targetHlUsdc6(initialHlUsdc, fresh.strategyRedeemFraction);
+  if (fresh.redeemBaselineShortPerAaveWad == null) {
+    await loadOrCaptureRedeemOpsBaseline(fresh);
+  }
+
+  let settlementInitialHlUsdc = resolveSettlementInitialHlUsdc6(fresh, feeTolerance);
+  const cachedSettlement = readRedeemBaselineCache()[fresh.batchCycle.toString()]?.settlementInitialHlUsdc6;
+  if (!cachedSettlement && settlementInitialHlUsdc > 0n) {
+    persistSettlementInitialHlUsdc6(fresh.batchCycle, settlementInitialHlUsdc);
+    console.log(
+      `   ↪ Saved settlement HL baseline for batch ${fresh.batchCycle}: ${fmtUsdc(settlementInitialHlUsdc)} USDC`,
+    );
+  }
+  fresh.redeemSettlementInitialHlUsdc6 = settlementInitialHlUsdc;
+
+  const targetHlUsdc = targetHlUsdc6(settlementInitialHlUsdc, fresh.strategyRedeemFraction);
+  console.log(
+    `   ↪ HL settlement target ${fmtUsdc(targetHlUsdc)} ` +
+      `(baseline ${fmtUsdc(settlementInitialHlUsdc)} × (1 − ${(Number(fresh.strategyRedeemFraction) / 1e16).toFixed(2)}% strategy unwind))`,
+  );
 
   const waitState: HlSettlementWaitState = {
     baselineContractUsdc: fresh.contractUsdc,
@@ -2457,6 +2549,7 @@ export async function waitForHlWithdrawSettlementIfNeeded(
           nextFresh.redeemInitialShortInternal18 = fresh.redeemInitialShortInternal18;
           nextFresh.redeemInitialAaveSupplied = fresh.redeemInitialAaveSupplied;
           nextFresh.redeemInitialHlUsdc6 = fresh.redeemInitialHlUsdc6;
+          nextFresh.redeemSettlementInitialHlUsdc6 = fresh.redeemSettlementInitialHlUsdc6;
           nextFresh.redeemBaselineShortPerAaveWad = fresh.redeemBaselineShortPerAaveWad;
           fresh = nextFresh;
           console.log(
@@ -2487,6 +2580,7 @@ export async function waitForHlWithdrawSettlementIfNeeded(
     nextFresh.redeemInitialShortInternal18 = fresh.redeemInitialShortInternal18;
     nextFresh.redeemInitialAaveSupplied = fresh.redeemInitialAaveSupplied;
     nextFresh.redeemInitialHlUsdc6 = fresh.redeemInitialHlUsdc6;
+    nextFresh.redeemSettlementInitialHlUsdc6 = fresh.redeemSettlementInitialHlUsdc6;
     nextFresh.redeemBaselineShortPerAaveWad = fresh.redeemBaselineShortPerAaveWad;
     fresh = nextFresh;
     const vaultSf = usdcShortfallVsContract(fresh);

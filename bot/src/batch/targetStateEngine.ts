@@ -249,6 +249,11 @@ export async function runTargetStateEngine(
 
     let freshCtx = await snapshotOpsContext(ctx.kashYield, ctx.provider, ctx.signer, ctx.batchCycle, lockedNAV);
     freshCtx.aaveDebtFloor = strategyAaveDebtFloor(freshCtx);
+    freshCtx.redeemInitialShortInternal18 = ctx.redeemInitialShortInternal18;
+    freshCtx.redeemInitialAaveSupplied = ctx.redeemInitialAaveSupplied;
+    freshCtx.redeemInitialHlUsdc6 = ctx.redeemInitialHlUsdc6;
+    freshCtx.redeemBaselineShortPerAaveWad = ctx.redeemBaselineShortPerAaveWad;
+    freshCtx.redeemSettlementInitialHlUsdc6 = ctx.redeemSettlementInitialHlUsdc6;
     freshCtx = await waitForHlWithdrawSettlementIfNeeded(freshCtx, lockedNAV);
 
     const tail = classifyRedeemTail(freshCtx);

@@ -35,6 +35,8 @@ export interface OpsContext {
   redeemInitialAaveSupplied?: bigint;
   redeemInitialHlUsdc6?: bigint;
   redeemBaselineShortPerAaveWad?: bigint;
+  /** HL spot USDC at first settlement-wait entry (post close-short, pre withdraw3) — not pre-batch ops entry. */
+  redeemSettlementInitialHlUsdc6?: bigint;
 
   /** Hyperliquid balances */
   hlUsdcBalance: bigint;   // USDC 6 dec (spot wallet)
