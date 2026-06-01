@@ -856,6 +856,259 @@ async function canSkipSmallSwapViaOwnerReserve(ctx: OpsContext, sf: bigint): Pro
   return reserve >= sf;
 }
 
+/** USDC (6 dec) → asset amount at Chainlink `ctx.price`. */
+function usdc6ToAssetAmount(ctx: OpsContext, usdc6: bigint): bigint {
+  if (usdc6 === 0n || ctx.price === 0n) return 0n;
+  return (usdc6 * (10n ** 12n) * (10n ** ctx.assetDecimals)) / ctx.price;
+}
+
+function redeemAssetGap(ctx: OpsContext): bigint {
+  return ctx.totalRedeemAsset > ctx.contractAsset ? ctx.totalRedeemAsset - ctx.contractAsset : 0n;
+}
+
+/** Conservative max LTV (bps) when sizing Aave withdraws in rising 11a loop. Default 7200 = 72%. */
+function getRisingAaveWithdrawMaxLtvBps(): bigint {
+  const raw = process.env.RISING_AAVE_WITHDRAW_MAX_LTV_BPS || '7200';
+  try {
+    const n = BigInt(raw);
+    return n > 0n && n <= 10000n ? n : 7200n;
+  } catch {
+    return 7200n;
+  }
+}
+
+/** Safety haircut on max-safe withdraw (bps). Default 9500 = 95%. */
+function getRisingAaveWithdrawSafeBps(): bigint {
+  const raw = process.env.RISING_AAVE_WITHDRAW_SAFE_BPS || '9500';
+  try {
+    const n = BigInt(raw);
+    return n > 0n && n <= 10000n ? n : 9500n;
+  } catch {
+    return 9500n;
+  }
+}
+
+/**
+ * Max asset withdraw from Aave without pushing HF below ~1 at conservative LTV:
+ * minCollateral = debt / maxLtv → maxWithdraw = supplied − minCollateral.
+ */
+function maxSafeAaveWithdrawAsset(ctx: OpsContext): bigint {
+  const supplied = ctx.aaveSupplied;
+  if (supplied === 0n) return 0n;
+  const debt = ctx.aaveDebt;
+  if (debt === 0n) return supplied;
+  const ltvBps = getRisingAaveWithdrawMaxLtvBps();
+  const debtAsAsset = usdc6ToAssetAmount(ctx, debt);
+  const minCollateral = (debtAsAsset * 10000n) / ltvBps;
+  if (supplied <= minCollateral) return 0n;
+  return supplied - minCollateral;
+}
+
+function applyRedeemCtxCarryover(from: OpsContext, to: OpsContext): void {
+  to.aaveDebtFloor = from.aaveDebtFloor;
+  to.redeemInitialShortInternal18 = from.redeemInitialShortInternal18;
+  to.redeemInitialAaveSupplied = from.redeemInitialAaveSupplied;
+  to.redeemInitialHlUsdc6 = from.redeemInitialHlUsdc6;
+  to.redeemBaselineShortPerAaveWad = from.redeemBaselineShortPerAaveWad;
+  to.redeemSettlementInitialHlUsdc6 = from.redeemSettlementInitialHlUsdc6;
+}
+
+async function refreshOpsCtx(ctx: OpsContext): Promise<OpsContext> {
+  const next = await snapshotOpsContext(ctx.kashYield, ctx.provider, ctx.signer, ctx.batchCycle, ctx.lockedNAV);
+  applyRedeemCtxCarryover(ctx, next);
+  return next;
+}
+
+async function shouldSkipRising11aSwap(ctx: OpsContext, sf: bigint): Promise<boolean> {
+  if (sf === 0n) return true;
+  const cap = getSmallSwapSkipMaxUsdc6();
+  if (sf > 0n && sf < cap) {
+    return canSkipSmallSwapViaOwnerReserve(ctx, sf);
+  }
+  return false;
+}
+
+function getRisingHlPreflightMinUsdc6(): bigint {
+  const raw = process.env.RISING_HL_PREFLIGHT_MIN_USDC || '15';
+  try {
+    const parsed = ethers.parseUnits(raw, 6);
+    return parsed > 0n ? parsed : 15_000_000n;
+  } catch {
+    return 15_000_000n;
+  }
+}
+
+/** HL spot must stay at least this far above settlement target before preflight pulls (default = fee tolerance). */
+function getRisingHlExcessMarginBufferUsdc6(): bigint {
+  const raw = process.env.RISING_HL_EXCESS_MARGIN_BUFFER_USDC || process.env.HL_WITHDRAW_FEE_TOLERANCE_USDC || '1.1';
+  try {
+    const parsed = ethers.parseUnits(raw, 6);
+    return parsed >= 0n ? parsed : 1_100_000n;
+  } catch {
+    return 1_100_000n;
+  }
+}
+
+/**
+ * Rising tail: prefer HL USDC (withdraw3 + adapter pull) over Aave withdraw + Uniswap when HL holds
+ * safe excess above settlement target. Caps pull at USDC shortfall; skips sub-threshold pulls (HL ~$1 fee).
+ */
+async function maybeRisingTailHlPreflightPull(ctx: OpsContext): Promise<OpsContext> {
+  if (config.dryRunOps) return ctx;
+  const enabled = (process.env.RISING_HL_PREFLIGHT_ENABLED ?? 'true').toLowerCase() !== 'false';
+  if (!enabled) return ctx;
+
+  let fresh = ctx;
+  const sf0 = usdcShortfallVsContract(fresh);
+  if (sf0 === 0n) return fresh;
+  if (await shouldSkipRising11aSwap(fresh, sf0)) return fresh;
+
+  const minPull = getRisingHlPreflightMinUsdc6();
+  const feeTolerance = getHlWithdrawFeeToleranceUsdc6();
+  const marginBuffer = getRisingHlExcessMarginBufferUsdc6();
+  const dust = getHlSweepDustUsdc6();
+
+  // Bridged USDC already on adapter — pull without HL withdraw3 fee.
+  if (fresh.adapterUsdcErc20 > dust) {
+    const adapterPull = fresh.adapterUsdcErc20 < sf0 ? fresh.adapterUsdcErc20 : sf0;
+    console.log(`         ↪ rising HL preflight: adapter pull ${fmtUsdc(adapterPull)} (shortfall ${fmtUsdc(sf0)})`);
+    await execHlWithdrawToKashYield(fresh, 'withdrawFromHyperliquid(rising-preflight-adapter)', adapterPull);
+    await syncHlAdapterFromHyperliquidApi(fresh, true);
+    fresh = await refreshOpsCtx(fresh);
+    await executeAaveRepay(fresh);
+    fresh = await refreshOpsCtx(fresh);
+    console.log(`         ↪ rising HL preflight done; USDC shortfall now ${fmtUsdc(usdcShortfallVsContract(fresh))}`);
+    return fresh;
+  }
+
+  if (fresh.redeemBaselineShortPerAaveWad == null) {
+    await loadOrCaptureRedeemOpsBaseline(fresh);
+  }
+  await syncHlAdapterFromHyperliquidApi(fresh, true);
+  fresh = await refreshOpsCtx(fresh);
+
+  const settlementInitial = resolveSettlementInitialHlUsdc6(fresh, feeTolerance);
+  const targetHl = targetHlUsdc6(settlementInitial, fresh.strategyRedeemFraction);
+  const hlBal = (await readHlApiUsdcBalance6(fresh)) ?? fresh.hlUsdcBalance;
+  const excess = hlBal > targetHl + marginBuffer ? hlBal - targetHl - marginBuffer : 0n;
+  const pull = excess < sf0 ? excess : sf0;
+
+  if (pull < minPull) {
+    console.log(
+      `         ↪ rising HL preflight: safe HL excess ${fmtUsdc(excess)} (spot ${fmtUsdc(hlBal)}, target ${fmtUsdc(targetHl)}) ` +
+        `< min ${fmtUsdc(minPull)} — Aave HF-safe swap loop`,
+    );
+    return fresh;
+  }
+
+  console.log(
+    `         ↪ rising HL preflight: withdraw3 ${fmtUsdc(pull)} ` +
+      `(HL ${fmtUsdc(hlBal)}, target ${fmtUsdc(targetHl)}, shortfall ${fmtUsdc(sf0)})`,
+  );
+  await maybeInitiateHlOffchainWithdraw(fresh, pull);
+
+  const maxMs = Math.max(0, parseInt(process.env.RISING_HL_PREFLIGHT_WAIT_MAX_MS || '180000', 10));
+  const pollMs = Math.max(
+    1000,
+    parseInt(process.env.RISING_HL_PREFLIGHT_WAIT_POLL_MS || process.env.HL_WITHDRAW_WAIT_POLL_MS || '20000', 10),
+  );
+  const minAdapter = pull > feeTolerance ? pull - feeTolerance : (pull * 95n) / 100n;
+  const started = Date.now();
+  while (Date.now() - started < maxMs) {
+    fresh = await refreshOpsCtx(fresh);
+    if (fresh.adapterUsdcErc20 >= minAdapter) break;
+    console.log(
+      `         … rising preflight bridge: adapter ${fmtUsdc(fresh.adapterUsdcErc20)} (need ~${fmtUsdc(minAdapter)})`,
+    );
+    await sleep(pollMs);
+  }
+
+  fresh = await refreshOpsCtx(fresh);
+  if (fresh.adapterUsdcErc20 <= dust) {
+    console.warn(
+      `         ⚠️  rising HL preflight: bridge not landed within ${(maxMs / 1000).toFixed(0)}s — Aave swap loop`,
+    );
+    return fresh;
+  }
+
+  const pullFromAdapter = fresh.adapterUsdcErc20 < sf0 ? fresh.adapterUsdcErc20 : sf0;
+  await execHlWithdrawToKashYield(fresh, 'withdrawFromHyperliquid(rising-preflight)', pullFromAdapter);
+  await syncHlAdapterFromHyperliquidApi(fresh, true);
+  fresh = await refreshOpsCtx(fresh);
+  await executeAaveRepay(fresh);
+  fresh = await refreshOpsCtx(fresh);
+  console.log(`         ↪ rising HL preflight done; USDC shortfall now ${fmtUsdc(usdcShortfallVsContract(fresh))}`);
+  return fresh;
+}
+
+/**
+ * Rising tail: iterative withdraw → 11a swap → repay so Aave HF stays ≥ 1 on high-LTV books.
+ * Replaces single-shot partial withdraw when proportional + USDC shortfall exceeds safe one-shot size.
+ */
+async function executeRisingWithdrawSwapRepayLoop(ctx: OpsContext): Promise<void> {
+  const maxRounds = Math.max(1, parseInt(process.env.RISING_11A_LOOP_MAX_ROUNDS || '12', 10));
+  const safeBps = getRisingAaveWithdrawSafeBps();
+  let fresh = await maybeRisingTailHlPreflightPull(ctx);
+
+  for (let round = 1; round <= maxRounds; round++) {
+    const sf = usdcShortfallVsContract(fresh);
+    const gap = redeemAssetGap(fresh);
+    const skipSwap = await shouldSkipRising11aSwap(fresh, sf);
+    const swapNeed = skipSwap || sf === 0n ? 0n : usdc6ToAssetAmount(fresh, sf);
+
+    if (swapNeed === 0n && gap === 0n) {
+      if (round > 1) {
+        console.log(`         ↪ rising withdraw-swap-repay loop complete (${round - 1} round(s))`);
+      }
+      return;
+    }
+
+    const maxSafe = maxSafeAaveWithdrawAsset(fresh);
+    const maxSafeBuffered = (maxSafe * safeBps) / 10000n;
+    const need = swapNeed + gap;
+    let withdraw = need < maxSafeBuffered ? need : maxSafeBuffered;
+    if (withdraw > fresh.aaveSupplied) withdraw = fresh.aaveSupplied;
+
+    if (withdraw === 0n) {
+      throw new Error(
+        `Rising tail: Aave withdraw blocked by health factor (supplied ${fmtAsset(fresh.aaveSupplied, fresh)}, ` +
+          `debt ${fmtUsdc(fresh.aaveDebt)}, USDC shortfall ${fmtUsdc(sf)}, redeem gap ${fmtAsset(gap, fresh)}). ` +
+          `At ~${(Number(fresh.strategyRedeemFraction) / 1e16).toFixed(2)}% strategy redeem, use lower LTV or manual deleverage.`,
+      );
+    }
+
+    console.log(
+      `         loop #${round}: withdraw ${fmtAsset(withdraw, fresh)} ` +
+        `(maxSafe×${Number(safeBps) / 100}%=${fmtAsset(maxSafeBuffered, fresh)}, swap≤${fmtAsset(swapNeed, fresh)}, gap ${fmtAsset(gap, fresh)})`,
+    );
+    await execTx(`withdrawFromAave(partial#${round})`, () =>
+      fresh.kashYield.withdrawFromAave(withdraw, aaveTxOverrides()),
+    );
+    fresh = await refreshOpsCtx(fresh);
+
+    if (swapNeed > 0n) {
+      const swapAmt = withdraw < swapNeed ? withdraw : swapNeed;
+      const toSell = swapAmt < fresh.contractAsset ? swapAmt : fresh.contractAsset;
+      if (toSell > 0n) {
+        await execTx(`swapForUsdc(11a#${round})`, () => fresh.kashYield.swapForUsdc(toSell, swapTxOverrides()));
+        fresh = await refreshOpsCtx(fresh);
+        await executeAaveRepay(fresh);
+        fresh = await refreshOpsCtx(fresh);
+      }
+    }
+  }
+
+  const sfFinal = usdcShortfallVsContract(fresh);
+  const gapFinal = redeemAssetGap(fresh);
+  const skipSwapFinal = await shouldSkipRising11aSwap(fresh, sfFinal);
+  if ((!skipSwapFinal && sfFinal > 0n) || gapFinal > 0n) {
+    throw new Error(
+      `Rising tail: withdraw-swap-repay loop exhausted ${maxRounds} rounds ` +
+        `(USDC shortfall ${fmtUsdc(sfFinal)}, redeem gap ${fmtAsset(gapFinal, fresh)}). Re-run or raise RISING_11A_LOOP_MAX_ROUNDS.`,
+    );
+  }
+}
+
 export async function getAaveAvailableBorrowUsdc6(ctx: OpsContext): Promise<bigint> {
   if (!ctx.aavePoolAddress || ctx.aavePoolAddress === ethers.ZeroAddress) return 0n;
   try {
@@ -1469,9 +1722,8 @@ const aaveWithdraw = (mode: 'proportional' | 'remaining'): OpStep => ({
 });
 
 /**
- * 10-partial — Withdraw a small amount of Aave collateral to cover USDC shortfall (rising price).
- * Runs BEFORE aave_repay in the rising-price path.
- * Size: (strategy debt target - contractUsdc) converted to asset units at current price.
+ * 10-partial — Rising tail: HF-safe withdraw → 11a swap → repay loop (then dex_swap_11a mops up dust).
+ * Size per round: min(95% × maxSafeWithdraw, USDC-shortfall asset + redeem gap).
  */
 const aaveWithdrawPartial: OpStep = {
   id: 'aave_withdraw_partial',
@@ -1479,60 +1731,51 @@ const aaveWithdrawPartial: OpStep = {
   refreshCtx: true,
   describe: (ctx) => {
     const shortfall = usdcShortfallVsContract(ctx);
-    const assetForSf =
-      shortfall > 0n ? (shortfall * (10n ** 12n) * (10n ** ctx.assetDecimals)) / ctx.price : 0n;
-    const redeemGap = ctx.totalRedeemAsset > ctx.contractAsset ? ctx.totalRedeemAsset - ctx.contractAsset : 0n;
-    return `partial Aave withdraw ${fmtAsset(assetForSf, ctx)} for 11a USDC shortfall ${fmtUsdc(shortfall)}; redeem gap ${fmtAsset(redeemGap, ctx)} handled after repay`;
+    const assetForSf = usdc6ToAssetAmount(ctx, shortfall);
+    const gap = redeemAssetGap(ctx);
+    return (
+      `rising HL preflight (if excess) + HF-safe withdraw-swap-repay loop (max LTV ${Number(getRisingAaveWithdrawMaxLtvBps()) / 100}%) — ` +
+      `swap need ${fmtAsset(assetForSf, ctx)}, redeem gap ${fmtAsset(gap, ctx)}`
+    );
   },
   canSkip: async (ctx) => {
     if (ctx.aaveSupplied === 0n) return true;
 
     const sf = usdcShortfallVsContract(ctx);
-    if (sf === 0n) return true; // no USDC shortfall for the debt slice being unwound
+    const gap = redeemAssetGap(ctx);
+    if (sf === 0n && gap === 0n) return true;
+
     const cap = getSmallSwapSkipMaxUsdc6();
     if (sf > 0n && sf < cap) {
       if (await canSkipSmallSwapViaOwnerReserve(ctx, sf)) {
+        if (gap === 0n) {
+          console.log(
+            `         ↪ skip partial Aave withdraw — shortfall ${fmtUsdc(sf)} < ${fmtUsdc(cap)} ` +
+              '(SMALL_SWAP_SKIP_MAX_USDC) and ownerUsdcReserve ≥ shortfall (coverUsdcShortfall path)',
+          );
+          return true;
+        }
         console.log(
-          `         ↪ skip partial Aave withdraw — shortfall ${fmtUsdc(sf)} < ${fmtUsdc(cap)} ` +
-            '(SMALL_SWAP_SKIP_MAX_USDC) and ownerUsdcReserve ≥ shortfall (coverUsdcShortfall path)',
+          `         ↪ USDC shortfall ${fmtUsdc(sf)} covered via owner reserve — loop runs for redeem gap only`,
         );
+      } else {
+        console.log(
+          `         ↪ shortfall ${fmtUsdc(sf)} < ${fmtUsdc(cap)} but owner reserve cannot fully cover — running loop + 11a`,
+        );
+      }
+    }
+
+    if (sf > 0n && !(await shouldSkipRising11aSwap(ctx, sf))) {
+      const spotDex = await ctx.kashYield.spotDexAddress().catch(() => null);
+      if (!spotDex || spotDex === ethers.ZeroAddress) {
+        console.warn('         ⚠️  spotDexAddress not configured — cannot cover USDC shortfall via 11a');
         return true;
       }
-      console.log(
-        `         ↪ shortfall ${fmtUsdc(sf)} < ${fmtUsdc(cap)} but owner reserve cannot fully cover — running partial withdraw + 11a`,
-      );
-    }
-    const spotDex = await ctx.kashYield.spotDexAddress().catch(() => null);
-    if (!spotDex || spotDex === ethers.ZeroAddress) {
-      console.warn('         ⚠️  spotDexAddress not configured — cannot cover USDC shortfall via 11a');
-      return true;
     }
     return false;
   },
   execute: async (ctx) => {
-    const sf = usdcShortfallVsContract(ctx);
-    const cap = getSmallSwapSkipMaxUsdc6();
-    const smallSkipOwner =
-      sf > 0n && sf < cap && (await canSkipSmallSwapViaOwnerReserve(ctx, sf));
-
-    let assetForShortfall = 0n;
-    if (!smallSkipOwner && sf > 0n) {
-      assetForShortfall = (sf * (10n ** 12n) * (10n ** ctx.assetDecimals)) / ctx.price;
-    } else if (smallSkipOwner && sf > 0n) {
-      console.log(
-        `         ↪ USDC shortfall ${fmtUsdc(sf)} < ${fmtUsdc(cap)} with owner reserve — no Aave pull for swap; ` +
-          'withdrawing max(redeem gap, 0) only',
-      );
-    }
-
-    const redeemGap = ctx.totalRedeemAsset > ctx.contractAsset ? ctx.totalRedeemAsset - ctx.contractAsset : 0n;
-    let toWithdraw = assetForShortfall;
-    if (toWithdraw === 0n) return;
-    if (toWithdraw > ctx.aaveSupplied) toWithdraw = ctx.aaveSupplied;
-    console.log(
-      `         ${fmtAsset(toWithdraw, ctx)} (for swap≤${fmtAsset(assetForShortfall, ctx)}, redeem gap ${fmtAsset(redeemGap, ctx)})`,
-    );
-    await execTx('withdrawFromAave(partial)', () => ctx.kashYield.withdrawFromAave(toWithdraw, aaveTxOverrides()));
+    await executeRisingWithdrawSwapRepayLoop(ctx);
   },
 };
 
@@ -1546,7 +1789,7 @@ const dexSwapForUsdc: OpStep = {
   refreshCtx: true,
   describe: (ctx) => {
     const shortfall = usdcShortfallVsContract(ctx);
-    const assetToSell = (shortfall * (10n ** 12n) * (10n ** ctx.assetDecimals)) / ctx.price;
+    const assetToSell = usdc6ToAssetAmount(ctx, shortfall);
     return `swap ${fmtAsset(assetToSell, ctx)} → USDC to cover ${fmtUsdc(shortfall)} shortfall (11a)`;
   },
   canSkip: async (ctx) => {
@@ -1575,7 +1818,7 @@ const dexSwapForUsdc: OpStep = {
   execute: async (ctx) => {
     const shortfall = usdcShortfallVsContract(ctx);
     if (shortfall === 0n) return;
-    const assetToSell = (shortfall * (10n ** 12n) * (10n ** ctx.assetDecimals)) / ctx.price;
+    const assetToSell = usdc6ToAssetAmount(ctx, shortfall);
     // Cap to what contract actually holds
     const toSell = assetToSell < ctx.contractAsset ? assetToSell : ctx.contractAsset;
     if (toSell === 0n) return;

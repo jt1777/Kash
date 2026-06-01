@@ -110,6 +110,13 @@ See `.env.example` for all required variables. Key ones:
 | `HL_WITHDRAW_FEE_TOLERANCE_USDC` | Settlement inbound + balanced/falling: fee slack (HL ~$1 + bridge; expect 24, accept ~22.9 landed) | `1.1` |
 | `HL_SETTLEMENT_INBOUND_MIN_BPS` | Min % of expected HL inbound on KashYield vs baseline (9500 = 95%) | `9500` |
 | `SMALL_SWAP_SKIP_MAX_USDC` | Rising tail — see [Redeem tail / spot dust thresholds](#redeem-tail--spot-dust-thresholds) | `2` |
+| `RISING_HL_PREFLIGHT_ENABLED` | Rising tail: pull safe HL excess via `withdraw3` before Aave+Uniswap loop | `true` |
+| `RISING_HL_PREFLIGHT_MIN_USDC` | Min HL pull size to justify ~$1 withdraw3 fee (human USDC) | `15` |
+| `RISING_HL_PREFLIGHT_WAIT_MAX_MS` | Max wait for rising preflight bridge to adapter (ms) | `180000` |
+| `RISING_AAVE_WITHDRAW_MAX_LTV_BPS` | Rising loop: conservative max LTV when sizing Aave withdraw chunks (bps) | `7200` |
+| `RISING_AAVE_WITHDRAW_SAFE_BPS` | Haircut on max-safe Aave withdraw per loop round (bps) | `9500` |
+| `RISING_11A_LOOP_MAX_ROUNDS` | Max rising-tail withdraw→swap→repay iterations | `12` |
+| `OPS_REDEEM_SETTLEMENT_INITIAL_HL_USDC6` | Recovery override: HL spot USDC (6 dec) at first settlement wait | — |
 | `SETTLEMENT_NAV_BUFFER_BPS` | Shrink post-ops settlement NAV before `updateNAV` (mint leg only; bps). Default `0` | `0` |
 | `MARK_DONE_PAYOUT_TOLERANCE_ASSET` | Slack for mark-done + Phase 2 vs **G** + fees + owner reserve (native units: sat / wei). See [Payout tolerance](#payout-tolerance-g--fees--owner-reserve) | BTC: `30`, ETH: `1e13` |
 
@@ -132,15 +139,17 @@ This is **not** for real ops shortfalls (missing 0.0001 wBTC). Increase only for
 
 ### Redeem tail / spot dust thresholds
 
-Used by [`opsExec.ts`](src/batch/opsExec.ts) / [`targetStateEngine.ts`](src/batch/targetStateEngine.ts) so the **rising** tail can skip tiny **11a** legs. Values are **human USDC amounts** (6 decimals), e.g. `2` means **$2.00`.
+Used by [`opsExec.ts`](src/batch/opsExec.ts) / [`targetStateEngine.ts`](src/batch/targetStateEngine.ts) for **rising** tail funding and tiny **11a** skips. USDC env values are **human amounts** (6 decimals), e.g. `2` = **$2.00**.
 
 | Variable | When it applies | Behavior |
 |----------|-----------------|----------|
-| **`SMALL_SWAP_SKIP_MAX_USDC`** | **Rising** price tail (ops path: repay Aave USDC) | Let `sf = aaveDebt − contractUsdc` (adjusted USDC on KashYield). If `0 < sf <` this threshold, the bot **skips** partial Aave withdraw and **11a** (ETH→USDC). You must **send enough USDC** to KashYield (and optionally call `coverUsdcShortfall` if using owner reserve accounting), then complete repay / playbook. Default **`2`**. |
+| **`SMALL_SWAP_SKIP_MAX_USDC`** | **Rising** tail | `sf = strategyDebt − contractUsdc`. If `0 < sf <` threshold **and** `ownerUsdcReserve ≥ sf`, skip 11a swap leg; use `coverUsdcShortfall`. Default **`2`**. |
+| **`RISING_HL_PREFLIGHT_*`** | **Rising** tail, before Aave loop | If HL spot is safely above settlement target, `withdraw3` + adapter pull up to `min(excess, sf)` when pull ≥ **`RISING_HL_PREFLIGHT_MIN_USDC`** (default **$15**). Adapter ERC-20 pulled first (no HL fee). |
+| **`RISING_AAVE_WITHDRAW_*` / `RISING_11A_LOOP_MAX_ROUNDS`** | **Rising** tail, after preflight | HF-safe **withdraw → 11a swap → repay** in chunks (default max LTV **72%**, **12** rounds). Avoids Aave HF below 1 on large partial redeems. |
 
-**Falling** tail **11b** (USDC→ETH/wBTC) swaps **only the USDC needed** for the redeem asset shortfall (`min(usdcNeeded, deployable USDC)`). If the vault already has enough ETH/wBTC for redeem sizing, **11b does not swap** and excess USDC stays on the vault (including **dust** amounts when a swap is needed). Legacy env **`FALLING_11B_USDC_RESERVE`** is ignored.
+**Falling** tail **11b** swaps **`min(usdcNeeded, deployable USDC)`** only. Legacy **`FALLING_11B_USDC_RESERVE`** is ignored.
 
-Swaps **above** the rising-tail threshold still use on-chain **`minOut`** from Chainlink + slippage settings in the vault; **`SMALL_SWAP_SKIP_MAX_USDC`** only gates **whether** the bot submits **11a** for small USDC shortfalls.
+Swaps above the rising small-skip threshold use on-chain **`minOut`**; **`SMALL_SWAP_SKIP_MAX_USDC`** only gates dust **11a** legs.
 
 **Mint `openShort` (wBTC):** internal target short Δ is stored in 18-dec perp units; on-chain `openShort` uses 8-dec wBTC. If `(Δ * 10^8) / 10^18` rounds to **0**, the step is a deliberate no-op (sub-satoshi — no economic impact).
 
@@ -191,8 +200,9 @@ Order: **Aave deposit** → **`markMint*Deployed`** → **borrow to LTV** → **
 
 #### Redeem ops (`redeem_hl`)
 
-1. **Core:** proportional **close short** → **HL settlement** (`withdraw3` + on-chain adapter pull to KashYield). Settlement completes when HL spot is at target, adapter ERC-20 is drained, **and** KashYield **USDC increased** since wait start by ~expected inbound (e.g. withdraw3 **$24** → **~$22.9** landed is OK via `HL_WITHDRAW_FEE_TOLERANCE_USDC` / `HL_SETTLEMENT_INBOUND_MIN_BPS`). Full strategy repay is **not** required before tail — **rising** uses **11a** for the shortfall. Pre-existing ops USDC alone does **not** satisfy wait when a withdraw is expected. Syncs adapter from HL API before `withdraw3`; **at most one `withdraw3` per `npm start`**.
-2. **Tail** (after settlement wait): **balanced / falling / rising** — Aave repay, Aave withdraw, optional **11a** / **11b** spot swaps; **`coverUsdcShortfall`** for small HL withdraw fee gaps (`HL_WITHDRAW_FEE_TOLERANCE_USDC`).
+1. **Core:** proportional **close short** → **HL settlement** (`withdraw3` + on-chain adapter pull to KashYield). Settlement target uses **`settlementInitialHlUsdc6`** captured on first settlement wait (post close-short, pre-withdraw3) and cached in **`bot/.cache/redeem-baselines.json`** — ops-only re-runs must not recompute target from today’s HL spot alone. Adapter pulls use **adapter ERC-20 balance**, not HL ledger “excess” dust. Settlement completes when HL spot is at target, adapter ERC-20 is drained, **and** KashYield **USDC increased** since wait start by ~expected inbound (e.g. withdraw3 **$24** → **~$22.9** landed via `HL_WITHDRAW_FEE_TOLERANCE_USDC` / `HL_SETTLEMENT_INBOUND_MIN_BPS`). Full strategy repay is **not** required before tail — **rising** uses **11a** for any remaining shortfall. Syncs adapter from HL API before `withdraw3`; **at most one `withdraw3` per settlement wait loop** (rising preflight may send another if HL still holds safe excess).
+2. **Tail** (after settlement): **balanced / falling / rising** — Aave repay, withdraw, optional **11a** / **11b**; **`coverUsdcShortfall`** for HL fee gaps.
+3. **Rising tail order:** repay contract USDC → **HL preflight** (if safe excess) → **HF-safe Aave withdraw / 11a / repay loop** → residual 11a → owner cover → final repay → **`aave_withdraw_rest`**.
 
 See [`targetStateEngine.ts`](src/batch/targetStateEngine.ts) and [`opsExec.ts`](src/batch/opsExec.ts).
 
@@ -506,6 +516,8 @@ Only re-run `--step=nav` if settlement NAV was never written or you intentionall
 **6. Dirty HL / adapter state (manual HL close, failed relay, stale mirror)**
 
 Symptoms: `owner:status` **HL USDC in spot** disagrees with on-chain **`getHyperliquidSpotBalance()`** mirror; settlement loop fires repeated **`withdraw3`** (~$1 fee each); batch stuck at **phase 1** after a partial HL unwind.
+
+**Ops-only re-run / wrong HL settlement target:** settlement target must use **`settlementInitialHlUsdc6`** (cached in **`bot/.cache/redeem-baselines.json`** on first settlement wait). If cache is missing, bot may recover from vault+HL balances or accept **`OPS_REDEEM_SETTLEMENT_INITIAL_HL_USDC6`** (6-dec USDC). **Adapter → vault pulls** use adapter ERC-20 balance, not HL ledger dust.
 
 **Do not** run a normal full `npm start` or bare `--step=aave` hoping it self-heals. Use this sequence:
 
