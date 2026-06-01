@@ -433,7 +433,7 @@ function AppContent() {
               </div>
               <h3 className="font-semibold text-gray-900 mb-2">Daily Batch Processing</h3>
               <p className="text-sm text-gray-600">
-                Submit requests before 23:50 UTC. Batch processes run between 23:50-23:59 daily.
+                Submit requests before 23:45 UTC. Batch processes run between 23:45-23:59 daily.
               </p>
             </div>
 
@@ -445,7 +445,7 @@ function AppContent() {
               </div>
               <h3 className="font-semibold text-gray-900 mb-2">Low Fees</h3>
               <p className="text-sm text-gray-600">
-                Only 0.03% (3 bps) fee on all transactions. No hidden costs.
+                Only 0.05% (5 bps) fee on all transactions. No hidden costs.
               </p>
             </div>            
           </div>

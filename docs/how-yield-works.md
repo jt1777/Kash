@@ -44,7 +44,7 @@ NAV starts at $1.00 when the protocol launches. As yield accrues, NAV increases.
 
 ## When is NAV updated?
 
-NAV is updated **once per day** during batch processing (around 23:50–23:59 UTC). The operator calculates the true portfolio value off-chain, then submits the new NAV to the contract before distributing tokens. This means the NAV you see in the app reflects the previous day's closing value.
+NAV is updated **once per day** during batch processing (around 23:45–23:59 UTC). The operator calculates the true portfolio value off-chain, then submits the new NAV to the contract before distributing tokens. This means the NAV you see in the app reflects the previous day's closing value.
 
 The contract does not automatically calculate NAV from the portfolio — the operator calculates portfolio value externally and submits it each day. On-chain price feeds are used to value deposits at batch time, but the complete portfolio valuation (collateral positions, perp position values, accrued funding) is computed by the operator and then written to the contract. All NAV submissions are recorded on-chain and publicly verifiable.
 
@@ -59,10 +59,10 @@ Every 24 hours:
 | Time (UTC) | What happens |
 |-----------|--------------|
 | 00:00 – 23:49 | User window: you can submit deposits and redemptions |
-| 23:50 – 23:59 | Processing window: batch runs, no new requests accepted |
+| 23:45 – 23:59 | Processing window: batch runs, no new requests accepted |
 | After 23:59 | Batch complete: KASH tokens sent to depositors, assets sent to redeemers |
 
-Your deposit or redemption will be included in the batch for the day you submit it, as long as you submit before **23:50 UTC**.
+Your deposit or redemption will be included in the batch for the day you submit it, as long as you submit before **23:45 UTC**.
 
 ---
 

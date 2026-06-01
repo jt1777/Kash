@@ -26,18 +26,18 @@ export async function debugContract(provider: ethers.Provider) {
     // Check time windows
     const currentTime = await provider.getBlock('latest').then(b => b?.timestamp || 0);
     const timeOfDay = currentTime % 86400;
-    const userWindowEnd = 23 * 3600 + 50 * 60; // 23:50
+    const userWindowEnd = 23 * 3600 + 45 * 60; // 23:45
     const isUserWindow = timeOfDay < userWindowEnd;
     const isProcessingWindow = timeOfDay >= userWindowEnd && timeOfDay < 86400;
 
     console.log(`\n⏰ Time Window Status:`);
     console.log(`   Current Time: ${new Date(currentTime * 1000).toISOString()}`);
     console.log(`   Time of Day (seconds): ${timeOfDay}`);
-    console.log(`   User Window (00:00 - 23:50): ${isUserWindow ? '✅ OPEN' : '❌ CLOSED'}`);
-    console.log(`   Processing Window (23:50 - 00:00): ${isProcessingWindow ? '✅ ACTIVE' : '❌ INACTIVE'}`);
+    console.log(`   User Window (00:00 - 23:45): ${isUserWindow ? '✅ OPEN' : '❌ CLOSED'}`);
+    console.log(`   Processing Window (23:45 - 00:00): ${isProcessingWindow ? '✅ ACTIVE' : '❌ INACTIVE'}`);
 
     if (!isUserWindow && !isProcessingWindow) {
-      console.log('   ⚠️  You can only mint during user window (before 23:50 UTC)!');
+      console.log('   ⚠️  You can only mint during user window (before 23:45 UTC)!');
     }
 
     // Check current NAV

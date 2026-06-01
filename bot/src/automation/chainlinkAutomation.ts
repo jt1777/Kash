@@ -9,7 +9,7 @@ import { config } from '../config';
  * compatible checkUpkeep and performUpkeep functions.
  * 
  * Three types of Upkeeps:
- * 1. Batch Processor - Daily at 23:50 UTC
+ * 1. Batch Processor - Daily at 23:45 UTC
  * 2. Rebalancer - Hourly allocation checks
  * 3. Liquidation Guard - Continuous health factor monitoring
  * 
@@ -76,7 +76,7 @@ export class ChainlinkAutomationManager {
    * Initialize default upkeep configurations
    */
   private initializeUpkeeps(): void {
-    // 1. Batch Processor - Daily at 23:50 UTC
+    // 1. Batch Processor - Daily at 23:45 UTC
     this.upkeeps.set('batchProcessor', {
       name: 'KASH Batch Processor',
       checkData: '0x01', // Type identifier

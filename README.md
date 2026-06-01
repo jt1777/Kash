@@ -48,7 +48,7 @@ A capital-efficient yield strategy protocol. Users deposit ETH or wBTC and recei
 
 ### Off-chain bot
 
-1. **Processing window** (last 10 minutes of each cycle by default): Bot runs five-step batch flow (`phase1` → `ops` → `nav` → `mark-done` → `phase2`) via `performUpkeep` and related calls. See [bot/README.md](bot/README.md).
+1. **Processing window** (last 15 minutes of each cycle by default): Bot runs five-step batch flow (`phase1` → `ops` → `nav` → `mark-done` → `phase2`) via `performUpkeep` and related calls. See [bot/README.md](bot/README.md).
 2. **Ops between Phase 1 and Phase 2:** Target-state engine deploys or unwinds capital (Aave + Hyperliquid) before settlement NAV, **`markBatchOpsDone(batchCycle, G)`**, and Phase 2 distribution — not event-driven post-batch reactions.
 
 ## 🕐 Batch Cycle and Time Windows

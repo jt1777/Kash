@@ -3,7 +3,7 @@
 // Only the owner can call. Min 60 seconds.
 //
 // Window logic applied automatically:
-//   Production (86400 s / 1 day) → user window = 0–85800 s (23 h 50 m), processing = last 10 min.
+//   Production (86400 s / 1 day) → user window = 0–85500 s (23 h 45 m), processing = last 15 min.
 //   Any shorter cycle (e.g. 3600 for testing) → windows disabled (open the entire cycle).
 //   Override with USER_WINDOW_END and PROCESSING_WINDOW_START env vars if needed.
 //
@@ -23,7 +23,7 @@ require("dotenv").config();
 const hre = require("hardhat");
 
 const PRODUCTION_CYCLE = 86400n;
-const DEFAULT_USER_WINDOW_END = 23n * 3600n + 50n * 60n; // 85800 s
+const DEFAULT_USER_WINDOW_END = 23n * 3600n + 45n * 60n; // 85500 s
 
 async function main() {
   const raw = process.env.CYCLE_SECONDS;

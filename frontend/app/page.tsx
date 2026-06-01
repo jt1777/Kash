@@ -44,7 +44,7 @@ export default function Home() {
       },
     },
     scheduleHint:
-      'Mint/redeem requests accepted until batch cutoff (~23:50 UTC); settles during processing — confirm timing in docs / contract.',
+      'Mint/redeem requests accepted until batch cutoff (~23:45 UTC); settles during processing — confirm timing in docs / contract.',
     reads: [
       'isUserWindow()',
       'isProcessingWindow()',
@@ -508,7 +508,7 @@ export default function Home() {
         <section className="stats">
           <div className="container">
             <div className="stats-grid">
-              <div><div className="stat-value">3 bps</div><div className="stat-label">Protocol fee</div></div>
+              <div><div className="stat-value">5 bps</div><div className="stat-label">Protocol fee</div></div>
               <div><div className="stat-value">Δ</div><div className="stat-label">Delta-neutral strategies</div></div>
               <div><div className="stat-value">UTC</div><div className="stat-label">Daily batch window</div></div>
             </div>
@@ -605,14 +605,14 @@ export default function Home() {
               <div className="proof-card">
                 <h3>Fee</h3>
                 <p>
-                  Read <code style={{ color: '#00FFFF' }}>feeBps()</code> on the same contracts. The app markets <strong>3 bps</strong>; confirm on-chain before sizing trades.
+                  Read <code style={{ color: '#00FFFF' }}>feeBps()</code> on the same contracts. The app markets <strong>5 bps</strong>; confirm on-chain before sizing trades.
                 </p>
               </div>
               <div className="proof-card">
                 <h3>Batches &amp; settlement</h3>
                 <p>
                   Use <code style={{ color: '#00FFFF' }}>isUserWindow()</code> / <code style={{ color: '#00FFFF' }}>isProcessingWindow()</code> and subscribe to{' '}
-                  <code style={{ color: '#00FFFF' }}>BatchProcessed</code> events to anchor automation — cutoff time is documented (~23:50 UTC); validate against deployment.
+                  <code style={{ color: '#00FFFF' }}>BatchProcessed</code> events to anchor automation — cutoff time is documented (~23:45 UTC); validate against deployment.
                 </p>
               </div>
               <div className="proof-card">

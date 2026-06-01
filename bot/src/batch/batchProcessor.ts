@@ -77,9 +77,9 @@ export class BatchProcessor {
     }
     if (!isProcessingWindow) {
       if (config.skipProcessingWindowCheck) {
-        console.log('⏳ Not in processing window (23:50-23:59 UTC); continuing anyway (SKIP_PROCESSING_WINDOW_CHECK=true)\n');
+        console.log('⏳ Not in processing window (23:45-23:59 UTC); continuing anyway (SKIP_PROCESSING_WINDOW_CHECK=true)\n');
       } else {
-        console.log('⏳ Not in processing window (23:50-23:59 UTC)');
+        console.log('⏳ Not in processing window (23:45-23:59 UTC)');
         if (config.waitForProcessingWindow) {
           console.log('   Waiting for processing window...');
           await this.waitForProcessingWindow();
@@ -688,7 +688,7 @@ export class BatchProcessor {
   }
 
   /**
-   * Wait for the processing window (23:50-23:59 UTC)
+   * Wait for the processing window (23:45-23:59 UTC)
    */
   private async waitForProcessingWindow(): Promise<void> {
     return new Promise(async (resolve) => {

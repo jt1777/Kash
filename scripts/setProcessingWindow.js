@@ -6,15 +6,15 @@
  *   processingWindowStart — bot cannot run Phase 1 / Phase 2 before this second-of-day
  *
  * Production defaults (seconds from UTC midnight):
- *   userWindowEnd         = 85800  (23:50:00 UTC — users close 10 min before processing)
- *   processingWindowStart = 85800  (23:50:00 UTC — bot processes in the last 10 min)
+ *   userWindowEnd         = 85500  (23:45:00 UTC — user submissions close; processing begins)
+ *   processingWindowStart = 85500  (23:45:00 UTC — bot processes in the last 15 min)
  *
  * To DISABLE windowing for testing (bot can process any time, users can submit any time):
  *   PROCESSING_WINDOW_START=0 USER_WINDOW_END=86400 \
  *     npx hardhat run scripts/setProcessingWindow.js --network arbitrumOne
  *
  * To RESTORE production defaults:
- *   PROCESSING_WINDOW_START=85800 USER_WINDOW_END=85800 \
+ *   PROCESSING_WINDOW_START=85500 USER_WINDOW_END=85500 \
  *     npx hardhat run scripts/setProcessingWindow.js --network arbitrumOne
  *
  * You can also set just one value by omitting the other env var.
@@ -49,7 +49,7 @@ async function main() {
     throw new Error(
       "Set at least one of PROCESSING_WINDOW_START or USER_WINDOW_END.\n" +
       "  Disable windowing: PROCESSING_WINDOW_START=0 USER_WINDOW_END=86400\n" +
-      "  Restore defaults:  PROCESSING_WINDOW_START=85800 USER_WINDOW_END=85800"
+      "  Restore defaults:  PROCESSING_WINDOW_START=85500 USER_WINDOW_END=85500"
     );
   }
 
@@ -75,7 +75,7 @@ async function main() {
   if (processingWindowStart !== null) {
     if (processingWindowStart === 0) {
       console.log("⚠️  Setting processingWindowStart=0 disables the processing window (bot runs any time).");
-      console.log("   Remember to restore to 85800 before going live with real users.");
+      console.log("   Remember to restore to 85500 before going live with real users.");
     }
     const tx = await kashYield.setProcessingWindowStart(processingWindowStart);
     console.log(`setProcessingWindowStart(${processingWindowStart}) tx: ${tx.hash}`);

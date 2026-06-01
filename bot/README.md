@@ -159,7 +159,7 @@ Swaps above the rising small-skip threshold use on-chain **`minOut`**; **`SMALL_
 
 Handles the daily two-phase batch on KashYield (`performUpkeep` → ops → settlement NAV → mark-done → Phase 2):
 
-- Waits for the processing window (23:50–23:59 UTC) when configured
+- Waits for the processing window (23:45–23:59 UTC) when configured
 - Pre–Phase-1 and post-ops **`updateNAV`**
 - **`runStepOps`** → **`runTargetStateEngine`** → **`opsExec`** delta pipelines (sole automated mint/redeem ops path)
 - **`markBatchOpsDone(batchCycle, G)`** preflight (vault vs **G** + mint fees + owner reserve; locks **G** on-chain)
@@ -377,7 +377,7 @@ Shows:
 - Until confirmed, the contract has no active exchange and the bot will skip HL operations
 
 ### "Not in processing window"
-- Batch processing only works between 23:50-23:59 UTC (unless the contract uses testing constants for full 24h)
+- Batch processing only works between 23:45-23:59 UTC (unless the contract uses testing constants for full 24h)
 - Set `WAIT_FOR_PROCESSING_WINDOW=true` to have the bot wait for the window, or set `SKIP_PROCESSING_WINDOW_CHECK=true` to run the batch logic anyway for testing (the contract may still revert if it enforces the window)
 
 ### "Another batch bot is already running"

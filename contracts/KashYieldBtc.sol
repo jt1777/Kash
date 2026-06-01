@@ -179,11 +179,11 @@ contract KashYieldBtc is ReentrancyGuard {
     mapping(address => uint256) public totalRedeemedBtcByUser;
 
     // Time-window boundaries (seconds into the cycle).
-    // Default: users can request mints/redeems for the first 23h 50m of each cycle,
-    // then a 10-minute processing window closes user submissions so the bot can settle.
+    // Default: users can request mints/redeems for the first 23h 45m of each cycle,
+    // then a 15-minute processing window closes user submissions so the bot can settle.
     // Set userWindowEnd = cycleDurationSeconds and processingWindowStart = 0 to disable windowing.
-    uint256 public userWindowEnd         = 23 * 3600 + 50 * 60; // 85800 s = 23 h 50 m
-    uint256 public processingWindowStart = 23 * 3600 + 50 * 60; // 85800 s = 23 h 50 m
+    uint256 public userWindowEnd         = 23 * 3600 + 45 * 60; // 85500 s = 23 h 45 m
+    uint256 public processingWindowStart = 23 * 3600 + 45 * 60; // 85500 s = 23 h 45 m
     uint256 public cycleDurationSeconds  = 86400;
 
     // ── Modifiers ─────────────────────────────────────────────────────────

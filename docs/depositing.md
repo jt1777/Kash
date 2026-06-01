@@ -17,7 +17,7 @@ Depositing into KASH gives you KASH tokens that earn yield over time.
 KASH uses a **batch system**. Deposits are not processed instantly. Instead:
 
 1. You submit a deposit request — this queues your funds for the next batch
-2. Once per day, the batch is processed (around **23:50 UTC**)
+2. Once per day, the batch is processed (around **23:45 UTC**)
 3. After processing completes, KASH tokens are sent to your wallet automatically — no claim step needed
 
 This means there is a **waiting period** between when you submit your deposit and when you receive your KASH tokens. The wait is at most 24 hours.
@@ -57,7 +57,7 @@ Your deposited ETH or wBTC is held in the smart contract until the batch runs. T
 
 ## Fees
 
-There is a **0.03% fee (3 basis points)** on deposits and redemptions. This is deducted from the amount processed in each batch.
+There is a **0.05% fee (5 basis points)** on deposits and redemptions. This is deducted from the amount processed in each batch.
 
 ---
 

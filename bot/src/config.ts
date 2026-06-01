@@ -116,7 +116,7 @@ export const config = {
   },
 
   // Configuration
-  batchProcessingTime: process.env.BATCH_PROCESSING_TIME || '23:50',
+  batchProcessingTime: process.env.BATCH_PROCESSING_TIME || '23:45',
   logLevel: process.env.LOG_LEVEL || 'info',
   /** When false, exit immediately if not in processing window instead of waiting */
   waitForProcessingWindow: process.env.WAIT_FOR_PROCESSING_WINDOW !== 'false',

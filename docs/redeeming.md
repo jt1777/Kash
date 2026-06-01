@@ -47,13 +47,13 @@ You can redeem any portion of your KASH balance. You don't have to exit your ent
 
 ## Timing
 
-Redemption requests submitted **after the batch starts** (~23:50 UTC) will be queued for the **following day's batch**. Submit your request before 23:50 UTC to have it included in the current day's batch.
+Redemption requests submitted **after the batch starts** (~23:45 UTC) will be queued for the **following day's batch**. Submit your request before 23:45 UTC to have it included in the current day's batch.
 
 ---
 
 ## Fees
 
-The same **0.03% fee (3 basis points)** applies to redemptions. This is deducted during batch processing.
+The same **0.05% fee (5 basis points)** applies to redemptions. This is deducted during batch processing.
 
 ---
 
