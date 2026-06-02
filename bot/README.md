@@ -145,7 +145,7 @@ Used by [`opsExec.ts`](src/batch/opsExec.ts) / [`targetStateEngine.ts`](src/batc
 |----------|-----------------|----------|
 | **`SMALL_SWAP_SKIP_MAX_USDC`** | **Rising** tail | `sf = strategyDebt − contractUsdc`. If `0 < sf <` threshold **and** `ownerUsdcReserve ≥ sf`, skip 11a swap leg; use `coverUsdcShortfall`. Default **`2`**. |
 | **`RISING_HL_PREFLIGHT_*`** | **Rising** tail, before Aave loop | If HL spot is safely above settlement target, `withdraw3` + adapter pull up to `min(excess, sf)` when pull ≥ **`RISING_HL_PREFLIGHT_MIN_USDC`** (default **$15**). Adapter ERC-20 pulled first (no HL fee). |
-| **`RISING_AAVE_WITHDRAW_*` / `RISING_11A_LOOP_MAX_ROUNDS`** | **Rising** tail, after preflight | HF-safe **withdraw → 11a swap → repay** in chunks (default max LTV **72%**, **12** rounds). Avoids Aave HF below 1 on large partial redeems. |
+| **`RISING_AAVE_WITHDRAW_*` / `RISING_11A_LOOP_MAX_ROUNDS`** | **Rising** tail, after preflight | HF-safe **withdraw → 11a swap → repay** in chunks sized to **strategy debt only** (default max LTV **72%**, **12** rounds). Phase 2 payout collateral uses **`aave_withdraw_rest`** after debt is cleared. |
 
 **Falling** tail **11b** swaps **`min(usdcNeeded, deployable USDC)`** only. Legacy **`FALLING_11B_USDC_RESERVE`** is ignored.
 
@@ -202,7 +202,7 @@ Order: **Aave deposit** → **`markMint*Deployed`** → **borrow to LTV** → **
 
 1. **Core:** proportional **close short** → **HL settlement** (`withdraw3` + on-chain adapter pull to KashYield). Settlement target uses **`settlementInitialHlUsdc6`** captured on first settlement wait (post close-short, pre-withdraw3) and cached in **`bot/.cache/redeem-baselines.json`** — ops-only re-runs must not recompute target from today’s HL spot alone. Adapter pulls use **adapter ERC-20 balance**, not HL ledger “excess” dust. Settlement completes when HL spot is at target, adapter ERC-20 is drained, **and** KashYield **USDC increased** since wait start by ~expected inbound (e.g. withdraw3 **$24** → **~$22.9** landed via `HL_WITHDRAW_FEE_TOLERANCE_USDC` / `HL_SETTLEMENT_INBOUND_MIN_BPS`). Full strategy repay is **not** required before tail — **rising** uses **11a** for any remaining shortfall. Syncs adapter from HL API before `withdraw3`; **at most one `withdraw3` per settlement wait loop** (rising preflight may send another if HL still holds safe excess).
 2. **Tail** (after settlement): **balanced / falling / rising** — Aave repay, withdraw, optional **11a** / **11b**; **`coverUsdcShortfall`** for HL fee gaps.
-3. **Rising tail order:** repay contract USDC → **HL preflight** (if safe excess) → **HF-safe Aave withdraw / 11a / repay loop** → residual 11a → owner cover → final repay → **`aave_withdraw_rest`**.
+3. **Rising tail order:** repay contract USDC → **HL preflight** (if safe excess) → **HF-safe Aave withdraw / 11a / repay loop** (strategy debt only) → residual 11a → owner cover → final repay → **`aave_withdraw_rest`** (redeem payout BTC).
 
 See [`targetStateEngine.ts`](src/batch/targetStateEngine.ts) and [`opsExec.ts`](src/batch/opsExec.ts).
 
