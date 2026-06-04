@@ -138,7 +138,9 @@ function CustomWalletButton() {
 }
 
 function AppContent() {
-  const { isConnected, address } = useAccount();
+  const { address, status, isConnected } = useAccount();
+  const showMintRedeem = isConnected;
+  const isWalletSettling = status === 'connecting' || status === 'reconnecting';
   const [product, setProduct] = useState<'eth' | 'btc'>(() =>
     CONTRACTS.kashYieldBtc ? 'btc' : 'eth'
   );
@@ -359,7 +361,7 @@ function AppContent() {
             <StatsCard product={product} />
           </div>
 
-          {isConnected ? (
+          {showMintRedeem ? (
             <>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <div className="rounded-2xl p-6 border bg-white shadow-xl" style={{ borderColor: 'rgba(0, 255, 255, 0.2)' }}>
@@ -395,6 +397,15 @@ function AppContent() {
 
               <RecentActivity key={address ?? 'disconnected'} />
             </>
+          ) : isWalletSettling ? (
+            <div className="rounded-2xl p-12 text-center border bg-white shadow-xl" style={{ borderColor: 'rgba(0, 255, 255, 0.2)' }}>
+              <h3 className="text-2xl font-bold text-gray-900 mb-2">Restoring wallet connection</h3>
+              <p className="text-gray-600">
+                {address
+                  ? `Reconnecting ${address.slice(0, 6)}…${address.slice(-4)}. Mint and redeem will appear in a moment.`
+                  : 'Please wait…'}
+              </p>
+            </div>
           ) : (
             <div className="rounded-2xl p-12 text-center border bg-white shadow-xl" style={{ borderColor: 'rgba(0, 255, 255, 0.2)' }}>
               <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 bg-indigo-100">
