@@ -6,7 +6,7 @@ This guide walks you through everything you need before making your first deposi
 
 ## What you need
 
-- **A wallet** — Rabby, Coinbase Wallet, or Rainbow wallet.  Metamask is not supported.
+- **A wallet** — Rabby, Coinbase Wallet, or Rainbow wallet.  Metamask wallet is not recommended as it indiscrimmately blocks legitmate contracts.
 - **Arbitrum One** added to your wallet (chain ID **42161**)
 - **ETH** on Arbitrum One for gas, and **ETH** (for KASH-ETH) or **wBTC** (for KASH-BTC) to deposit
 

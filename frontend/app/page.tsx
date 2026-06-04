@@ -448,7 +448,9 @@ export default function Home() {
         }
         @media (max-width: 768px) {
           .landing .hero {
-            padding-top: clamp(7.25rem, 22vw, 11rem);
+            /* flex-start keeps the badge below the wrapped fixed nav */
+            justify-content: flex-start;
+            padding-top: clamp(10.5rem, 32vw, 14.5rem);
           }
           /* Fixed nav covers hash targets on mobile — offset scroll snap */
           .landing #features,

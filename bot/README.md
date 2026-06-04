@@ -515,7 +515,7 @@ Only re-run `--step=nav` if settlement NAV was never written or you intentionall
 
 **6. Dirty HL / adapter state (manual HL close, failed relay, stale mirror)**
 
-Symptoms: `owner:status` **HL USDC in spot** disagrees with on-chain **`getHyperliquidSpotBalance()`** mirror; settlement loop fires repeated **`withdraw3`** (~$1 fee each); batch stuck at **phase 1** after a partial HL unwind.
+Symptoms: `owner:status` **HL USDC in spot** disagrees with on-chain **`getHyperliquidSpotBalance()`** mirror; settlement loop fires repeated **`withdraw3`** (~$1 fee each); batch stuck at **phase 1** after a partial HL unwind. **Ops re-run** after HL already settled (spot=target, `expectedInbound=0`) used to spin the settlement poll until timeout — fixed by treating “no inbound this run + HL at target” as complete (redeem tail handles Aave).
 
 **Ops-only re-run / wrong HL settlement target:** settlement target must use **`settlementInitialHlUsdc6`** (cached in **`bot/.cache/redeem-baselines.json`** on first settlement wait). If cache is missing, bot may recover from vault+HL balances or accept **`OPS_REDEEM_SETTLEMENT_INITIAL_HL_USDC6`** (6-dec USDC). **Adapter → vault pulls** use adapter ERC-20 balance, not HL ledger dust.
 

@@ -2534,7 +2534,7 @@ async function isVaultUsdcCoversStrategyAaveRepay(ctx: OpsContext, feeTolerance:
  * HL settlement done + safe to start redeem tail.
  * - Mechanical: HL spot at target, adapter ERC-20 drained.
  * - When withdraw3/pull expected: KashYield USDC increment ≥ min(expected − fee, expected × MIN_BPS).
- * - When no inbound expected this wait: ops float > dust (resume / already bridged).
+ * - When no inbound expected this wait: HL spot/adapter already at target (ops re-run after prior withdraw3).
  * - Or vault covers strategy debt (falling/balanced).
  */
 async function isRedeemHlSettlementReady(
@@ -2559,7 +2559,8 @@ async function isRedeemHlSettlementReady(
     return delta >= minRecv;
   }
 
-  return ctx.contractUsdc > dust;
+  // Re-run after HL already settled: nothing to bridge; Aave/tail may still need vault USDC.
+  return true;
 }
 
 /**
@@ -2737,10 +2738,32 @@ export async function waitForHlWithdrawSettlementIfNeeded(
     return sweepRemainingHlUsdcAfterFullRedeem(fresh, lockedNAV);
   }
 
+  // Ops re-run after prior withdraw3: HL at target, no pull/bridge queued — skip inbound poll loop.
+  if (
+    waitState.expectedInboundUsdc <= dust &&
+    isHlSettlementMechanicallyComplete(fresh, targetHlUsdc, dust, feeTolerance)
+  ) {
+    const sf0 = usdcShortfallVsContract(fresh);
+    console.log(
+      sf0 === 0n
+        ? '   ✅ HL settlement: at target, no HL inbound expected this run'
+        : `   ✅ HL settlement: at target (no withdraw3/adapter pull this run); strategy shortfall ${fmtUsdc(sf0)} → redeem tail`,
+    );
+    return sweepRemainingHlUsdcAfterFullRedeem(fresh, lockedNAV);
+  }
+
   const maxMs = Math.max(0, parseInt(process.env.HL_WITHDRAW_WAIT_MAX_MS || '900000', 10)); // default 15 min (HL bridge)
   const pollMs = Math.max(1000, parseInt(process.env.HL_WITHDRAW_WAIT_POLL_MS || '20000', 10)); // default 20s
   if (maxMs === 0) {
     return sweepRemainingHlUsdcAfterFullRedeem(fresh, lockedNAV);
+  }
+
+  if (waitState.expectedInboundUsdc <= dust) {
+    throw new Error(
+      `HL settlement incomplete: HL spot ${fmtUsdc(fresh.hlUsdcBalance)} (target ${fmtUsdc(targetHlUsdc)}), ` +
+        `adapter ${fmtUsdc(fresh.adapterUsdcErc20)}, but no withdraw3/adapter pull is planned this run ` +
+        `(expectedInbound=0). Sync HL adapter or re-run with HL_WITHDRAW_WAIT_ENABLED=false if HL was settled manually.`,
+    );
   }
 
   console.log(
