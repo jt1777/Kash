@@ -163,10 +163,25 @@ Handles the daily two-phase batch on KashYield (`performUpkeep` → ops → sett
 - Pre–Phase-1 and post-ops **`updateNAV`**
 - **`runStepOps`** → **`runTargetStateEngine`** → **`opsExec`** delta pipelines (sole automated mint/redeem ops path)
 - **`markBatchOpsDone(batchCycle, G)`** preflight (vault vs **G** + mint fees + owner reserve; locks **G** on-chain)
-- Phase 2 distribution via `performUpkeep` / `processBatchPhase2ForCycle`
+- Phase 2: **mint-only** via `performUpkeep`; **redeem** via `processBatchPhase2ForCycle(batchCycle, merkleRoot)` + Merkle proof manifests
 - **Pipeline guards** — single-instance lock, Phase 1 cycle alignment, idempotent mark-done (see below)
 
 Legacy **`handleNetMint` / `handleNetRedeem`** handlers were removed from `batchProcessor.ts`. Receipt parsing after Phase 2 is **informational only** (no deploy/withdraw triggered from events).
+
+#### Merkle redeem claims (Phase 2)
+
+When `batchTotalRedeemKash > 0`:
+
+1. Bot computes net redeem allocations (mirrors on-chain `_allocRedeem*` + fee rounding).
+2. Builds Merkle tree (`bot/src/batch/redeemMerkle.ts`); writes manifest to `bot/data/redeem-proofs/{product}-batch-{cycle}.json`.
+3. Calls **`processBatchPhase2ForCycle(batchCycle, merkleRoot)`** — mints KASH (push), commits root, reserves `lockedClaimWbtc` / `lockedClaimEth`.
+4. Users **`claimRedeem(batchCycle, amount, proof)`** in the frontend (pull; user pays gas).
+
+**Requirements:** `exchangeFacade` set on vault; host proof JSON files; set **`NEXT_PUBLIC_REDEEM_PROOF_BASE_URL`** in frontend. Mint-only batches can still use `performUpkeep` for Phase 2.
+
+#### ExchangeFacade (HL writes)
+
+Hyperliquid **write** ops (`depositToHyperliquid`, `openShort`, `closeShort`, etc.) route through **`ExchangeFacade`**, not the vault. Before USDC-pulling facade calls, the bot runs **`approveExchangeFacadeUsdc`**. Manual **`bot/scripts/ops/`** scripts use `getExchangeTarget()` from `_utils.js` — they error if `exchangeFacade` is unset.
 
 #### Pipeline guards
 
@@ -221,7 +236,7 @@ Gating lives in **`runStepOps`** only (not in `targetStateEngine`). Uses **net**
 
 **Note:** Mint deploy sizing for a later ≥ $10 batch uses **that batch’s after-fee net mint** only (capped by vault balance); accumulated dust is not added into the deploy target, but may be consumed up to that batch’s target.
 
-Manual **`scripts/ops/`** steps (e.g. `04-spot-buy-asset`, `07-sell-spot-asset`) follow the older HL spot playbook; **`npm start`** does not use those on mint/redeem.
+Manual **`scripts/ops/`** steps route HL through **ExchangeFacade** and pass **`minOut`** on swaps; **`npm start`** does not use on-chain spot buy/sell on the automated mint path.
 
 ### Rebalancer Bot
 
@@ -247,15 +262,15 @@ Monitors Aave health factor:
 
 Before running the bot in production:
 
-1. ✅ KashYield contract deployed on Arbitrum Sepolia
-2. ✅ Aave pool address set via `setAavePool.js`
-3. ✅ HyperliquidAdapter deployed via `deploy-hyperliquid-adapter.js`
-4. ✅ Adapter registered and exchange switch proposed via `setHyperliquid.js`
-5. ✅ Adapter activated via `setActivePerpExchange.js` (immediate; for 2nd+ adapters: `confirmPerpExchange.js` after 24h first)
-6. ✅ Bot wallet has ETH for gas
-7. ✅ Bot wallet is contract owner (for privileged functions)
-8. ✅ Environment variables configured
-9. ✅ Validation passes (`npm run validate`)
+1. ✅ KashYield contract deployed
+2. ✅ **ExchangeFacade** deployed per vault (`scripts/deploy-exchange-facade.js`)
+3. ✅ Owner wired: `setExchangeFacade` + `facade.setHyperliquid` + `facade.setActivePerpExchange("HL")`
+4. ✅ HyperliquidAdapter deployed; `directDepositMode=false`; `approveHlAgent.js` lists bot on `extraAgents(adapter)`
+5. ✅ Spot DEX set on vault (`setSpotDex`)
+6. ✅ Bot wallet matches `botAddress()` on vault and facade
+7. ✅ `bot/.env` configured; `npm run build` before `npm start`
+8. ✅ Redeem proof hosting + `NEXT_PUBLIC_REDEEM_PROOF_BASE_URL` (for claim UI)
+9. ✅ Unit tests: `npx hardhat test test/redeem-merkle.unit.test.js` (from repo root)
 
 ## Network Configuration (Sepolia + Mainnet)
 
@@ -340,7 +355,7 @@ Do not use that mode on live user batches unless you explicitly intend that beha
 | Native USDC | `0xaf88d065e77c8cC2239327C5EDb3A432268e5831` |
 | API base URL | `https://api.hyperliquid.xyz` |
 
-KashYield routes perp/spot calls through **`IPerpExchange`** adapters (production: **`HyperliquidAdapter`**). Trades and **`withdraw3`** are **off-chain via the HL API**; the bot syncs adapter state on Arbitrum after each action. Custody and `directDepositMode`: [DEPLOYMENT.md](../docs/DEPLOYMENT.md).
+HL **writes** go through **ExchangeFacade** → **`HyperliquidAdapter`**. Trades and **`withdraw3`** are **off-chain via the HL API**; the bot syncs adapter state on Arbitrum after each action. **`approveHlAgent.js`**: `VERIFY_EIP1271=true` probes adapter `isValidSignature`; `SIGNER=adapter` for contract-master signing attempts. Custody: [DEPLOYMENT.md](../docs/DEPLOYMENT.md).
 
 **External docs:** [Hyperliquid docs](https://hyperliquid.gitbook.io/hyperliquid-docs/) · [Python SDK](https://github.com/hyperliquid-dex/hyperliquid-python-sdk)
 
@@ -369,12 +384,14 @@ Shows:
 - Verify the contract is deployed at that address
 - Check you're on the correct network (Arbitrum Sepolia = chain ID 421614)
 
+### "exchangeFacade not set" / HL ops fail
+- Deploy **ExchangeFacade** (`scripts/deploy-exchange-facade.js`) and call **`vault.setExchangeFacade(facade)`**
+- On the facade (owner): **`facade.setHyperliquid(adapter)`** then **`facade.setActivePerpExchange("HL")`**
+- Verify `await vault.exchangeFacade()` is non-zero and `await facade.hyperliquidAddress()` matches your adapter
+- Legacy `setHyperliquid.js` on the **vault** applies only to **older** bytecode
+
 ### "Hyperliquid address not set" / no active exchange
-- Ensure a `HyperliquidAdapter` is deployed (`deploy-hyperliquid-adapter.js`)
-- Run `setHyperliquid.js` to register the adapter and propose it as the active exchange
-- The first adapter registration is immediate — just run `setActivePerpExchange.js` after `setHyperliquid.js`
-- For 2nd+ adapter registrations, run `confirmPerpExchange.js` after the 24-hour timelock, then `setActivePerpExchange.js`
-- Until confirmed, the contract has no active exchange and the bot will skip HL operations
+- Same as above — HL registry lives on **ExchangeFacade**, not the vault
 
 ### "Not in processing window"
 - Batch processing only works between 23:45-23:59 UTC (unless the contract uses testing constants for full 24h)
@@ -399,7 +416,7 @@ The batch is split into five steps so each can be run individually. If any step 
 | 2    | `ops`       | **`runStepOps`** (skip gates + target-state mint/redeem); sizing uses **Phase-1-era** NAV |
 | 3    | `nav`       | `computeNewNAV` post-ops → **`updateNAV` (settlement)** — updates `currentNAV` for Phase 2 **mint** leg |
 | 4    | `mark-done` | `markBatchOpsDone(batchCycle, G)` — preflight vault vs **G** + mint fees + owner reserve; stores **G** on-chain; batch → phase 2. Skipped if already phase ≥ 2. |
-| 5    | `phase2`    | Mint at **settlement** `currentNAV`; redeem wBTC/ETH pro-rata from locked **G** |
+| 5    | `phase2`    | Mint at **settlement** `currentNAV` (push); redeem: build Merkle root → **`processBatchPhase2ForCycle`** (users **claim** later) |
 
 #### Pre-Phase-1 vs settlement NAV (dual NAV)
 
@@ -408,7 +425,7 @@ The batch is split into five steps so each can be run individually. If any step 
 | Phase 1 signals, ops sizing, redeem tail, **G** | **Phase-1-era** `currentNAV` (after pre-Phase-1 `updateNAV`) | `computeTotalRedeemAsset` at ops time |
 | **mark-done** preflight | Same **G** (computed at Phase-1 NAV, passed in tx) | `markBatchOpsDone(batchCycle, G)` writes **G** into `batchTotalRedeemValueUSD` (asset units, 8/18 dec) |
 | Phase 2 **mint** KASH | **Settlement** `currentNAV` (after post-ops `updateNAV`) | `exactNAV = currentNAV()` in `_processBatchPhase2` |
-| Phase 2 **redeem** payout | Locked **G**, not settlement NAV | Pro-rata by KASH; last redeemer gets remainder |
+| Phase 2 **redeem** | Locked **G** + net allocation | Merkle root committed; **`claimRedeem`** pays net amounts; `lockedClaim*` reserve |
 
 Before **mark-done**, `batchTotalRedeemValueUSD` is Phase-1 **redeem USD** (18 dec). After **mark-done**, that slot holds **G** in wBTC/ETH units until Phase 2 completes.
 
@@ -472,8 +489,9 @@ Check for batch `<cycle>`:
 | Signal | Meaning |
 |--------|---------|
 | `phase=1 processed=false` | Mid-batch — ops and/or nav/mark-done/phase2 incomplete |
-| `phase=2 processed=false` | mark-done passed; Phase 2 payout not done |
-| KASH still on vault | Phase 2 not finished |
+| `phase=2 processed=false` | mark-done passed; Phase 2 not done (root not committed / mint leg incomplete) |
+| KASH still on vault | Phase 2 mint leg not finished |
+| Redeem settled but no asset | User must **claim** (`claimRedeem`); check proof URL + manifest |
 | Aave debt / HL short non-zero | Ops tail incomplete |
 | Vault wBTC low + USDC ops float | May need **11b** (USDC→wBTC), not more manual wBTC dribbles |
 
@@ -589,7 +607,7 @@ npm start -- --batch=20523 --step=aave --allow-processed
 
 `--allow-processed` only unlocks `--step=ops`, `--step=hl`, and `--step=aave`. It cannot re-run phase1, nav, mark-done, or phase2 on a finalized batch.
 
-> **Note:** If Phase 2 ran and the contract marked the batch processed, but tokens were not received, the bot cannot retry the distribution (contract state says done). Use `npm run owner:status` or check on-chain events to investigate.
+> **Note:** If Phase 2 marked the batch processed, **mints** cannot be re-pushed. **Redeems** that were not claimed can still be claimed via `claimRedeem` until expiry. Unclaimed reserves can be swept per on-chain policy after claim expiry.
 
 **Quick reference: common flags**
 
@@ -652,7 +670,7 @@ The NAV path runs **`computeNewNAV` / `estimatePortfolioValueUSD`** for **pre-Ph
 
 ### USD → token amounts in ops
 
-Aave/HL steps in **`opsExec.ts`** use **token amounts** (wBTC 8 dec, ETH 18 dec, USDC 6 dec). Batch **net USD** (18 dec) is converted per step using Chainlink **`getBtcPrice()` / `getEthPrice()`**. **`markBatchOpsDone(batchCycle, G)`** stores gross redeem **G** at Phase-1 NAV; Phase 2 redeems pay **G** pro-rata by KASH. Mint leg and settlement **`updateNAV`** still use post-ops MTM **`currentNAV`**.
+Aave/HL steps in **`opsExec.ts`** use **token amounts** (wBTC 8 dec, ETH 18 dec, USDC 6 dec). HL writes go through **ExchangeFacade**. Spot swaps use **`resolveSwapMinOut`** (DEX quote or Chainlink fallback × `maxSwapSlippageBps`). **`markBatchOpsDone(batchCycle, G)`** locks gross **G**; Phase 2 redeems use Merkle **net** amounts via **`claimRedeem`**. Mint leg uses settlement **`currentNAV`**.
 
 ## License
 

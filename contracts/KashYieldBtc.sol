@@ -6,8 +6,9 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 import "./KashTokenBtc.sol";
+import "./ExchangeFacade.sol";
+import "./libraries/MerkleVerify.sol";
 import "./libraries/ProtocolActionCodes.sol";
-import "./interfaces/IPerpExchange.sol";
 import "./interfaces/ISpotDex.sol";
 
 // ─── Aave V3 Pool interface ───────────────────────────────────────────────────
@@ -44,17 +45,19 @@ error InvalidRequest();
 error InvalidNAV();
 error InvalidPrice();
 error FeeTooHigh();
-error InvalidAdapter();
-error ExchangeNotRegistered();
-error NoActivePerpExchange();
-error NoPendingAdapter();
-error TimelockNotExpired();
-error SlippageTooHigh();
 error SpotDexNotSet();
 error NotPendingOwner();
 error MinCycleDuration();
 error InvalidAddress();
 error NoPendingRedeemRequest();
+error MintCapReached();
+error RedeemCapReached();
+error UseBotPhase2();
+error InvalidMerkleRoot();
+error AlreadyClaimed();
+error ClaimExpired();
+error InvalidProof();
+error ClaimsNotExpired();
 
 // ─── Events ───────────────────────────────────────────────────────────────────
 event MintRequested(address indexed user, uint256 amountIn, uint256 batchCycle);
@@ -65,10 +68,10 @@ event TokensClaimed(address indexed user, address indexed token, uint256 amount,
 event NAVUpdateExecuted(uint256 newNAV, uint256 timestamp);
     event NAVProposedAndUpdated(uint256 newNAV, uint256 usdcBalance, uint256 assetBalance, uint256 perpPnL, uint256 timestamp);
 event ProtocolInteraction(uint8 indexed action, address indexed asset, uint256 amount);
-event ExchangeRegistered(string indexed name, address adapter);
-event AdapterProposed(string indexed name, address adapter, uint256 readyAt);
-event ExchangeSwitchConfirmed(string indexed name, address adapter);
 event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
+event RedeemMerkleRootCommitted(uint256 indexed batchCycle, bytes32 root, uint256 totalNetClaimable, uint256 claimDeadline);
+event RedeemMerkleRootOverridden(uint256 indexed batchCycle, bytes32 oldRoot, bytes32 newRoot);
+event ExpiredClaimsSwept(uint256 indexed batchCycle, uint256 amountSwept);
 event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 event FeeUpdated(uint256 newFeeBps);
 event OracleUpdated(address indexed newOracle);
@@ -102,39 +105,16 @@ contract KashYieldBtc is ReentrancyGuard {
 
     address public immutable wbtcAddress; // wBTC — Arbitrum One
     address public immutable usdcAddress;
+    address public exchangeFacade;
+    address public spotDexAddress;
+    uint256 public maxSwapSlippageBps = 100;
     address public btcOracle    = 0x6ce185860a4963106506C203335A2910413708e9; // Chainlink BTC/USD — Arbitrum One
     uint8   public btcDecimals  = 8;
 
-    // ── Exchange registry ─────────────────────────────────────────────────
-    /// @notice All registered perp exchange adapters (implements IPerpExchange).
-    mapping(string => address) public perpExchanges;
-    /// @notice Currently active exchange used for all perp/spot operations.
-    string public activePerpExchange;
-
-    // Adapter registration timelock: proposed adapters wait 24 hours before they can be confirmed.
-    // The very first adapter bypasses the timelock so the protocol can be used immediately on deploy.
-    bool    private anyAdapterConfirmed;
-    mapping(string => address) private pendingAdapters;
-    mapping(string => uint256) public  adapterReadyAt;
-    uint256 public exchangeSwitchDelay = 24 hours;
-
-    // ── Spot DEX (Uniswap V3 adapter for wBTC ↔ USDC) ───────────────────
-    // Whitelisted spot DEX routers (UniswapV3 on Arbitrum mainnet)
-    address public constant UNISWAP_V3_ROUTER = 0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45;
-    // USDT on Arbitrum One (allowed as a swap path intermediate)
-    address public constant USDT_ADDRESS      = 0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9;
-
-    address public spotDexAddress;
-    mapping(address => bool) public allowedSpotTokens;
-    mapping(address => bool) public allowedSpotDexRouters; // whitelist of permitted DEX adapter contracts
-
-    uint256 public spotDexTimelock = 24 hours;
-    mapping(address => uint256) public spotDexPending;
-
-    // ── Swap slippage ─────────────────────────────────────────────────────
-    uint256 public maxSwapSlippageBps     = 100;  // 1% default
-    uint256 public constant MAX_SLIPPAGE_BPS = 500; // 5% hard cap
     uint256 private constant REDEEM_PAYOUT_TOLERANCE = 30; // wBTC satoshis — rounding vs locked G
+    uint256 public constant MAX_MINT_USERS = 500;
+    uint256 public constant MAX_REDEEM_USERS = 500;
+    uint256 public constant CLAIM_EXPIRY_SECONDS = 30 days;
 
     // ── Fee config ────────────────────────────────────────────────────────
     uint256 public feeBps = 3;
@@ -145,6 +125,18 @@ contract KashYieldBtc is ReentrancyGuard {
     uint256 public ownerUsdcReserve;
     uint256 public ownerWbtcReserve;
     uint256 public protocolFeeWbtcReserve;
+    uint256 public lockedClaimWbtc;
+
+    struct BatchClaimInfo {
+        bytes32 redeemMerkleRoot;
+        uint256 totalNetClaimable;
+        uint256 claimDeadline;
+        uint256 claimedAmount;
+    }
+    mapping(uint256 => BatchClaimInfo) public batchClaimInfo;
+    mapping(uint256 => mapping(address => bool)) public redeemClaimed;
+    mapping(uint256 => uint256) public activeMintUsers;
+    mapping(uint256 => uint256) public activeRedeemUsers;
 
     // ── Batch state ───────────────────────────────────────────────────────
     mapping(uint256 => bool)    public batchProcessed;
@@ -220,13 +212,45 @@ contract KashYieldBtc is ReentrancyGuard {
         wbtcAddress     = _wbtc;
         usdcAddress     = _usdc;
 
-        // Whitelist tokens allowed in spot DEX swaps
-        allowedSpotTokens[wbtcAddress] = true;
-        allowedSpotTokens[usdcAddress] = true;
-        allowedSpotTokens[USDT_ADDRESS] = true;
+    }
 
-        // Whitelist permitted spot DEX adapter contracts
-        allowedSpotDexRouters[UNISWAP_V3_ROUTER] = true;
+    function setExchangeFacade(address _facade) external onlyOwner {
+        if (_facade == address(0)) revert InvalidAddress();
+        exchangeFacade = _facade;
+    }
+
+    function approveExchangeFacadeUsdc(uint256 amount) external onlyBotOrKeeper {
+        if (exchangeFacade == address(0)) revert InvalidAddress();
+        IERC20(usdcAddress).forceApprove(exchangeFacade, amount);
+    }
+
+    function setSpotDex(address _spotDex) external onlyOwner {
+        if (_spotDex == address(0)) revert InvalidAddress();
+        spotDexAddress = _spotDex;
+    }
+
+    function setMaxSwapSlippageBps(uint256 _bps) external onlyOwner {
+        if (_bps > 500) revert FeeTooHigh();
+        maxSwapSlippageBps = _bps;
+    }
+
+    function hyperliquidAddress() external view returns (address) {
+        return exchangeFacade == address(0) ? address(0) : ExchangeFacade(exchangeFacade).hyperliquidAddress();
+    }
+
+    function getHyperliquidSpotBalance() external view returns (uint256) {
+        return exchangeFacade == address(0) ? 0 : ExchangeFacade(exchangeFacade).getHyperliquidSpotBalance();
+    }
+
+    function getExchangeAssetBalance() external view returns (uint256) {
+        return exchangeFacade == address(0) ? 0 : ExchangeFacade(exchangeFacade).getExchangeAssetBalance();
+    }
+
+    function getHyperliquidPosition(string calldata symbol) external view returns (
+        uint256 size, uint256 collateral, uint256 entryPrice, bool isLong, bool isActive
+    ) {
+        if (exchangeFacade == address(0)) return (0, 0, 0, false, false);
+        return ExchangeFacade(exchangeFacade).getHyperliquidPosition(symbol);
     }
 
     // ── Ownership (two-step) ──────────────────────────────────────────────
@@ -280,99 +304,6 @@ contract KashYieldBtc is ReentrancyGuard {
     function pause()   external onlyOwner { paused = true; }
     function unpause() external onlyOwner { paused = false; }
 
-    // ── Exchange registry ─────────────────────────────────────────────────
-
-    /// @notice Register a new adapter. First-ever registration is immediate; all subsequent ones
-    ///         require a 24-hour timelock (propose here → confirmPerpExchange after delay).
-    function setPerpExchange(string calldata name, address adapter) external onlyOwner {
-        if (adapter == address(0)) revert InvalidAdapter();
-        if (!anyAdapterConfirmed) {
-            perpExchanges[name] = adapter;
-            anyAdapterConfirmed = true;
-            emit ExchangeRegistered(name, adapter);
-            return;
-        }
-        pendingAdapters[name] = adapter;
-        adapterReadyAt[name]  = block.timestamp + exchangeSwitchDelay;
-        emit AdapterProposed(name, adapter, adapterReadyAt[name]);
-    }
-
-    /// @notice Confirm a previously proposed adapter after the 24-hour timelock has elapsed.
-    function confirmPerpExchange(string calldata name) external onlyOwner {
-        if (adapterReadyAt[name] == 0) revert NoPendingAdapter();
-        if (block.timestamp < adapterReadyAt[name]) revert TimelockNotExpired();
-        perpExchanges[name] = pendingAdapters[name];
-        emit ExchangeRegistered(name, perpExchanges[name]);
-        delete pendingAdapters[name];
-        delete adapterReadyAt[name];
-    }
-
-    /// @notice Immediately set the active perp exchange (adapter must already be confirmed).
-    function setActivePerpExchange(string calldata name) external onlyOwner {
-        if (perpExchanges[name] == address(0)) revert ExchangeNotRegistered();
-        activePerpExchange = name;
-        emit ExchangeSwitchConfirmed(name, perpExchanges[name]);
-    }
-
-    /// @notice Propose a new spot DEX adapter. First-ever call is immediate (no timelock);
-    ///         all subsequent changes require a spotDexTimelock-second wait before confirming.
-    ///         The adapter address must be on the allowedSpotDexRouters whitelist.
-    function setSpotDex(address _spotDex) external onlyOwner {
-        if (_spotDex == address(0)) revert InvalidAddress();
-        if (!allowedSpotDexRouters[_spotDex]) revert InvalidAdapter();
-        if (spotDexPending[_spotDex] != 0) revert TimelockNotExpired();
-        if (spotDexAddress == address(0)) {
-            // First-ever set: immediate, no timelock
-            spotDexAddress = _spotDex;
-            emit ExchangeSwitchConfirmed("SPOT_DEX", _spotDex);
-            return;
-        }
-        spotDexPending[_spotDex] = block.timestamp + spotDexTimelock;
-        emit AdapterProposed("SPOT_DEX", _spotDex, spotDexPending[_spotDex]);
-    }
-
-    /// @notice Confirm a previously proposed spot DEX adapter after the timelock has elapsed.
-    function confirmSpotDex(address _spotDex) external onlyOwner {
-        if (spotDexPending[_spotDex] == 0) revert NoPendingAdapter();
-        if (block.timestamp < spotDexPending[_spotDex]) revert TimelockNotExpired();
-        spotDexAddress = _spotDex;
-        delete spotDexPending[_spotDex];
-        emit ExchangeSwitchConfirmed("SPOT_DEX", _spotDex);
-    }
-
-    /// @notice Add or remove a spot DEX adapter from the whitelist.
-    function setAllowedSpotDexRouter(address router, bool allowed) external onlyOwner {
-        allowedSpotDexRouters[router] = allowed;
-    }
-
-    /// @notice Set adapter registration timelock. Use 0 for testnet, 24 hours for mainnet.
-    function setExchangeSwitchDelay(uint256 _seconds) external onlyOwner { exchangeSwitchDelay = _seconds; }
-
-    function setMaxSwapSlippageBps(uint256 _bps) external onlyOwner {
-        if (_bps > MAX_SLIPPAGE_BPS) revert SlippageTooHigh();
-        maxSwapSlippageBps = _bps;
-    }
-
-    /// @notice Legacy convenience: equivalent to setPerpExchange("HL", adapter).
-    ///         First-ever call is immediate; subsequent calls start a 24h timelock.
-    function setHyperliquid(address adapter) external onlyOwner {
-        if (adapter == address(0)) revert InvalidAdapter();
-        if (!anyAdapterConfirmed) {
-            perpExchanges["HL"] = adapter;
-            anyAdapterConfirmed = true;
-            emit ExchangeRegistered("HL", adapter);
-            return;
-        }
-        pendingAdapters["HL"] = adapter;
-        adapterReadyAt["HL"]  = block.timestamp + exchangeSwitchDelay;
-        emit AdapterProposed("HL", adapter, adapterReadyAt["HL"]);
-    }
-
-    /// @notice Returns the HL adapter address (backwards-compat with bot / frontend).
-    function hyperliquidAddress() external view returns (address) {
-        return perpExchanges["HL"];
-    }
-
     // ── User-facing: mint / redeem ────────────────────────────────────────
 
     function requestMint(uint256 amount) external onlyUserWindow whenNotPaused {
@@ -384,10 +315,15 @@ contract KashYieldBtc is ReentrancyGuard {
         // Accumulate into the existing request so multiple deposits in the same window
         // are treated as one combined request.
         MintRequest storage req = userMintRequests[msg.sender][batchCycle];
+        bool wasActive = req.amountIn > 0;
         req.user = msg.sender;
         req.amountIn += amount;
         req.batchCycle = batchCycle;
         batchTotalMintBtc[batchCycle] += amount;
+        if (!wasActive) {
+            if (activeMintUsers[batchCycle] >= MAX_MINT_USERS) revert MintCapReached();
+            unchecked { activeMintUsers[batchCycle]++; }
+        }
         if (!isInBatchMint[batchCycle][msg.sender]) {
             batchMintUsers[batchCycle].push(msg.sender);
             isInBatchMint[batchCycle][msg.sender] = true;
@@ -405,10 +341,15 @@ contract KashYieldBtc is ReentrancyGuard {
         // Accumulate into the existing request so multiple redeems in the same window
         // are treated as one combined request.
         RedeemRequest storage req = userRedeemRequests[msg.sender][batchCycle];
+        bool wasActive = req.kashAmount > 0;
         req.user = msg.sender;
         req.kashAmount += kashAmount;
         req.batchCycle = batchCycle;
         batchTotalRedeemKash[batchCycle] += kashAmount;
+        if (!wasActive) {
+            if (activeRedeemUsers[batchCycle] >= MAX_REDEEM_USERS) revert RedeemCapReached();
+            unchecked { activeRedeemUsers[batchCycle]++; }
+        }
         if (!isInBatchRedeem[batchCycle][msg.sender]) {
             batchRedeemUsers[batchCycle].push(msg.sender);
             isInBatchRedeem[batchCycle][msg.sender] = true;
@@ -423,6 +364,7 @@ contract KashYieldBtc is ReentrancyGuard {
         if (req.amountIn == 0) revert NoRequest();
         uint256 amount = req.amountIn;
         batchTotalMintBtc[batchCycle] -= amount;
+        unchecked { activeMintUsers[batchCycle]--; }
         delete userMintRequests[msg.sender][batchCycle];
         IERC20(wbtcAddress).safeTransfer(msg.sender, amount);
         emit ProtocolInteraction(ProtocolActionCodes.CANCEL_MINT, wbtcAddress, amount);
@@ -435,6 +377,7 @@ contract KashYieldBtc is ReentrancyGuard {
         if (req.kashAmount == 0) revert NoRequest();
         uint256 kashAmount = req.kashAmount;
         batchTotalRedeemKash[batchCycle] -= kashAmount;
+        unchecked { activeRedeemUsers[batchCycle]--; }
         delete userRedeemRequests[msg.sender][batchCycle];
         kashTokenBtc.transfer(msg.sender, kashAmount);
         emit ProtocolInteraction(ProtocolActionCodes.CANCEL_REDEEM, address(kashTokenBtc), kashAmount);
@@ -453,7 +396,10 @@ contract KashYieldBtc is ReentrancyGuard {
         uint256 batchCycle = block.timestamp / cycleDurationSeconds;
         uint8 phase = batchPhase[batchCycle];
         if (phase == 0) processBatchPhase1();
-        else if (phase == 2) processBatchPhase2();
+        else if (phase == 2) {
+            if (batchTotalRedeemKash[batchCycle] > 0) revert UseBotPhase2();
+            processBatchPhase2();
+        }
     }
 
     // ── Batch Phase 1 ─────────────────────────────────────────────────────
@@ -513,13 +459,13 @@ contract KashYieldBtc is ReentrancyGuard {
     function processBatchPhase2() internal onlyProcessingWindow {
         uint256 batchCycle = block.timestamp / cycleDurationSeconds;
         if (batchPhase[batchCycle] != 2) revert OpsNotDone();
-        _processBatchPhase2(batchCycle);
+        _processBatchPhase2(batchCycle, bytes32(0));
     }
 
-    function processBatchPhase2ForCycle(uint256 batchCycle) external onlyBotOrKeeper nonReentrant {
+    function processBatchPhase2ForCycle(uint256 batchCycle, bytes32 redeemMerkleRoot) external onlyBotOrKeeper nonReentrant {
         if (batchPhase[batchCycle] != 2) revert OpsNotDone();
-        if (batchCycle == block.timestamp / cycleDurationSeconds) revert UsePerformUpkeep();
-        _processBatchPhase2(batchCycle);
+        if (batchTotalRedeemKash[batchCycle] > 0 && redeemMerkleRoot == bytes32(0)) revert InvalidMerkleRoot();
+        _processBatchPhase2(batchCycle, redeemMerkleRoot);
     }
 
     function _allocRedeemWbtc(
@@ -546,7 +492,7 @@ contract KashYieldBtc is ReentrancyGuard {
         }
     }
 
-    function _processBatchPhase2(uint256 batchCycle) internal {
+    function _processBatchPhase2(uint256 batchCycle, bytes32 redeemMerkleRoot) internal {
         uint256 exactNAV = currentNAV;
 
         address[] memory minters  = batchMintUsers[batchCycle];
@@ -564,12 +510,23 @@ contract KashYieldBtc is ReentrancyGuard {
         }
 
         uint256 totalRedeemKash = batchTotalRedeemKash[batchCycle];
-        (uint256[] memory redeemWbtcAmounts, uint256 totalRedeemBtcNeeded, uint256 totalRedeemFeeBtc) =
+        (, uint256 totalRedeemBtcNeeded, uint256 totalRedeemFeeBtc) =
             _allocRedeemWbtc(batchCycle, redeemers, totalRedeemKash, batchTotalRedeemValueUSD[batchCycle]);
         uint256 totalProtocolFeeBtc = totalMintFeeBtc + totalRedeemFeeBtc;
-        if (IERC20(wbtcAddress).balanceOf(address(this)) + REDEEM_PAYOUT_TOLERANCE < ownerWbtcReserve + totalProtocolFeeBtc + totalRedeemBtcNeeded) revert InsufficientWbtcForRedeems();
+        if (IERC20(wbtcAddress).balanceOf(address(this)) + REDEEM_PAYOUT_TOLERANCE < ownerWbtcReserve + totalProtocolFeeBtc + totalRedeemBtcNeeded + lockedClaimWbtc) revert InsufficientWbtcForRedeems();
         ownerWbtcReserve += totalProtocolFeeBtc;
         protocolFeeWbtcReserve += totalProtocolFeeBtc;
+
+        if (totalRedeemKash > 0) {
+            lockedClaimWbtc += totalRedeemBtcNeeded;
+            batchClaimInfo[batchCycle] = BatchClaimInfo({
+                redeemMerkleRoot: redeemMerkleRoot,
+                totalNetClaimable: totalRedeemBtcNeeded,
+                claimDeadline: block.timestamp + CLAIM_EXPIRY_SECONDS,
+                claimedAmount: 0
+            });
+            emit RedeemMerkleRootCommitted(batchCycle, redeemMerkleRoot, totalRedeemBtcNeeded, block.timestamp + CLAIM_EXPIRY_SECONDS);
+        }
 
         batchProcessed[batchCycle] = true;
         batchPhase[batchCycle] = 3;
@@ -590,15 +547,47 @@ contract KashYieldBtc is ReentrancyGuard {
                 totalDepositedBtcByUser[user] += req.amountIn;
             }
         }
+    }
 
-        for (uint256 i = 0; i < redeemers.length; i++) {
-            if (redeemWbtcAmounts[i] == 0) continue;
-            address user = redeemers[i];
-            uint256 wbtcAmount = redeemWbtcAmounts[i];
-            totalRedeemedBtcByUser[user] += wbtcAmount;
-            IERC20(wbtcAddress).safeTransfer(user, wbtcAmount);
-            emit TokensClaimed(user, wbtcAddress, wbtcAmount, false);
-        }
+    function claimRedeem(uint256 batchCycle, uint256 wbtcAmount, bytes32[] calldata proof) external nonReentrant whenNotPaused {
+        if (!batchProcessed[batchCycle]) revert WrongPhase();
+        BatchClaimInfo storage info = batchClaimInfo[batchCycle];
+        if (info.redeemMerkleRoot == bytes32(0)) revert InvalidMerkleRoot();
+        if (redeemClaimed[batchCycle][msg.sender]) revert AlreadyClaimed();
+        if (block.timestamp > info.claimDeadline) revert ClaimExpired();
+
+        bytes32 leaf = keccak256(abi.encode(batchCycle, msg.sender, wbtcAmount));
+        if (!MerkleVerify.verify(proof, info.redeemMerkleRoot, leaf)) revert InvalidProof();
+
+        redeemClaimed[batchCycle][msg.sender] = true;
+        info.claimedAmount += wbtcAmount;
+        lockedClaimWbtc -= wbtcAmount;
+        totalRedeemedBtcByUser[msg.sender] += wbtcAmount;
+        IERC20(wbtcAddress).safeTransfer(msg.sender, wbtcAmount);
+        emit TokensClaimed(msg.sender, wbtcAddress, wbtcAmount, false);
+    }
+
+    function overrideRedeemMerkleRoot(uint256 batchCycle, bytes32 newRoot) external onlyOwner {
+        BatchClaimInfo storage info = batchClaimInfo[batchCycle];
+        if (!batchProcessed[batchCycle] || info.totalNetClaimable == 0) revert WrongPhase();
+        if (info.claimedAmount > 0) revert AlreadyClaimed();
+        if (newRoot == bytes32(0)) revert InvalidMerkleRoot();
+        bytes32 oldRoot = info.redeemMerkleRoot;
+        info.redeemMerkleRoot = newRoot;
+        emit RedeemMerkleRootOverridden(batchCycle, oldRoot, newRoot);
+    }
+
+    function sweepExpiredClaims(uint256 batchCycle) external onlyBotOrKeeper {
+        BatchClaimInfo storage info = batchClaimInfo[batchCycle];
+        if (!batchProcessed[batchCycle]) revert WrongPhase();
+        if (block.timestamp <= info.claimDeadline) revert ClaimsNotExpired();
+        uint256 unclaimed = info.totalNetClaimable - info.claimedAmount;
+        if (unclaimed == 0) revert ZeroAmount();
+        info.claimedAmount = info.totalNetClaimable;
+        lockedClaimWbtc -= unclaimed;
+        ownerWbtcReserve += unclaimed;
+        protocolFeeWbtcReserve += unclaimed;
+        emit ExpiredClaimsSwept(batchCycle, unclaimed);
     }
 
     // ── Aave (unchanged) ──────────────────────────────────────────────────
@@ -631,85 +620,9 @@ contract KashYieldBtc is ReentrancyGuard {
         emit ProtocolInteraction(ProtocolActionCodes.AAVE_ADD_COLLATERAL, wbtcAddress, amount);
     }
 
-    // ── Exchange operations (route through active IPerpExchange adapter) ──
-
-    function depositToHyperliquid(uint256 amount) external onlyBotOrKeeper nonReentrant {
-        address adapter = _activePerpAdapter();
-        IERC20(usdcAddress).forceApprove(adapter, amount);
-        IPerpExchange(adapter).depositCollateral(usdcAddress, amount);
-        emit ProtocolInteraction(ProtocolActionCodes.EXCHANGE_DEPOSIT, usdcAddress, amount);
-    }
-
-    function withdrawFromHyperliquid(uint256 amount) external onlyBotOrKeeper nonReentrant {
-        address adapter = _activePerpAdapter();
-        uint256 transferred = IPerpExchange(adapter).withdrawCollateral(usdcAddress, amount);
-        emit ProtocolInteraction(ProtocolActionCodes.EXCHANGE_WITHDRAW, usdcAddress, transferred);
-    }
-
-    function withdrawBtcFromHyperliquid(uint256 amount) external onlyBotOrKeeper nonReentrant {
-        address adapter = _activePerpAdapter();
-        IPerpExchange(adapter).withdrawAsset(amount);
-        emit ProtocolInteraction(ProtocolActionCodes.EXCHANGE_WITHDRAW_ASSET, wbtcAddress, amount);
-    }
-
-    function addCollateralToHyperliquid(uint256 amount) external onlyBotOrKeeper nonReentrant {
-        address adapter = _activePerpAdapter();
-        IERC20(usdcAddress).forceApprove(adapter, amount);
-        IPerpExchange(adapter).depositCollateral(usdcAddress, amount);
-        emit ProtocolInteraction(ProtocolActionCodes.EXCHANGE_ADD_COLLATERAL, usdcAddress, amount);
-    }
-
-    function openShort(string calldata symbol, uint256 size) external onlyBotOrKeeper nonReentrant {
-        address adapter = _activePerpAdapter();
-        IPerpExchange(adapter).openPerpPosition(symbol, size, false);
-        emit ProtocolInteraction(ProtocolActionCodes.EXCHANGE_OPEN_SHORT, wbtcAddress, size);
-    }
-
-    function closeShort(string calldata symbol) external onlyBotOrKeeper nonReentrant {
-        _closeShort(symbol, true, 0);
-    }
-
-    function closeShort(string calldata symbol, uint256 closeSize) external onlyBotOrKeeper nonReentrant {
-        _closeShort(symbol, false, closeSize);
-    }
-
-    function _closeShort(string calldata symbol, bool fullClose, uint256 closeSize) private {
-        address adapter = _activePerpAdapter();
-        if (fullClose) {
-            IPerpExchange(adapter).closePerpPosition(symbol);
-            emit ProtocolInteraction(ProtocolActionCodes.EXCHANGE_CLOSE_SHORT, wbtcAddress, 0);
-        } else {
-            IPerpExchange(adapter).closePerpPosition(symbol, closeSize);
-            emit ProtocolInteraction(ProtocolActionCodes.EXCHANGE_CLOSE_SHORT, wbtcAddress, closeSize);
-        }
-    }
-
-    function spotBuyOnHyperliquid(uint256 usdcAmount) external onlyBotOrKeeper nonReentrant {
-        address adapter = _activePerpAdapter();
-        IERC20(usdcAddress).forceApprove(adapter, usdcAmount);
-        uint256 amountOut = IPerpExchange(adapter).tradeSpot(usdcAddress, wbtcAddress, usdcAmount);
-        emit ProtocolInteraction(ProtocolActionCodes.EXCHANGE_SPOT_BUY, wbtcAddress, amountOut);
-    }
-
-    function spotSellOnHyperliquid(uint256 amount) external onlyBotOrKeeper nonReentrant {
-        address adapter = _activePerpAdapter();
-        IERC20(wbtcAddress).forceApprove(adapter, amount);
-        uint256 amountOut = IPerpExchange(adapter).tradeSpot(wbtcAddress, usdcAddress, amount);
-        emit ProtocolInteraction(ProtocolActionCodes.EXCHANGE_SPOT_SELL, usdcAddress, amountOut);
-    }
-
-    function cancelHyperliquidOrder(bytes32 orderId) external onlyBotOrKeeper {
-        address adapter = _activePerpAdapter();
-        IPerpExchange(adapter).cancelOrder(orderId);
-        emit ProtocolInteraction(ProtocolActionCodes.EXCHANGE_CANCEL_ORDER, wbtcAddress, 0);
-    }
-
-    // ── Spot DEX swaps (Uniswap V3) ───────────────────────────────────────
-
-    /// @notice Swap wBTC → USDC via the registered spot DEX. Used to cover residual Aave debt.
-    function swapForUsdc(uint256 wbtcAmount) external onlyBotOrKeeper nonReentrant {
+    /// @notice Swap wBTC → USDC via the registered spot DEX. Bot supplies minOut from a live DEX quote.
+    function swapForUsdc(uint256 wbtcAmount, uint256 minOut) external onlyBotOrKeeper nonReentrant {
         if (spotDexAddress == address(0)) revert SpotDexNotSet();
-        uint256 minOut = _minUsdcOut(wbtcAmount);
         IERC20(wbtcAddress).forceApprove(spotDexAddress, wbtcAmount);
         uint256 usdcOut = ISpotDex(spotDexAddress).swapExactIn(
             wbtcAddress, usdcAddress, wbtcAmount, minOut, address(this)
@@ -717,44 +630,14 @@ contract KashYieldBtc is ReentrancyGuard {
         emit ProtocolInteraction(ProtocolActionCodes.DEX_SWAP_FOR_USDC, usdcAddress, usdcOut);
     }
 
-    /// @notice Swap USDC → wBTC via the registered spot DEX.
-    function swapFromUsdc(uint256 usdcAmount) external onlyBotOrKeeper nonReentrant {
+    /// @notice Swap USDC → wBTC via the registered spot DEX. Bot supplies minOut from a live DEX quote.
+    function swapFromUsdc(uint256 usdcAmount, uint256 minOut) external onlyBotOrKeeper nonReentrant {
         if (spotDexAddress == address(0)) revert SpotDexNotSet();
-        uint256 minOut = _minWbtcOut(usdcAmount);
         IERC20(usdcAddress).forceApprove(spotDexAddress, usdcAmount);
         uint256 wbtcOut = ISpotDex(spotDexAddress).swapExactIn(
             usdcAddress, wbtcAddress, usdcAmount, minOut, address(this)
         );
         emit ProtocolInteraction(ProtocolActionCodes.DEX_SWAP_FROM_USDC, wbtcAddress, wbtcOut);
-    }
-
-    // ── Views ─────────────────────────────────────────────────────────────
-
-    function getHyperliquidSpotBalance() external view returns (uint256) {
-        address adapter = perpExchanges[activePerpExchange];
-        if (adapter == address(0)) return 0;
-        return IPerpExchange(adapter).getSpotBalance();
-    }
-
-    /// @notice BTC balance held in the active exchange (18-dec internal units).
-    function getExchangeAssetBalance() external view returns (uint256) {
-        address adapter = perpExchanges[activePerpExchange];
-        if (adapter == address(0)) return 0;
-        return IPerpExchange(adapter).getAssetBalance();
-    }
-
-    function getHyperliquidPosition(string calldata symbol) external view returns (
-        uint256 size, uint256 collateral, uint256 entryPrice, bool isLong, bool isActive
-    ) {
-        address adapter = perpExchanges[activePerpExchange];
-        if (adapter == address(0)) return (0, 0, 0, false, false);
-        return IPerpExchange(adapter).getPosition(symbol);
-    }
-
-    function getHyperliquidOpenOrderIds() external view returns (bytes32[] memory) {
-        address adapter = perpExchanges[activePerpExchange];
-        if (adapter == address(0)) return new bytes32[](0);
-        return IPerpExchange(adapter).getOpenOrderIds();
     }
 
     function updateNAV(
@@ -828,7 +711,8 @@ contract KashYieldBtc is ReentrancyGuard {
     function ownerWithdrawWbtc(uint256 amount) external onlyOwner {
         if (amount > ownerWbtcReserve) revert InsufficientOwnerWbtcReserve();
         uint256 bal = IERC20(wbtcAddress).balanceOf(address(this));
-        if (amount > bal) revert InsufficientExcessWbtc();
+        uint256 available = bal > lockedClaimWbtc ? bal - lockedClaimWbtc : 0;
+        if (amount > available) revert InsufficientExcessWbtc();
         unchecked {
             ownerWbtcReserve -= amount;
         }
@@ -884,29 +768,4 @@ contract KashYieldBtc is ReentrancyGuard {
         delete userRedeemRequests[msg.sender][batchCycle];
     }
 
-    function getTotalDepositedBtc(address user) external view returns (uint256) { return totalDepositedBtcByUser[user]; }
-    function getTotalRedeemedBtc(address user)  external view returns (uint256) { return totalRedeemedBtcByUser[user]; }
-
-    // ── Internal helpers ──────────────────────────────────────────────────
-
-    function _activePerpAdapter() internal view returns (address adapter) {
-        adapter = perpExchanges[activePerpExchange];
-        if (adapter == address(0)) revert NoActivePerpExchange();
-    }
-
-    /// @notice Minimum USDC out for a wBTC → USDC swap, accounting for slippage.
-    function _minUsdcOut(uint256 wbtcAmount) internal view returns (uint256) {
-        uint256 price = getBtcPrice();
-        // wbtcAmount (8-dec) * price (18-dec) / 1e8 → USD 18-dec → /1e12 → USDC 6-dec
-        uint256 expectedUsdc = (wbtcAmount * price) / (10 ** WBTC_DECIMALS) / 1e12;
-        return expectedUsdc * (10000 - maxSwapSlippageBps) / 10000;
-    }
-
-    /// @notice Minimum wBTC out for a USDC → wBTC swap, accounting for slippage.
-    function _minWbtcOut(uint256 usdcAmount) internal view returns (uint256) {
-        uint256 price = getBtcPrice();
-        // usdcAmount (6-dec) * 1e12 → 18-dec → * 1e8 / price → wBTC 8-dec
-        uint256 expectedWbtc = (usdcAmount * 1e12 * (10 ** WBTC_DECIMALS)) / price;
-        return expectedWbtc * (10000 - maxSwapSlippageBps) / 10000;
-    }
 }

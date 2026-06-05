@@ -12,7 +12,10 @@
  *   PRODUCT=eth FRACTION=50  npx hardhat run bot/scripts/ops/06-close-short.js --network arbitrumSepolia
  */
 const { ethers } = require("hardhat");
-const { getContract, getState, displayState, getRedeemFraction, fmtAsset, fmtUsdc, exec, PRODUCT, IS_BTC, ASSET_SYMBOL } = require("./_utils");
+const {
+  getContract, getExchangeTarget, getState, displayState, getRedeemFraction,
+  fmtAsset, fmtUsdc, exec, PRODUCT, IS_BTC, ASSET_SYMBOL,
+} = require("./_utils");
 
 async function main() {
   console.log(`\n06 — Close short  [product=${PRODUCT.toUpperCase()}]`);
@@ -47,12 +50,13 @@ async function main() {
 
   console.log(`\n  Closing ${fraction}% of short (${fmtAsset(closeSize)} of ${fmtAsset(before.shortSize)})...`);
 
+  const { target: ex } = await getExchangeTarget(contract);
   if (isFull) {
-    await exec(`closeShort("${symbol}") [full]`, contract["closeShort(string)"](symbol));
+    await exec(`closeShort("${symbol}") [full]`, ex.getFunction("closeShort(string)").send(symbol));
   } else {
     await exec(
       `closeShort("${symbol}", ${fmtAsset(closeSize)})`,
-      contract["closeShort(string,uint256)"](symbol, closeSize)
+      ex.getFunction("closeShort(string,uint256)").send(symbol, closeSize),
     );
   }
 

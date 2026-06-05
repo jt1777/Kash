@@ -402,6 +402,14 @@ export async function vaultCoversRedeemPayout(
  * Resolve the HL adapter address for bot checks and tooling. Prefer the active perp
  * exchange; fall back to hyperliquidAddress() (KashYieldETH); then perpExchanges("HL").
  */
+export async function readExchangeFacadeAddress(kashYield: ethers.Contract): Promise<string> {
+  try {
+    const a = String(await kashYield.exchangeFacade());
+    if (a && a !== ethers.ZeroAddress) return a;
+  } catch { /* legacy vault */ }
+  return '';
+}
+
 export async function readHyperliquidAdapterAddress(
   kashYield: ethers.Contract,
   cachedActivePerpExchange?: string,
@@ -540,7 +548,9 @@ export async function snapshotOpsContext(
   } catch { /* no position */ }
   try {
     activePerpExchange = await kashYield.activePerpExchange();
-  } catch { activePerpExchange = ''; }
+  } catch {
+    activePerpExchange = (await readExchangeFacadeAddress(kashYield)) ? 'HL' : '';
+  }
   try {
     perpAdapterAddress = await readHyperliquidAdapterAddress(kashYield, activePerpExchange);
   } catch { perpAdapterAddress = ''; }

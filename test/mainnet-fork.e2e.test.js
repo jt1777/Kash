@@ -29,6 +29,9 @@ const {
   manualBtcMintOps,
   computeBatchGrossRedeemAsset,
   settleMintPhase2,
+  settleRedeemPhase2,
+  claimRedeemForUser,
+  deployAndWireExchangeFacade,
 } = require("./helpers/forkBatchOps");
 
 // Pin to a specific Arbitrum block for reproducibility and RPC cache hits.
@@ -138,10 +141,15 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
       await hlAdapter.waitForDeployment();
       console.log("    ✅ HyperliquidAdapter (ETH):", await hlAdapter.getAddress());
 
-      // ── Register HL adapter ──────────────────────────────────────────────
-      await kashYieldEth.setExchangeSwitchDelay(0);
-      await kashYieldEth.setHyperliquid(await hlAdapter.getAddress());
-      await kashYieldEth.setActivePerpExchange("HL");
+      // ── ExchangeFacade + HL adapter ─────────────────────────────────────
+      await deployAndWireExchangeFacade({
+        kashYield: kashYieldEth,
+        owner,
+        bot,
+        usdcAddress: USDC_ADDRESS,
+        primaryAsset: ethers.ZeroAddress,
+        hlAdapter,
+      });
 
       // ── Resolve KashTokenEth ─────────────────────────────────────────────
       const kashTokenAddr = await kashYieldEth.kashTokenEth();
@@ -279,11 +287,10 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
       expect(contractEth).to.be.gte(MINT_ETH - ethers.parseEther("0.01")); // allow tiny interest delta
 
       // ── NAV + mark done + Phase 2 ─────────────────────────────────────────
-      await kashYieldEth.connect(bot).updateNAV(NAV_1, 0n, 0n, 0n);
       const grossG = await computeBatchGrossRedeemAsset(kashYieldEth, redeemCycle, NAV_1);
-      await kashYieldEth.connect(bot).markBatchOpsDone(redeemCycle, grossG);
-      await kashYieldEth.connect(bot).performUpkeep("0x");
+      await settleRedeemPhase2({ kashYield: kashYieldEth, bot, batchCycle: redeemCycle, nav: NAV_1, grossG });
       expect(await kashYieldEth.batchProcessed(redeemCycle)).to.be.true;
+      await claimRedeemForUser(kashYieldEth, user1, redeemCycle);
 
       // ── Verify ETH returned ───────────────────────────────────────────────
       const ethAfter = await ethers.provider.getBalance(user1.address);
@@ -302,7 +309,7 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
       await owner.sendTransaction({ to: await kashYieldEth.getAddress(), value: SWAP_ETH });
 
       const usdcBefore = await usdc.balanceOf(await kashYieldEth.getAddress());
-      await kashYieldEth.connect(bot).swapForUsdc(SWAP_ETH);
+      await kashYieldEth.connect(bot).swapForUsdc(SWAP_ETH, 0);
       const usdcAfter = await usdc.balanceOf(await kashYieldEth.getAddress());
 
       expect(usdcAfter).to.be.gt(usdcBefore);
@@ -386,9 +393,14 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
         await kashYieldBtc.getAddress()
       );
 
-      await kashYieldBtc.setExchangeSwitchDelay(0);
-      await kashYieldBtc.setHyperliquid(await hlAdapter.getAddress());
-      await kashYieldBtc.setActivePerpExchange("HL");
+      await deployAndWireExchangeFacade({
+        kashYield: kashYieldBtc,
+        owner,
+        bot,
+        usdcAddress: USDC_ADDRESS,
+        primaryAsset: WBTC_ADDRESS,
+        hlAdapter,
+      });
 
       const kashTokenAddr = await kashYieldBtc.kashTokenBtc();
       kashTokenBtc = new ethers.Contract(
@@ -489,12 +501,10 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
       expect(contractWbtc).to.be.gte(MINT_BTC - 100n); // allow 100 satoshi dust
       console.log(`       ✅ wBTC in contract: ${Number(contractWbtc) / 1e8} wBTC`);
 
-      // NAV + mark done + Phase 2.
-      await kashYieldBtc.connect(bot).updateNAV(NAV_1, 0n, 0n, 0n);
       const grossG = await computeBatchGrossRedeemAsset(kashYieldBtc, redeemCycle, NAV_1);
-      await kashYieldBtc.connect(bot).markBatchOpsDone(redeemCycle, grossG);
-      await kashYieldBtc.connect(bot).performUpkeep("0x");
+      await settleRedeemPhase2({ kashYield: kashYieldBtc, bot, batchCycle: redeemCycle, nav: NAV_1, grossG });
       expect(await kashYieldBtc.batchProcessed(redeemCycle)).to.be.true;
+      await claimRedeemForUser(kashYieldBtc, user1, redeemCycle);
 
       const wbtcAfter = await wbtc.balanceOf(user1.address);
       expect(wbtcAfter).to.be.gt(wbtcBefore);

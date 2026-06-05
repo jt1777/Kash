@@ -13,7 +13,10 @@
  *   PRODUCT=eth AMOUNT=0.1   npx hardhat run bot/scripts/ops/11a-swap-asset-for-usdc.js --network arbitrumSepolia
  */
 const { ethers } = require("hardhat");
-const { getContract, getState, displayState, parseAsset, fmtAsset, fmtUsdc, exec, PRODUCT, IS_BTC, ASSET_SYMBOL, DECIMALS } = require("./_utils");
+const {
+  getContract, getState, displayState, parseAsset, fmtAsset, fmtUsdc, exec,
+  resolveSwapMinOut, PRODUCT, IS_BTC, ASSET_SYMBOL, DECIMALS,
+} = require("./_utils");
 
 async function main() {
   console.log(`\n11a — Swap ${ASSET_SYMBOL} → USDC via spot DEX  [product=${PRODUCT.toUpperCase()}]`);
@@ -52,7 +55,8 @@ async function main() {
 
   if (amount === 0n) { console.log("\nNothing to swap."); return; }
 
-  await exec(`swapForUsdc(${fmtAsset(amount)})`, contract.swapForUsdc(amount));
+  const minOut = await resolveSwapMinOut(contract, "assetToUsdc", amount);
+  await exec(`swapForUsdc(${fmtAsset(amount)}, minOut=${fmtUsdc(minOut)})`, contract.swapForUsdc(amount, minOut));
 
   const after = await getState(contract);
   displayState(after, "After");

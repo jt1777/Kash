@@ -10,7 +10,10 @@
  * Usage:
  *   PRODUCT=eth npx hardhat run bot/scripts/ops/03-deposit-usdc-to-perp.js --network arbitrumSepolia
  */
-const { getContract, getState, displayState, parseUsdc, fmtUsdc, exec, PRODUCT } = require("./_utils");
+const {
+  getContract, getExchangeTarget, ensureFacadeUsdcAllowance,
+  getState, displayState, parseUsdc, fmtUsdc, exec, PRODUCT,
+} = require("./_utils");
 
 async function main() {
   console.log(`\n03 — Deposit USDC to perp DEX  [product=${PRODUCT.toUpperCase()}]`);
@@ -28,10 +31,9 @@ async function main() {
     return;
   }
 
-  await exec(
-    `depositToHyperliquid(${fmtUsdc(amount)})`,
-    contract.depositToHyperliquid(amount)
-  );
+  const { target: ex, vault } = await getExchangeTarget(contract);
+  await ensureFacadeUsdcAllowance(vault, amount);
+  await exec(`depositToHyperliquid(${fmtUsdc(amount)})`, ex.depositToHyperliquid(amount));
 
   displayState(await getState(contract), "After");
 }

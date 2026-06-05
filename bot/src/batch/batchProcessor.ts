@@ -16,6 +16,13 @@ import { runTargetStateEngine } from './targetStateEngine';
 import { runTestAaveLoopPlaybook } from './opsTestPlaybook';
 import { execTx } from './txSend';
 import { BatchRunLock } from './batchRunLock';
+import {
+  allocRedeemNetAmounts,
+  buildRedeemMerkleTree,
+  manifestFromTree,
+} from './redeemMerkle';
+import * as fs from 'fs';
+import * as path from 'path';
 
 const isBtc = config.product === 'btc';
 
@@ -711,44 +718,62 @@ export class BatchProcessor {
    * Run Phase 2 (mint KASH to minters, pay redeemers). For current cycle use performUpkeep();
    * for a past/orphan batch use processBatchPhase2ForCycle(batchCycle) so the correct batch gets finalized.
    */
+  private async buildRedeemMerkleRoot(batchCycle: bigint): Promise<string> {
+    const redeemKash = BigInt((await this.kashYield.batchTotalRedeemKash(batchCycle)).toString());
+    if (redeemKash === 0n) return `0x${'0'.repeat(64)}`;
+
+    const info = await this.kashYield.getBatchInfo(batchCycle);
+    const redeemUsersCount = BigInt(info.redeemUsersCount.toString());
+    const redeemers: string[] = [];
+    const kashAmounts: bigint[] = [];
+    for (let i = 0n; i < redeemUsersCount; i++) {
+      const user: string = await this.kashYield.batchRedeemUsers(batchCycle, i);
+      const req = await this.kashYield.getPendingRedeemRequest(user, batchCycle);
+      redeemers.push(user);
+      kashAmounts.push(BigInt(req.kashAmount.toString()));
+    }
+
+    const grossG = BigInt(info.totalRedeemUSD.toString());
+    const feeBps = BigInt((await this.kashYield.feeBps()).toString());
+    const entries = allocRedeemNetAmounts(redeemers, kashAmounts, redeemKash, grossG, feeBps);
+    const { root, proofs } = buildRedeemMerkleTree(batchCycle, entries);
+    const manifest = manifestFromTree(batchCycle, entries, root, proofs);
+
+    const outDir = path.join(process.cwd(), 'bot', 'data', 'redeem-proofs');
+    fs.mkdirSync(outDir, { recursive: true });
+    const outFile = path.join(outDir, `${config.product}-batch-${batchCycle.toString()}.json`);
+    fs.writeFileSync(outFile, JSON.stringify(manifest, null, 2));
+    console.log(`   📄 Redeem proof manifest: ${outFile}`);
+    console.log(`   🌳 Merkle root: ${root}\n`);
+    return root;
+  }
+
   private async runPhase2ForBatch(batchCycle: bigint): Promise<void> {
-    const currentCycle = await this.kashYield.getCurrentBatchCycle();
-    const currentCycleBn = typeof currentCycle === 'bigint' ? currentCycle : BigInt(currentCycle.toString());
-    if (batchCycle === currentCycleBn) {
-      console.log('🔄 Phase 2: Calling performUpkeep()...');
-      const receipt2 = await execTx('performUpkeep (phase 2)', () => this.kashYield.performUpkeep('0x'));
-      console.log(`   ✅ Phase 2 done in block ${receipt2.blockNumber}`);
+    const redeemKash = BigInt((await this.kashYield.batchTotalRedeemKash(batchCycle)).toString());
+    const merkleRoot = redeemKash > 0n ? await this.buildRedeemMerkleRoot(batchCycle) : `0x${'0'.repeat(64)}`;
+
+    console.log(`🔄 Phase 2: Calling processBatchPhase2ForCycle(${batchCycle}, root)...`);
+    try {
+      const receipt2 = await execTx(
+        `processBatchPhase2ForCycle(${batchCycle})`,
+        () => this.kashYield.processBatchPhase2ForCycle(batchCycle, merkleRoot),
+      );
+      console.log(`   ✅ Phase 2 for batch ${batchCycle} done in block ${receipt2.blockNumber}`);
       console.log(`   Tx hash: ${receipt2.hash}\n`);
       await this.handleEventsFromReceipt(receipt2);
-    } else {
-      console.log(`🔄 Phase 2: Calling processBatchPhase2ForCycle(${batchCycle}) (orphan batch)...`);
-      try {
-        const receipt2 = await execTx(
-          `processBatchPhase2ForCycle(${batchCycle})`,
-          () => this.kashYield.processBatchPhase2ForCycle(batchCycle),
-        );
-        console.log(`   ✅ Phase 2 for batch ${batchCycle} done in block ${receipt2.blockNumber}`);
-        console.log(`   Tx hash: ${receipt2.hash}\n`);
-        await this.handleEventsFromReceipt(receipt2);
-      } catch (err: any) {
-        const info = await this.kashYield.getBatchInfo(batchCycle).catch(() => null);
-        if (info?.processed) {
-          console.log(`   ℹ️  Phase 2 for batch ${batchCycle} already completed — skipping.\n`);
-          return;
-        }
-        // Detect InsufficientEthForRedeems (selector 0x56f6e9e8) and give actionable guidance
-        const errData: string = err?.data ?? err?.error?.data ?? '';
-        if (typeof errData === 'string' && errData.startsWith('0x56f6e9e8')) {
-          console.error(`❌ Phase 2 failed: contract has insufficient ETH for redemptions.`);
-          console.error(`   Funds may still be in Aave or Hyperliquid from a partial ops run.`);
-          console.error(`   Recovery steps:`);
-          console.error(`     1. Pull from Aave:  npx hardhat run scripts/ownerWithdrawFromAave.js --network arbitrumSepolia`);
-          console.error(`     2. Re-run bot:      npm start  (will retry Phase 2 automatically)`);
-          console.error(`   Or settle manually (burns KASH, pays ETH from contract balance):`);
-          console.error(`     BATCH_CYCLE=${batchCycle} USER_ADDRESSES=0x... npx hardhat run scripts/ownerManuallyProcessRedeem.js --network arbitrumSepolia`);
-        }
-        throw err;
+    } catch (err: any) {
+      const info = await this.kashYield.getBatchInfo(batchCycle).catch(() => null);
+      if (info?.processed) {
+        console.log(`   ℹ️  Phase 2 for batch ${batchCycle} already completed — skipping.\n`);
+        return;
       }
+      const errData: string = err?.data ?? err?.error?.data ?? '';
+      if (typeof errData === 'string' && errData.startsWith('0x56f6e9e8')) {
+        console.error(`❌ Phase 2 failed: contract has insufficient ${isBtc ? 'wBTC' : 'ETH'} for redemptions.`);
+        console.error(`   Funds may still be in Aave or Hyperliquid from a partial ops run.`);
+        console.error(`   Re-run bot after withdrawing asset from Aave/HL.`);
+      }
+      throw err;
     }
   }
 

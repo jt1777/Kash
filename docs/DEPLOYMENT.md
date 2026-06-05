@@ -18,8 +18,8 @@ Use **two different Arbitrum addresses**. Do not reuse the deployer key for batc
 
 | Role | Wallet | Keys / env | On-chain identity |
 |------|--------|------------|-------------------|
-| **Owner** | Cold / multisig (high security) | Root `.env` → **`PRIVATE_KEY`** only for **owner** scripts | `KashYield*.owner()` — config, reserves, `setSpotDex`, `setHyperliquid`, timelocks, `ownerWithdraw*` |
-| **Bot / keeper** | Hot operator (limited funds) | **`bot/.env` → `PRIVATE_KEY`** and **`HYPERLIQUID_API_PRIVATE_KEY`** (same bot address) | `KashYield*.botAddress()` — `performUpkeep`, batch ops, `markBatchOpsDone`, Aave/HL moves via vault |
+| **Owner** | Cold / multisig (high security) | Root `.env` → **`PRIVATE_KEY`** only for **owner** scripts | `KashYield*.owner()` — config, reserves, `setSpotDex`, `setExchangeFacade`, `ownerWithdraw*`; **ExchangeFacade** owner — `setHyperliquid`, timelocks |
+| **Bot / keeper** | Hot operator (limited funds) | **`bot/.env` → `PRIVATE_KEY`** and **`HYPERLIQUID_API_PRIVATE_KEY`** (same bot address) | `KashYield*.botAddress()` — `performUpkeep`, batch ops, `markBatchOpsDone`, Aave/spot on vault; HL writes via **ExchangeFacade** |
 
 **Deploy wiring**
 
@@ -59,7 +59,7 @@ console.log("botAddress:", await ky.botAddress())
 
 3. **`AAVE_POOL_ADDRESS` in env is informational for scripts** — `KashYieldETH` / `KashYieldBtc` embed the Arbitrum One Aave V3 pool (`0x794a61358D6845594F94dc1DB02A252b5b4814aD`) in the implementation; deploy scripts do not override it.
 
-4. **`exchangeSwitchDelay`** on a fresh vault defaults to **24 hours**. The **first** perp adapter registration is immediate; the delay applies when you **later** propose **another** adapter. On mainnet, do **not** set the delay to `0` unless you explicitly accept no timelock for future adapter changes.
+4. **`exchangeSwitchDelay`** lives on **ExchangeFacade** (fixed **24 hours** in current bytecode). The **first** perp adapter registration on a fresh facade is immediate; the delay applies when you **later** propose **another** adapter. Legacy `scripts/setExchangeSwitchDelay.js` targets the **vault** and does **not** apply to current bytecode.
 
 5. **Owner / treasury reserves** (`ownerUsdcReserve`, asset-specific owner buffers). These balances are **not** part of user NAV. The bot may call `coverUsdcShortfall` to move reserved USDC into the working float. Batch phase 2 credits protocol fees to owner asset reserves; `ownerWithdraw*` pulls only from those reserves. Ops and `snapshotOpsContext` use **adjusted** balances (raw minus reserves) as the deployable float.
 
@@ -90,7 +90,9 @@ console.log("botAddress:", await ky.botAddress())
 
 7. **`BOT_ADDRESS` must differ from owner.** If you omit `BOT_ADDRESS`, deploy scripts default **`botAddress = deployer`**, which collapses owner and bot into one key — avoid on mainnet.
 
-8. **Redeploy = new vault + new KASH token.** Each `KashYieldETH` / `KashYieldBtc` deploy creates a **new** `KashToken*` in the constructor. Update **`frontend/lib/contracts/addresses.ts`** fallbacks only after you intend to cut over; finish in-flight batches on **old** vaults before switching bot/frontend env. Latest bytecode includes **`markBatchOpsDone(batchCycle, grossRedeemAssetAmount)`** (locked redeem **G**), owner-reserve-only `ownerWithdraw*`, and removed `getReserved*` / stale `currentBatchCycle` storage — incompatible with older deployed vaults for mid-batch resume.
+8. **Redeploy = new vault + new KASH token.** Each `KashYieldETH` / `KashYieldBtc` deploy creates a **new** `KashToken*` in the constructor. Update **`frontend/lib/contracts/addresses.ts`** and env files only after cutover; finish in-flight batches on **old** vaults first. Current bytecode adds: **ExchangeFacade** (HL writes moved out), **Merkle pull claims** (`claimRedeem`, `processBatchPhase2ForCycle`), **`lockedClaimWbtc` / `lockedClaimEth`**, user caps, swap **`minOut`** args, and **`markBatchOpsDone(batchCycle, G)`** — incompatible with older vaults for mid-batch resume.
+
+9. **Redeem payouts are pull-based.** Phase 2 no longer loops redeemers with `safeTransfer`. The bot passes a Merkle root into `processBatchPhase2ForCycle`; users call **`claimRedeem`**. Host proof manifests for the frontend (`NEXT_PUBLIC_REDEEM_PROOF_BASE_URL`).
 
 ---
 
@@ -148,7 +150,7 @@ On mainnet, Hyperliquid is separate from Arbitrum execution. The **HyperliquidAd
 | Spot / perp trades | Off-chain: HL API |
 | Withdraw USDC | HL withdrawal settles back to Arbitrum (~minutes); **destination address is operator-chosen** |
 
-Ops scripts `04`–`07` behave as API-driven steps on mainnet, not synchronous mock contract calls.
+Ops scripts `04`–`07` behave as API-driven steps on mainnet, not synchronous mock contract calls. On-chain HL **write** calls go through **ExchangeFacade** (not the vault); the bot calls `approveExchangeFacadeUsdc` before USDC-pulling facade ops.
 
 ### Hyperliquid USDC withdrawals and custody
 
@@ -167,6 +169,61 @@ Hyperliquid bridges USDC to **whichever Arbitrum address you specify** (HL API `
 
 ---
 
+## Architecture: ExchangeFacade (perp registry + HL writes)
+
+To stay under EIP-170, perp exchange registry and Hyperliquid operation wrappers live in **`ExchangeFacade.sol`**, deployed **once per vault** (ETH and BTC each get their own facade).
+
+| Component | Role |
+|-----------|------|
+| `KashYield*.exchangeFacade` | Owner sets facade address; vault forwards HL **view** calls |
+| `ExchangeFacade` | `perpExchanges`, `activePerpExchange`, `depositToHyperliquid`, `openShort`, etc. |
+| `approveExchangeFacadeUsdc` | Vault approves USDC so facade can `safeTransferFrom` for HL deposits |
+
+**Deploy and wire (owner, per product)**
+
+```bash
+# After vault + HyperliquidAdapter exist:
+KASH_YIELD_ADDRESS=<vault> BOT_ADDRESS=<bot> PRIMARY_ASSET=0x0 \
+  npx hardhat run scripts/deploy-exchange-facade.js --network arbitrumOne
+# PRIMARY_ASSET = WBTC address for KashYieldBtc; 0x0 for ETH product
+```
+
+```bash
+npx hardhat console --network arbitrumOne
+```
+
+```javascript
+const [owner] = await ethers.getSigners()
+const vault = await ethers.getContractAt("KashYieldETH", "<KASH_YIELD_ETH_ADDRESS>", owner)
+const facade = await ethers.getContractAt("ExchangeFacade", "<EXCHANGE_FACADE_ADDRESS>", owner)
+await (await vault.setExchangeFacade("<EXCHANGE_FACADE_ADDRESS>")).wait()
+await (await facade.setHyperliquid("<HL_ADAPTER_ADDRESS_ETH>")).wait()
+await (await facade.setActivePerpExchange("HL")).wait()
+```
+
+**Verify:** `await vault.exchangeFacade()` is non-zero; `await facade.hyperliquidAddress()` matches your adapter; `await facade.activePerpExchange()` is `"HL"`.
+
+> **Legacy scripts:** `scripts/setHyperliquid.js` and `scripts/setActivePerpExchange.js` call methods on the **vault** and apply only to **older** bytecode. For current vaults, register HL on the **facade** as above.
+
+---
+
+## Architecture: Merkle redeem claims
+
+| Step | Who | Action |
+|------|-----|--------|
+| Mark-done | Bot | `markBatchOpsDone(batchCycle, G)` — locks gross redeem asset **G** |
+| Phase 2 | Bot | `processBatchPhase2ForCycle(batchCycle, merkleRoot)` — mints KASH (push), commits root, increments `lockedClaim*` |
+| Claim | User | `claimRedeem(batchCycle, netAmount, proof)` — receives wBTC/ETH; decrements claim reserve |
+
+- **Mint-only batches** can still use `performUpkeep` for Phase 2 (no Merkle root).
+- **Redeem batches** must use bot-driven Phase 2 with root; `performUpkeep` reverts when redeems need a root.
+- Bot writes proofs to `bot/data/redeem-proofs/{product}-batch-{cycle}.json`.
+- Frontend: `NEXT_PUBLIC_REDEEM_PROOF_BASE_URL` → base URL where those JSON files are hosted (e.g. `https://cdn.example.com/redeem-proofs`).
+
+Claim expiry: **30 days** after settlement; unclaimed amounts can be swept per on-chain policy (`sweepExpiredClaims`).
+
+---
+
 ## Architecture: Uniswap V3 spot adapter
 
 The `UniswapV3Adapter` implements `ISpotDex` and wraps `SwapRouter02`. Typical routing: **0.05%** pools for WETH/USDC and wBTC/USDC. Use sane `amountOutMinimum` / slippage on mainnet — never `0`.
@@ -177,7 +234,7 @@ The `UniswapV3Adapter` implements `ISpotDex` and wraps `SwapRouter02`. Typical r
 
 ### Root `.env` — owner / deployer only (Arbitrum One)
 
-Used by Hardhat **deploy** and **owner** configuration scripts (`setSpotDex`, `setHyperliquid`, `setExchangeSwitchDelay`, adapter `setDirectDepositMode`, etc.). **Do not** put the bot hot key here unless you intentionally use one wallet for everything.
+Used by Hardhat **deploy** and **owner** configuration scripts (`setSpotDex`, `setExchangeFacade`, adapter `setDirectDepositMode`, facade `setHyperliquid`, etc.). **Do not** put the bot hot key here unless you intentionally use one wallet for everything.
 
 ```env
 # OWNER — signs deploy + owner-only txs (hardware wallet / multisig)
@@ -200,9 +257,11 @@ HL_BRIDGE_ADDRESS=0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7
 # UNISWAP_ADAPTER_ADDRESS=
 # KASH_YIELD_ETH_ADDRESS=
 # KASH_TOKEN_ETH=
+# EXCHANGE_FACADE_ETH=
 # HL_ADAPTER_ADDRESS_ETH=
 # KASH_YIELD_BTC_ADDRESS=
 # KASH_TOKEN_BTC=
+# EXCHANGE_FACADE_BTC=
 # HL_ADAPTER_ADDRESS_BTC=
 ```
 
@@ -251,6 +310,9 @@ NEXT_PUBLIC_KASH_YIELD_ETH_ADDRESS=<KashYieldETH>
 NEXT_PUBLIC_KASH_TOKEN_ETH=<KashTokenEth>
 NEXT_PUBLIC_KASH_YIELD_BTC_ADDRESS=<KashYieldBtc>
 NEXT_PUBLIC_KASH_TOKEN_BTC=<KashTokenBtc>
+
+# Required for redeem claim UI — host bot proof manifests (see Merkle redeem claims)
+NEXT_PUBLIC_REDEEM_PROOF_BASE_URL=https://your-cdn.example.com/redeem-proofs
 ```
 
 ---
@@ -263,9 +325,11 @@ NEXT_PUBLIC_KASH_TOKEN_BTC=<KashTokenBtc>
 - [ ] **`BOT_ADDRESS`** set on both vault deploy commands to the **bot** address (not omitted).
 - [ ] **`directDepositMode = false`** on **both** HL adapters; HL withdrawals target **adapter** address.
 - [ ] HL **agent** approved for bot on each adapter’s HL account; adapter **`operator`** = bot (deploy env or `setOperator`).
-- [ ] `exchangeSwitchDelay` is **not** `0` on mainnet unless you deliberately want no timelock for **future** adapter proposals (default **86400** = 24h; optional **172800** = 48h via `setExchangeSwitchDelay`).
-- [ ] Contracts verified on Arbiscan; `diagnose-eth.js` (and BTC ops smoke) clean.
-- [ ] `bot/.env` + `frontend/.env.local` point at **new** vault/token addresses; `npm run build` in `bot/` before `npm start`.
+- [ ] **ExchangeFacade** deployed per vault; `setExchangeFacade` + `facade.setHyperliquid` + `facade.setActivePerpExchange("HL")` complete.
+- [ ] ExchangeFacade timelock is **24h** for future adapter proposals (first HL registration is immediate).
+- [ ] Contracts verified on Arbiscan (vault, facade, adapters); `diagnose-eth.js` (and BTC ops smoke) clean.
+- [ ] `bot/.env` + `frontend/.env.local` point at **new** vault/token addresses; `NEXT_PUBLIC_REDEEM_PROOF_BASE_URL` set; proof hosting plan in place.
+- [ ] `npm run build` in `bot/` before `npm start`; fork/unit tests pass if you have RPC (`test/redeem-merkle.unit.test.js`, optional fork e2e).
 
 ---
 
@@ -282,7 +346,15 @@ Complete **per product** (ETH adapter, then BTC adapter) **before** the first li
 await (await adapter.setOperator("<BOT_WALLET>")).wait()
 ```
 
-3. **HL API agent (bot key)** — authorise the **bot EOA** to trade on the HL account tied to the **adapter address** via Hyperliquid’s `approveAgent` (REST `/exchange`). The adapter contract cannot sign HL payloads; the bot signs orders/`withdraw3` as agent. If agent setup is incomplete, `npm start` may emit on-chain intent without real HL fills.
+3. **HL API agent (bot key)** — authorise the **bot EOA** on the HL account tied to the **adapter address** via `approveAgent`. Use repo helper:
+
+```bash
+HL_ADAPTER_ADDRESS=0x... AGENT_ADDRESS=0x... \
+  npx hardhat run scripts/approveHlAgent.js --network arbitrumOne
+```
+
+For **`directDepositMode = false`**, success means `extraAgents(adapter)` lists the bot. Optional EIP-1271 probe: `VERIFY_EIP1271=true` (on-chain `isValidSignature`). Contract-master signing attempt: `SIGNER=adapter` (owner signs; SDK reports adapter address — only works if HL accepts EIP-1271 off-chain).
+
 4. **Withdrawals** — bot `withdraw3` and manual HL UI must use **`destination =` HyperliquidAdapter address** (see **Hyperliquid USDC withdrawals and custody** above).
 
 > **Note:** `bot/README.md` “Mainnet Hyperliquid Setup” §1 historically described **`directDepositMode = true`** for simpler bootstrap. **This deployment uses the opposite (production) path.** Follow this guide and Step 4a / B3, not that subsection.
@@ -300,17 +372,17 @@ await (await adapter.setOperator("<BOT_WALLET>")).wait()
 | 2 | **KashYieldETH** + **KashTokenEth** | `scripts/deploy-arbitrum-sepolia.js` | [3](#step-3--deploy-kashyieldeth) |
 | 3 | **HyperliquidAdapter** (ETH) | `scripts/deploy-hyperliquid-adapter.js` (`IS_ETH_ASSET=true`) | [4](#step-4--deploy-hyperliquidadapter-eth) |
 | 4 | HL custody `directDepositMode=false` | Hardhat console / `setDirectDepositMode` | [4a](#step-4a--hyperliquid-adapter-custody-mode-required-directdepositmode--false) |
-| 5 | ETH oracle (explicit) | `scripts/setEthOracle.js` | [5](#step-5--set-chainlink-eth-oracle-recommended) |
-| 6 | Exchange switch delay (optional) | `scripts/setExchangeSwitchDelay.js` | [6](#step-6--exchange-switch-delay-optional) |
-| 7 | Register + activate HL on ETH vault | `setHyperliquid.js`, `setActivePerpExchange.js` | [7](#step-7--register-and-activate-hl-eth) |
-| 8 | Whitelist Uniswap + set spot DEX (ETH) | `setAllowedSpotDexRouter.js`, `setSpotDex.js` | [8](#step-8--whitelist-uniswap-adapter-and-set-spot-dex-eth) |
-| 9 | Cycle duration (ETH) | `scripts/setCycleDuration.js` | [9](#step-9--set-cycle-duration-eth) |
+| 5 | **ExchangeFacade** (ETH) | `scripts/deploy-exchange-facade.js` | [4b](#step-4b--deploy-and-wire-exchangefacade-eth) |
+| 6 | ETH oracle (explicit) | `scripts/setEthOracle.js` | [5](#step-5--set-chainlink-eth-oracle-recommended) |
+| 7 | Whitelist Uniswap + set spot DEX (ETH) | `setAllowedSpotDexRouter.js`, `setSpotDex.js` | [8](#step-8--whitelist-uniswap-adapter-and-set-spot-dex-eth) |
+| 8 | Cycle duration (ETH) | `scripts/setCycleDuration.js` | [9](#step-9--set-cycle-duration-eth) |
+| 9 | HL `approveAgent` + optional EIP-1271 probe | `scripts/approveHlAgent.js` | [Hyperliquid adapter setup](#hyperliquid-adapter-setup-production-directdepositmode--false) |
 | 10 | Verify on Arbiscan | `npx hardhat verify …` | [10](#step-10--verify-on-arbiscan) |
 | 11 | Smoke test | `scripts/diagnose-eth.js` | [11](#step-11--post-deployment-verification-eth) |
 | 12 | **KashYieldBtc** + **KashTokenBtc** | `scripts/deploy-kashyieldbtc.js` | [B1](#step-b1--deploy-kashyieldbtc) |
 | 13 | **HyperliquidAdapter** (BTC) | `scripts/deploy-hyperliquid-adapter.js` (`IS_ETH_ASSET=false`) | [B2](#step-b2--deploy-hyperliquidadapter-btc) |
 | 14 | HL custody (BTC adapter) | Hardhat console / `setDirectDepositMode` | [B3](#step-b3--hyperliquid-adapter-custody-mode-btc-adapter) |
-| 15 | Register + activate HL on BTC vault | `setHyperliquid.js`, `setActivePerpExchange.js` (`PRODUCT=btc`) | [B6](#step-b6--register-and-activate-hl-btc) |
+| 15 | **ExchangeFacade** (BTC) + wire HL | `deploy-exchange-facade.js` + console | [B5](#step-b5--deploy-and-wire-exchangefacade-btc) |
 | 16 | Whitelist Uniswap + set spot DEX (BTC) | same adapter as ETH; `PRODUCT=btc` | [B7](#step-b7--whitelist-uniswap-adapter-and-set-spot-dex-btc) |
 | 17 | Cycle duration (BTC) | `setCycleDuration.js` (`PRODUCT=btc`) | [B8](#step-b8--set-cycle-duration-btc) |
 | 18 | Verify BTC contracts | `npx hardhat verify …` | [B9](#step-b9--verify-on-arbiscan-btc) |
@@ -445,6 +517,32 @@ console.log("hlAccount =", await adapter.hlAccount())
 - **`receipt.to`** — must match your **`HL_ADAPTER_ADDRESS_ETH`** (the adapter you configured).
 - **On-chain check:** paste **`receipt.hash`** into Arbiscan; the UI should show **Success**.
 
+### Step 4b — Deploy and wire ExchangeFacade (ETH)
+
+After Steps 3–4a (vault + HL adapter + `directDepositMode=false`):
+
+```bash
+KASH_YIELD_ADDRESS=<KASH_YIELD_ETH_ADDRESS> \
+BOT_ADDRESS=<bot_wallet> \
+PRIMARY_ASSET=0x0000000000000000000000000000000000000000 \
+USDC_ADDRESS=0xaf88d065e77c8cC2239327C5EDb3A432268e5831 \
+npx hardhat run scripts/deploy-exchange-facade.js --network arbitrumOne
+```
+
+Save `EXCHANGE_FACADE_ETH=<address>` to root `.env`.
+
+Wire (owner console):
+
+```javascript
+const vault = await ethers.getContractAt("KashYieldETH", "<KASH_YIELD_ETH_ADDRESS>")
+const facade = await ethers.getContractAt("ExchangeFacade", "<EXCHANGE_FACADE_ETH>")
+await (await vault.setExchangeFacade("<EXCHANGE_FACADE_ETH>")).wait()
+await (await facade.setHyperliquid("<HL_ADAPTER_ADDRESS_ETH>")).wait()
+await (await facade.setActivePerpExchange("HL")).wait()
+```
+
+**Readback:** `await vault.exchangeFacade()` ≠ zero; `await facade.hyperliquidAddress()` = adapter; bot `npm start` ops can call `depositToHyperliquid` via facade.
+
 ### Step 5 — Set Chainlink ETH oracle (recommended)
 
 `KashYieldETH` defaults to the Arbitrum ETH/USD feed; calling `setEthOracle` makes configuration explicit.
@@ -455,29 +553,11 @@ ETH_ORACLE_ADDRESS=0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612 \
 npx hardhat run scripts/setEthOracle.js --network arbitrumOne
 ```
 
-### Step 6 — Exchange switch delay (optional)
+### Step 6 — ExchangeFacade timelock (informational)
 
-Skip if the default **24h** is acceptable. To use **48h** for **future** adapter proposals:
+HL registration on the **facade** (Step 4b) is **immediate** for the **first** adapter. The facade uses a fixed **24h** timelock for **subsequent** adapter proposals (`exchangeSwitchDelay` on `ExchangeFacade`).
 
-```bash
-KASH_YIELD_ETH_ADDRESS=<KashYieldETH> DELAY_SECONDS=172800 \
-npx hardhat run scripts/setExchangeSwitchDelay.js --network arbitrumOne
-```
-
-### Step 7 — Register and activate HL (ETH)
-
-First deploy: register then activate — no `confirmPerpExchange`.
-
-```bash
-KASH_YIELD_ETH_ADDRESS=<KashYieldETH> \
-HYPERLIQUID_ADDRESS=<HL_ADAPTER_ADDRESS_ETH> \
-npx hardhat run scripts/setHyperliquid.js --network arbitrumOne
-
-KASH_YIELD_ETH_ADDRESS=<KashYieldETH> EXCHANGE_NAME=HL \
-npx hardhat run scripts/setActivePerpExchange.js --network arbitrumOne
-```
-
-**Later**, if you propose a **new** adapter: wait for `exchangeSwitchDelay`, then `confirmPerpExchange.js`, then `setActivePerpExchange.js` as needed.
+**Later**, if you propose a **new** adapter: wait 24h, then `facade.confirmPerpExchange("HL")`, then `facade.setActivePerpExchange("HL")`. Do **not** use legacy `scripts/setExchangeSwitchDelay.js` on the vault.
 
 ### Step 8 — Whitelist Uniswap adapter and set spot DEX (ETH)
 
@@ -513,10 +593,15 @@ npx hardhat verify --network arbitrumOne <UNISWAP_ADAPTER_ADDRESS> \
   0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45 \
   0x82aF49447D8a07e3bd95BD0d56f35241523fBab1
 
-npx hardhat verify --network arbitrumOne <HL_ADAPTER_ADDRESS_ETH> \
+  npx hardhat verify --network arbitrumOne <HL_ADAPTER_ADDRESS_ETH> \
   0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7 \
   0xaf88d065e77c8cC2239327C5EDb3A432268e5831 \
   "0x0000000000000000000000000000000000000000" true \
+  <KASH_YIELD_ETH_ADDRESS>
+
+npx hardhat verify --network arbitrumOne <EXCHANGE_FACADE_ETH> <OWNER> <BOT_ADDRESS> \
+  0xaf88d065e77c8cC2239327C5EDb3A432268e5831 \
+  0x0000000000000000000000000000000000000000 \
   <KASH_YIELD_ETH_ADDRESS>
 ```
 
@@ -531,14 +616,14 @@ npx hardhat run scripts/diagnose-eth.js --network arbitrumOne
 
 - [ ] UniswapV3Adapter deployed; `UNISWAP_ADAPTER_ADDRESS` saved
 - [ ] KashYieldETH deployed; `KASH_YIELD_ETH_ADDRESS` / `KASH_TOKEN_ETH` saved
-- [ ] HyperliquidAdapter (ETH) deployed; `HL_ADAPTER_ADDRESS_ETH` saved; **Hyperliquid custody mode** set per Step 4a (**`directDepositMode`** / HL agent alignment)
+- [ ] HyperliquidAdapter (ETH) deployed; `HL_ADAPTER_ADDRESS_ETH` saved; **Hyperliquid custody mode** set per Step 4a
+- [ ] **ExchangeFacade** deployed and wired (Step 4b); `EXCHANGE_FACADE_ETH` saved
 - [ ] `setEthOracle.js` run (recommended)
-- [ ] _(Optional)_ `setExchangeSwitchDelay.js` for 48h future proposals
-- [ ] `setHyperliquid.js` + `setActivePerpExchange.js` — HL active
+- [ ] `approveHlAgent.js` — agent on `extraAgents(adapter)`; optional `VERIFY_EIP1271=true`
 - [ ] `setAllowedSpotDexRouter.js` + `setSpotDex.js` — spot DEX live (confirm timelock if applicable)
 - [ ] `setCycleDuration.js` for ETH
 - [ ] Contracts verified; `diagnose-eth.js` clean
-- [ ] `bot/.env` and `frontend/.env.local` updated
+- [ ] `bot/.env` and `frontend/.env.local` updated (`NEXT_PUBLIC_REDEEM_PROOF_BASE_URL` for claims)
 
 ---
 
@@ -647,29 +732,26 @@ console.log("hlAccount =", await adapter.hlAccount())
 
 Already applied in **Step B1** via `setBtcOracle`. Re-run only if you need to change the feed later (owner script / contract method per your process).
 
-### Step B5 — Exchange switch delay (optional)
+### Step B5 — Deploy and wire ExchangeFacade (BTC)
 
 ```bash
-KASH_YIELD_BTC_ADDRESS=<KashYieldBtc> DELAY_SECONDS=172800 \
-npx hardhat run scripts/setExchangeSwitchDelay.js --network arbitrumOne
+KASH_YIELD_ADDRESS=<KASH_YIELD_BTC_ADDRESS> \
+BOT_ADDRESS=<bot_wallet> \
+PRIMARY_ASSET=0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f \
+npx hardhat run scripts/deploy-exchange-facade.js --network arbitrumOne
 ```
 
-(Omit or use defaults if 24h is enough.)
+Save `EXCHANGE_FACADE_BTC=<address>`. Wire (owner console, same pattern as Step 4b):
 
-### Step B6 — Register and activate HL (BTC)
-
-If root `.env` already has a **valid** `KASH_YIELD_ETH_ADDRESS`, add **`PRODUCT=btc`** so the script targets the BTC vault (same rule as other `scripts/*.js` that support both products).
-
-```bash
-PRODUCT=btc \
-KASH_YIELD_BTC_ADDRESS=<KashYieldBtc> \
-HYPERLIQUID_ADDRESS=<HL_ADAPTER_ADDRESS_BTC> \
-npx hardhat run scripts/setHyperliquid.js --network arbitrumOne
-
-PRODUCT=btc \
-KASH_YIELD_BTC_ADDRESS=<KashYieldBtc> EXCHANGE_NAME=HL \
-npx hardhat run scripts/setActivePerpExchange.js --network arbitrumOne
+```javascript
+const vault = await ethers.getContractAt("KashYieldBtc", "<KASH_YIELD_BTC_ADDRESS>")
+const facade = await ethers.getContractAt("ExchangeFacade", "<EXCHANGE_FACADE_BTC>")
+await (await vault.setExchangeFacade("<EXCHANGE_FACADE_BTC>")).wait()
+await (await facade.setHyperliquid("<HL_ADAPTER_ADDRESS_BTC>")).wait()
+await (await facade.setActivePerpExchange("HL")).wait()
 ```
+
+Run `approveHlAgent.js` for the BTC adapter (`HL_ADAPTER_ADDRESS_BTC`).
 
 ### Step B7 — Whitelist Uniswap adapter and set spot DEX (BTC)
 
@@ -708,14 +790,18 @@ npx hardhat verify --network arbitrumOne <HL_ADAPTER_ADDRESS_BTC> \
   0xaf88d065e77c8cC2239327C5EDb3A432268e5831 \
   0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f false \
   <KASH_YIELD_BTC_ADDRESS>
+
+npx hardhat verify --network arbitrumOne <EXCHANGE_FACADE_BTC> <OWNER> <BOT_ADDRESS> \
+  0xaf88d065e77c8cC2239327C5EDb3A432268e5831 \
+  0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f \
+  <KASH_YIELD_BTC_ADDRESS>
 ```
 
 ### BTC deployment — summary checklist
 
 - [ ] `deploy-kashyieldbtc.js` — `KASH_YIELD_BTC_ADDRESS`, `KASH_TOKEN_BTC`, Chainlink BTC oracle wired
-- [ ] HyperliquidAdapter (BTC) deployed; `HL_ADAPTER_ADDRESS_BTC` saved; **Hyperliquid custody mode** set per Step B3 (**`directDepositMode`** / HL agent alignment)
-- [ ] _(Optional)_ `setExchangeSwitchDelay.js` on BTC vault
-- [ ] `setHyperliquid.js` + `setActivePerpExchange.js` — HL active for BTC
+- [ ] HyperliquidAdapter (BTC) deployed; `HL_ADAPTER_ADDRESS_BTC` saved; **Hyperliquid custody mode** set per Step B3
+- [ ] **ExchangeFacade** deployed and wired (Step B5); `EXCHANGE_FACADE_BTC` saved; `approveHlAgent` for BTC adapter
 - [ ] `setAllowedSpotDexRouter.js` + `setSpotDex.js` with `PRODUCT=btc` — same UniswapV3Adapter as ETH
 - [ ] `setCycleDuration.js` with `PRODUCT=btc`
 - [ ] Contracts verified; bot/frontend envs updated for **PRODUCT=btc** when operating BTC
@@ -724,21 +810,17 @@ npx hardhat verify --network arbitrumOne <HL_ADAPTER_ADDRESS_BTC> \
 
 ## Adding a second perp exchange (GMX, Aster, etc.)
 
-Use **`arbitrumOne`**. Example for ETH vault (use `KASH_YIELD_BTC_ADDRESS` and `PRODUCT=btc` patterns for BTC):
+Register on the vault’s **ExchangeFacade** (owner Hardhat console). Example for ETH facade:
 
-```bash
-KASH_YIELD_ETH_ADDRESS=<KashYieldETH> EXCHANGE_NAME=GMX \
-GMX_ADAPTER_ADDRESS=<adapter> \
-npx hardhat run scripts/setHyperliquid.js --network arbitrumOne
-
-KASH_YIELD_ETH_ADDRESS=<KashYieldETH> EXCHANGE_NAME=GMX \
-npx hardhat run scripts/confirmPerpExchange.js --network arbitrumOne
-
-KASH_YIELD_ETH_ADDRESS=<KashYieldETH> EXCHANGE_NAME=GMX \
-npx hardhat run scripts/setActivePerpExchange.js --network arbitrumOne
+```javascript
+const facade = await ethers.getContractAt("ExchangeFacade", "<EXCHANGE_FACADE_ETH>")
+await (await facade.setPerpExchange("GMX", "<GMX_ADAPTER_ADDRESS>")).wait()
+// After facade timelock:
+await (await facade.confirmPerpExchange("GMX")).wait()
+await (await facade.setActivePerpExchange("GMX")).wait()
 ```
 
-With non-zero `exchangeSwitchDelay`, wait for the timelock between proposal and confirmation.
+Repeat with `EXCHANGE_FACADE_BTC` for the BTC product. With non-zero facade `exchangeSwitchDelay`, wait for the timelock between proposal and confirmation.
 
 ---
 
@@ -770,7 +852,7 @@ npx hardhat run scripts/checkBalance.js --network arbitrumOne
 
 Use **`--network arbitrumOne`**. Set **`PRODUCT=btc`** (in the shell or **`bot/.env`**) when targeting **`KashYieldBtc`** so scripts resolve **`KASH_YIELD_BTC_ADDRESS`** and wBTC decimals.
 
-HL trading steps (`04`–`07`) use the **Hyperliquid API** on mainnet; deposit/withdraw and Aave steps remain on-chain on Arbitrum. **HL → Arbitrum USDC withdrawals must target the HyperliquidAdapter** (see **Hyperliquid USDC withdrawals and custody** above); script `08-withdraw-usdc-from-perp.js` only forwards USDC that has **already** landed on the adapter. See `bot/scripts/ops/README.md` for per-script usage.
+HL trading steps (`04`–`07`) use the **Hyperliquid API** on mainnet; on-chain HL **writes** go through **ExchangeFacade**; Aave and spot swaps call the **vault**. Swaps pass **`minOut`** (bot-computed from DEX quote + `maxSwapSlippageBps`). **HL → Arbitrum USDC withdrawals must target the HyperliquidAdapter**; script `08-withdraw-usdc-from-perp.js` forwards USDC that has **already** landed on the adapter. See `bot/scripts/ops/README.md` for per-script usage.
 
 ---
 
@@ -799,7 +881,18 @@ Items called out elsewhere in this guide but easy to miss during cutover:
 
 ### Hyperliquid `approveAgent` (per adapter)
 
-Step **Hyperliquid adapter setup (production)** describes **`directDepositMode = false`** and **`setOperator`**, but **HL agent approval is not a single Hardhat tx**. For each **HyperliquidAdapter** (ETH and BTC), the **bot EOA** must be authorised to sign API actions (`order`, `withdraw3`, etc.) on the HL account tied to the **adapter contract address**. Use your Hyperliquid runbook or REST **`/exchange`** **`approveAgent`** flow. Until that is done, `npm start` may record on-chain intent without real HL fills.
+For each **HyperliquidAdapter** (ETH and BTC), authorise the **bot EOA** on the HL account tied to the **adapter contract address**:
+
+```bash
+HL_ADAPTER_ADDRESS=0x... AGENT_ADDRESS=0x... \
+  npx hardhat run scripts/approveHlAgent.js --network arbitrumOne
+```
+
+Verify `extraAgents(adapter)` lists the bot. Optional: `VERIFY_EIP1271=true` probes `HyperliquidAdapter.isValidSignature`; `SIGNER=adapter` attempts contract-master signing (requires HL off-chain EIP-1271 support).
+
+### Redeem proof hosting (required for claim UI)
+
+After each redeem Phase 2, the bot writes `bot/data/redeem-proofs/{product}-batch-{cycle}.json`. Upload/sync these files to static hosting and set **`NEXT_PUBLIC_REDEEM_PROOF_BASE_URL`** in `frontend/.env.local`. Users claim via **`claimRedeem`** in the app (not automatic transfer).
 
 External reference: [Hyperliquid docs](https://hyperliquid.gitbook.io/hyperliquid-docs/).
 

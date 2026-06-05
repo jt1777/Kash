@@ -7,9 +7,12 @@ A capital-efficient yield strategy protocol. Users deposit ETH or wBTC and recei
 - **Two products**: `KashYieldETH` (ETH/wETH deposits → KASH-ETH) and `KashYieldBtc` (wBTC deposits → KASH-BTC). Both run on Arbitrum.
 - **NAV-based pricing**: KASH priced at current Net Asset Value, updated by the owner/bot after each cycle's capital operations.
 - **Configurable batch cycle**: Default 24-hour cycle (86400 s). Owner calls `setCycleDurationSeconds(uint256)` to shorten cycles for testing (e.g. 3600 s = 1-hour cycles) or extend them for production.
-- **Multi-exchange adapter pattern**: Perpetual exchange integrations (Hyperliquid, GMX, Aster DEX) are deployed as independent adapter contracts implementing `IPerpExchange`. The main contract holds a registry (`perpExchanges` mapping) and routes calls to the active adapter. New exchanges can be added without redeploying the main contract.
-- **Spot DEX integration**: An `ISpotDex` adapter (e.g. UniswapV3Adapter) enables on-chain asset ↔ USDC swaps for redemption rebalancing, with configurable slippage (`maxSwapSlippageBps`).
-- **24-hour timelock on adapter registration**: The *first* adapter registered on a fresh deployment is immediate (no delay). Every subsequent adapter registration requires `setPerpExchange()` followed by `confirmPerpExchange()` after a 24-hour delay, preventing a compromised key from instantly adding a malicious adapter. Switching between already-confirmed adapters is always immediate via `setActivePerpExchange()`.
+- **ExchangeFacade**: Perp exchange registry and Hyperliquid write ops live in a separate `ExchangeFacade` contract (bytecode headroom). The vault holds `exchangeFacade` and forwards HL view calls; the bot calls HL deposits/shorts through the facade.
+- **Merkle pull claims (redeems)**: Phase 2 commits a Merkle root of net redeem amounts; users call `claimRedeem(batchCycle, amount, proof)` to receive ETH/wBTC (gas paid by user). Mint payouts remain push-based in Phase 2.
+- **Multi-exchange adapter pattern**: Perpetual adapters (`HyperliquidAdapter`, GMX, Aster) implement `IPerpExchange` and are registered on **ExchangeFacade** (`perpExchanges` mapping, `activePerpExchange`).
+- **Spot DEX integration**: An `ISpotDex` adapter (e.g. UniswapV3Adapter) enables on-chain asset ↔ USDC swaps. The bot passes **`minOut`** into `swapForUsdc(amount, minOut)` / `swapFromUsdc(amount, minOut)` using DEX quotes and `maxSwapSlippageBps`.
+- **24-hour timelock on adapter registration**: On **ExchangeFacade**, the *first* adapter is immediate; subsequent registrations use `setPerpExchange` / `setHyperliquid` proposal + `confirmPerpExchange` after the facade timelock. Switching active exchange is immediate via `setActivePerpExchange`.
+- **Batch user caps**: `MAX_MINT_USERS` / `MAX_REDEEM_USERS` (500) enforced via active per-cycle counters (cancel-safe).
 - **Security**: `ReentrancyGuard` on all user-facing functions, two-step ownership transfer (`transferOwnership` / `acceptOwnership`), and custom Solidity errors (smaller bytecode, cheaper reverts).
 - **Aave**: Lending/borrowing for capital deployment (owner/bot).
 - **Owner reserves**: On-chain USDC and native ETH / WBTC buffers the treasury can mark as **not** user NAV (`ownerUsdcReserve`, `ownerEthReserve` on ETH, `ownerWbtcReserve` on BTC), plus `coverUsdcShortfall` for the bot to draw reserved USDC into the working float. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) and `bot/scripts/ops/_utils.js` (`getState` returns raw balances and owner-adjusted `contractAsset` / `contractUsdc`).
@@ -20,12 +23,13 @@ A capital-efficient yield strategy protocol. Users deposit ETH or wBTC and recei
 
 | Contract | Role |
 |----------|------|
-| `KashYieldETH.sol` | Main ETH product: `requestMint()`, `requestRedeem()`, `processBatch()`, Aave/exchange owner functions |
-| `KashYieldBtc.sol` | Main BTC product: identical flow, wBTC as the underlying asset |
+| `KashYieldETH.sol` / `KashYieldBtc.sol` | Main vaults: mint/redeem requests, batch phases, Aave, spot swaps, `claimRedeem`, claim-reserve accounting |
+| `ExchangeFacade.sol` | Perp registry + HL write ops (`depositToHyperliquid`, `openShort`, etc.); pulls USDC from vault |
 | `KashTokenEth` / `KashTokenBtc` | ERC-20 KASH tokens, minted/burned by the respective KashYield contract only |
+| `libraries/MerkleVerify.sol` | Sorted-pair Merkle verification for redeem claim proofs |
 | `interfaces/IPerpExchange.sol` | Common interface for all perp exchange adapters |
 | `interfaces/ISpotDex.sol` | Common interface for spot DEX adapters |
-| `adapters/HyperliquidAdapter.sol` | `IPerpExchange` implementation for Hyperliquid |
+| `adapters/HyperliquidAdapter.sol` | `IPerpExchange` + ERC-1271 `isValidSignature` (owner-authorized HL REST when adapter is HL master) |
 | `adapters/GMXAdapter.sol` | `IPerpExchange` implementation for GMX V2 (Arbitrum) |
 | `adapters/AsterAdapter.sol` | `IPerpExchange` implementation for Aster DEX |
 | `adapters/UniswapV3Adapter.sol` | `ISpotDex` implementation for Uniswap V3 spot swaps |
@@ -36,15 +40,14 @@ A capital-efficient yield strategy protocol. Users deposit ETH or wBTC and recei
 |--------|-----------|
 | Batch cycle | Configurable via `setCycleDurationSeconds(uint256)` (default 86400 s = 24 h) |
 | Mint valuation | Phase 1 via Chainlink price feed |
-| NAV | Bot calls `updateNAV()` before Phase 1 and again after ops (settlement MTM); `markBatchOpsDone(batchCycle, G)` locks gross redeem **G** at Phase-1 NAV; Phase 2 **mint** uses settlement `currentNAV`, **redeem** pays **G** pro-rata |
-| Distribution | Phase 2 mints KASH to minters, sends assets to redeemers; no user claim step |
-| Exchange registry | `perpExchanges[string] → address`; `activePerpExchange` routes all exchange calls |
-| Adapter registration | First adapter: immediate. Subsequent adapters: `setPerpExchange` starts 24h timelock; `confirmPerpExchange` registers |
-| Exchange switching | `setActivePerpExchange(key)` — immediate, no delay (adapter must already be confirmed) |
-| Spot swaps | `swapForUsdc()` / `swapFromUsdc()` call the registered `spotDexAddress` (UniswapV3Adapter) |
+| NAV | Bot calls `updateNAV()` before Phase 1 and after ops; `markBatchOpsDone(batchCycle, G)` locks gross redeem **G**; Phase 2 **mint** uses settlement `currentNAV` |
+| Redeem distribution | Phase 2 commits Merkle root + `lockedClaim*` reserve; users **`claimRedeem`** for net wBTC/ETH (pull model) |
+| Exchange registry | On **ExchangeFacade**: `perpExchanges`, `activePerpExchange`; vault `exchangeFacade` address |
+| Adapter registration | On facade: first HL adapter immediate via `setHyperliquid`; later changes timelocked on facade |
+| Spot swaps | `swapForUsdc(amount, minOut)` / `swapFromUsdc(amount, minOut)` via `spotDexAddress` |
 | Ownership | Two-step: `transferOwnership()` + `acceptOwnership()` |
 
-**Owner config (no redeploy):** `setAavePool`, `setHyperliquid`, `setCycleDurationSeconds`, `setFeeBps`, `setSpotDex`, `setMaxSwapSlippageBps`, `pause`/`unpause`, `setPerpExchange`/`confirmPerpExchange`, `setActivePerpExchange`.
+**Owner config (no redeploy):** `setExchangeFacade`, `setAavePool`, `setCycleDurationSeconds`, `setFeeBps`, `setSpotDex`, `setMaxSwapSlippageBps`, `pause`/`unpause`; perp registry on **ExchangeFacade** (`setHyperliquid`, `setActivePerpExchange`, etc.).
 
 ### Off-chain bot
 
@@ -59,7 +62,7 @@ The cycle length is set by `cycleDurationSeconds` (default 86400 s = 24 hours). 
 |----------------|--------|-----------------|
 | 0 s → `USER_WINDOW_END` | User Window | Users can `requestMint()` and `requestRedeem()` |
 | `PROCESSING_WINDOW_START` → end | Processing Window | Bot calls `processBatch()`; no user actions |
-| After Phase 2 | Distribution | Minters receive KASH, redeemers receive assets |
+| After Phase 2 | Distribution | Minters receive KASH (push); redeemers **claim** wBTC/ETH via `claimRedeem` |
 
 **Shortening cycles for testing:** Call `setCycleDurationSeconds(3600)` to switch to 1-hour cycles. Restore to `86400` for production. The cycle key (`currentBatchCycle`) is `block.timestamp / cycleDurationSeconds`, so all batch state is automatically scoped to the new cycle length.
 
@@ -83,17 +86,12 @@ npx hardhat run scripts/deploy-arbitrum-sepolia.js --network arbitrumSepolia
 # Deploy BTC product to Arbitrum Sepolia
 npx hardhat run scripts/deploy-kashyieldbtc.js --network arbitrumSepolia
 
-# Deploy HyperliquidAdapter (run once per product; see docs/DEPLOYMENT.md for env vars)
+# Deploy HyperliquidAdapter + ExchangeFacade (per product; see docs/DEPLOYMENT.md)
 npx hardhat run scripts/deploy-hyperliquid-adapter.js --network arbitrumSepolia
+KASH_YIELD_ADDRESS=<vault> BOT_ADDRESS=<bot> npx hardhat run scripts/deploy-exchange-facade.js --network arbitrumSepolia
 
-# Register adapter (immediate on first deploy — no 24h wait)
-npx hardhat run scripts/setHyperliquid.js --network arbitrumSepolia
-
-# Activate HL as the live exchange (always immediate)
-EXCHANGE_NAME=HL npx hardhat run scripts/setActivePerpExchange.js --network arbitrumSepolia
-
-# Adding a 2nd+ adapter later (e.g. GMX) requires the 24h timelock:
-#   scripts/setHyperliquid.js  →  wait 24h  →  scripts/confirmPerpExchange.js  →  scripts/setActivePerpExchange.js
+# Wire facade (owner): kashYield.setExchangeFacade(facade); facade.setHyperliquid(adapter); facade.setActivePerpExchange("HL")
+# Full commands in docs/DEPLOYMENT.md
 ```
 
 See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the full step-by-step checklist.
@@ -101,11 +99,12 @@ See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the full step-by-step checklist
 ### Run Tests
 
 ```bash
-# Run all tests
-npx hardhat test
+# Unit tests (no fork RPC required)
+npm run test:math
+npx hardhat test test/redeem-merkle.unit.test.js
 
-# Run specific test file
-npx hardhat test test/KashYieldTest.v2.js
+# Mainnet fork e2e (requires ARBITRUM_MAINNET_RPC_URL)
+npm run test:fork
 ```
 
 ### Start Off-Chain Bot
@@ -142,7 +141,7 @@ Open http://localhost:3000. Root `/` is the landing page; `/app` is the mint/red
 
 1. **Deposit (Mint)** – Send ETH/wETH (ETH product) or approve wBTC (BTC product) and call `requestMint()`. Requests are queued until the next batch cycle.
 2. **Batch** – At the end of each cycle (configurable, default 24 h), the bot runs Phase 1, ops, settlement `updateNAV()`, `markBatchOpsDone(batchCycle, G)`, and Phase 2 (mint at settlement NAV; redeem from locked **G**).
-3. **Redeem** – Approve KASH and call `requestRedeem(kashAmount)`. After the next batch, redeemers receive ETH or wBTC.
+3. **Redeem** – Approve KASH and call `requestRedeem(kashAmount)`. After Phase 2 settles, call **`claimRedeem`** in the app (Merkle proof from hosted manifest) to receive ETH or wBTC.
 
 ### NAV Calculation
 
@@ -165,8 +164,9 @@ Liabilities:
 
 - **ReentrancyGuard**: All user-facing state-changing functions (`requestMint`, `requestRedeem`, `processBatch`) are protected against reentrancy.
 - **Two-step ownership** (`Ownable2Step`-equivalent): Ownership transfers require the new owner to explicitly accept, preventing accidental transfers to wrong addresses.
-- **24-hour timelock on adapter registration**: The first adapter on a fresh contract is immediate (first-time bypass). Every adapter added after that requires `setPerpExchange` (or `setHyperliquid`) to start a 24-hour countdown, followed by `confirmPerpExchange` to complete the registration. This prevents a compromised owner key from instantly swapping in a malicious adapter. Switching between already-registered adapters via `setActivePerpExchange` is always immediate.
-- **Owner-only protocol interactions**: Aave deposits/borrows, exchange calls, and spot swaps are all `onlyOwner`.
+- **24-hour timelock on adapter registration**: On **ExchangeFacade**, first adapter is immediate; later registrations are timelocked. Switching active exchange is immediate.
+- **Claim-reserve accounting**: `lockedClaimWbtc` / `lockedClaimEth` protect redeem assets reserved for Merkle claims; owner withdrawals cannot consume claim reserves.
+- **Bot/keeper protocol interactions**: Aave, spot swaps, and HL writes (via facade) are `onlyBotOrKeeper` on the vault/facade.
 - **Configurable slippage**: `maxSwapSlippageBps` caps the price impact on any Uniswap swap performed by the contract.
 - **Emergency pause**: `pause()`/`unpause()` halts all user activity.
 - **Custom errors**: All `require` strings replaced with typed Solidity errors — smaller bytecode and cheaper reverts.
@@ -177,8 +177,10 @@ Liabilities:
 ```
 yieldproduct/
 ├── contracts/
-│   ├── KashYieldETH.sol            # Main ETH product
+│   ├── KashYieldETH.sol            # Main ETH product (Merkle redeem claims)
 │   ├── KashYieldBtc.sol            # Main BTC product
+│   ├── ExchangeFacade.sol          # Perp registry + HL write ops (separate deploy)
+│   ├── libraries/MerkleVerify.sol  # Merkle proof verification
 │   ├── interfaces/
 │   │   ├── IPerpExchange.sol       # Common interface for perp exchange adapters
 │   │   └── ISpotDex.sol            # Common interface for spot DEX adapters
@@ -192,13 +194,12 @@ yieldproduct/
 │   ├── deploy-kashyieldbtc.js          # Deploy BTC product
 │   ├── deploy-arbitrum-sepolia.js      # Deploy ETH product
 │   ├── deploy-hyperliquid-adapter.js   # Deploy HyperliquidAdapter
-│   ├── setHyperliquid.js               # Register adapter + propose activation
-│   ├── confirmPerpExchange.js          # Confirm adapter registration after 24h timelock
+│   ├── deploy-exchange-facade.js       # Deploy ExchangeFacade per vault
+│   ├── approveHlAgent.js               # HL approveAgent + EIP-1271 probe
 │   └── ...
 ├── test/
 ├── docs/
-│   ├── DEPLOYMENT.md               # Full deployment guide
-│   ├── DEPLOYMENT.md               # Mainnet deploy checklist
+│   ├── DEPLOYMENT.md               # Full deployment guide (ExchangeFacade, Merkle claims)
 │   └── ...
 ├── bot/                            # Off-chain bot (batch, Aave/exchange)
 │   ├── src/batch/batchProcessor.ts
@@ -224,7 +225,8 @@ The test suite covers:
 
 Run tests:
 ```bash
-npx hardhat test test/KashYieldTest.v2.js
+npm run test:math
+npx hardhat test test/redeem-merkle.unit.test.js
 ```
 
 ## 🛠️ Development
@@ -255,16 +257,17 @@ npx hardhat run scripts/deploy-kashyieldbtc.js --network arbitrumSepolia
 
 - **Frontend**: Live on Arbitrum Sepolia. Landing at `/`, app at `/app`. Mint (ETH), redeem (ETH/wETH/wBTC), stats (NAV, deposits from chain events, KASH balance), time-window status.
 - **Contracts**: `KashYieldETH`, `KashYieldBtc`, and their KASH tokens are deployed. Addresses are in `frontend/lib/contracts/addresses.ts`; update after each deploy (see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)).
-- **Exchange adapters**: Deploy `HyperliquidAdapter` and register it via `setHyperliquid.js` (immediate on first deploy), then activate with `setActivePerpExchange.js`. Adding GMX or Aster later requires the 24h timelock flow. Adapter contracts are available but require mainnet addresses for production.
+- **Exchange adapters**: Deploy `HyperliquidAdapter` + **`ExchangeFacade`** per vault; wire with `setExchangeFacade` and `facade.setHyperliquid` / `setActivePerpExchange`. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+- **Redeem claims**: Bot publishes Merkle proofs to `bot/data/redeem-proofs/`; frontend fetches via `NEXT_PUBLIC_REDEEM_PROOF_BASE_URL`.
 - **Spot DEX**: On Arbitrum One, deploy/register `UniswapV3Adapter`.
-- **Bot**: Runs the 5-step batch flow (`phase1` → `ops` → `nav` → `mark-done` → `phase2`). See [bot/README.md](bot/README.md).
+- **Bot**: 5-step batch flow; redeem Phase 2 uses `processBatchPhase2ForCycle(cycle, merkleRoot)`. See [bot/README.md](bot/README.md).
 
 ## 🌐 Frontend
 
 - **Stack**: Next.js 15 (App Router), Tailwind, wagmi + viem + RainbowKit. Network: Arbitrum Sepolia.
-- **Features**: Mobile-first UI, wallet connect, mint KASH (ETH), redeem (ETH/wETH/wBTC), real-time NAV and deposits (from chain events), KASH balance, time-window status.
+- **Features**: Mobile-first UI, wallet connect, mint KASH (ETH), redeem (ETH/wBTC), **claim redeem** after settlement, real-time NAV and deposits (from chain events), KASH balance, time-window status.
 - **Contract addresses**: Set in `frontend/lib/contracts/addresses.ts` (`CONTRACTS.kashYieldEth`, `CONTRACTS.kashTokenEth`, tokens, oracles). Update when you deploy (see [DEPLOYMENT.md](DEPLOYMENT.md)).
-- **Mint flow**: Select ETH → enter amount → approve if needed → submit mint → wait for batch (KASH in Phase 2). **Redeem**: Select output token → enter KASH → approve → submit → wait for batch.
+- **Mint flow**: Select ETH → enter amount → approve if needed → submit mint → wait for batch (KASH in Phase 2). **Redeem**: Enter KASH → approve → submit → after Phase 2, **Claim** (pull payout; user pays gas). Set `NEXT_PUBLIC_REDEEM_PROOF_BASE_URL` to hosted bot proof manifests.
 - **Time windows**: User window spans most of each cycle (requests); processing window is the last segment (`processBatch()`). Default cycle = 24 h; adjustable via `setCycleDurationSeconds`.
 - **Build**: `cd frontend && npm run build && npm start`. **Deploy**: e.g. `vercel` or Docker (see [DEPLOYMENT.md](DEPLOYMENT.md) for full checklist).
 - **Troubleshooting**: Use Arbitrum Sepolia; set WalletConnect project ID in `.env.local`; ensure user window for mint/redeem; check addresses in `lib/contracts/addresses.ts`. Testnet ETH: [Alchemy Arbitrum Sepolia faucet](https://www.alchemy.com/faucets/arbitrum-sepolia).

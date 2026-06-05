@@ -3,6 +3,7 @@ pragma solidity ^0.8.28;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "../interfaces/IPerpExchange.sol";
 
 /**
@@ -127,6 +128,8 @@ contract HyperliquidAdapter is IPerpExchange {
     event OperatorUpdated(address indexed previousOperator, address indexed newOperator);
     event BalancesSynced(uint256 usdcBalance, uint256 assetBalance);
     event PositionSynced(string symbol, uint256 size, uint256 entryPrice, bool isActive);
+
+    bytes4 private constant ERC1271_MAGIC = 0x1626ba7e;
 
     modifier onlyOwner() {
         require(msg.sender == owner, "Only owner");
@@ -368,5 +371,17 @@ contract HyperliquidAdapter is IPerpExchange {
     /// @dev HL order management is entirely off-chain; there are no on-chain order IDs.
     function getOpenOrderIds() external pure override returns (bytes32[] memory) {
         return new bytes32[](0);
+    }
+
+    /**
+     * @notice ERC-1271: owner-authorized signatures for Hyperliquid REST actions when
+     *         this adapter is the HL master account (directDepositMode=false).
+     */
+    function isValidSignature(bytes32 hash, bytes memory signature) external view returns (bytes4) {
+        (address recovered, ECDSA.RecoverError err,) = ECDSA.tryRecover(hash, signature);
+        if (err == ECDSA.RecoverError.NoError && recovered == owner) {
+            return ERC1271_MAGIC;
+        }
+        return 0xffffffff;
     }
 }

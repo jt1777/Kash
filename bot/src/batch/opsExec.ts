@@ -6,8 +6,11 @@ import {
   snapshotOpsContext,
   computeTotalRedeemAsset,
   readHyperliquidAdapterAddress,
+  readExchangeFacadeAddress,
   type OpsContext,
 } from './opsContext';
+import { exchangeFacadeABI } from '../contracts/exchangeFacadeABI';
+import { resolveSwapMinOut } from './swapMinOut';
 import {
   strategyAaveDebtToRepay,
   strategyAaveDebtFloor,
@@ -15,6 +18,16 @@ import {
   type RedeemTail,
 } from './opsClassifier';
 import { execTx } from './txSend';
+
+async function exchangeTarget(ctx: OpsContext): Promise<ethers.Contract> {
+  const facade = await readExchangeFacadeAddress(ctx.kashYield);
+  if (facade) return new ethers.Contract(facade, exchangeFacadeABI, ctx.signer);
+  throw new Error('exchangeFacade not set on vault — deploy ExchangeFacade and call setExchangeFacade');
+}
+
+async function ensureFacadeUsdcAllowance(ctx: OpsContext, amount: bigint): Promise<void> {
+  await execTx('approveExchangeFacadeUsdc', () => ctx.kashYield.approveExchangeFacadeUsdc(amount));
+}
 
 // ---------------------------------------------------------------------------
 // OpStep interface
@@ -256,7 +269,8 @@ async function execHlWithdrawToKashYield(
   const ad = ctx.perpAdapterAddress;
   if (ad) beforeAd = BigInt((await usdc.balanceOf(ad)).toString());
 
-  await execTx(logLabel, () => ctx.kashYield.withdrawFromHyperliquid(amountRequested));
+  const ex = await exchangeTarget(ctx);
+  await execTx(logLabel, () => ex.withdrawFromHyperliquid(amountRequested));
 
   const afterKy = BigInt((await usdc.balanceOf(contractAddr)).toString());
   const received = afterKy > beforeKy ? afterKy - beforeKy : 0n;
@@ -1102,7 +1116,8 @@ async function executeRisingWithdrawSwapRepayLoop(ctx: OpsContext): Promise<void
 
     const toSell = withdraw < fresh.contractAsset ? withdraw : fresh.contractAsset;
     if (toSell > 0n) {
-      await execTx(`swapForUsdc(11a#${round})`, () => fresh.kashYield.swapForUsdc(toSell, swapTxOverrides()));
+      const minOut = await resolveSwapMinOut(fresh.kashYield, 'assetToUsdc', toSell, fresh.price, fresh.assetDecimals);
+      await execTx(`swapForUsdc(11a#${round})`, () => fresh.kashYield.swapForUsdc(toSell, minOut, swapTxOverrides()));
       fresh = await refreshOpsCtx(fresh);
       await executeAaveRepay(fresh);
       fresh = await refreshOpsCtx(fresh);
@@ -1325,7 +1340,8 @@ export const aaveLoopSwapAllUsdcToAsset: OpStep = {
     const amount = ctx.contractUsdc;
     if (amount === 0n) return;
     console.log(`         swap ${fmtUsdc(amount)} → ${ctx.assetSymbol}`);
-    await execTx('swapFromUsdc', () => ctx.kashYield.swapFromUsdc(amount, swapTxOverrides()));
+    const minOut = await resolveSwapMinOut(ctx.kashYield, 'usdcToAsset', amount, ctx.price, ctx.assetDecimals);
+    await execTx('swapFromUsdc', () => ctx.kashYield.swapFromUsdc(amount, minOut, swapTxOverrides()));
   },
 };
 
@@ -1392,7 +1408,9 @@ const hlDepositUsdc: OpStep = {
 
     const baselineHlUsdc = (await readHlApiUsdcBalance6(ctx)) ?? ctx.hlUsdcBalance;
 
-    await execTx('depositToHyperliquid', () => ctx.kashYield.depositToHyperliquid(amount));
+    await ensureFacadeUsdcAllowance(ctx, amount);
+    const ex = await exchangeTarget(ctx);
+    await execTx('depositToHyperliquid', () => ex.depositToHyperliquid(amount));
     if (ctx.hlDirectDepositMode) {
       await maybeBridgeDirectModeDepositToHl(ctx, amount);
     }
@@ -1446,7 +1464,8 @@ const hlOpenShort = (shortTargets: MintHlShortTargets): OpStep => ({
         `(batch deposit ${fmtAsset(batchDeployed, ctx)} ≈ ${fmtUsd(depositUsd)} × ${lev}x leverage; ` +
         `${lev === 1 ? 'delta-neutral vs new Aave collateral' : `${lev}x vs deposit USD`})`,
     );
-    const receipt = await execTx('openShort', () => ctx.kashYield.openShort(symbol, size));
+    const ex = await exchangeTarget(ctx);
+    const receipt = await execTx('openShort', () => ex.openShort(symbol, size));
     await maybeRunHlEventRelay(ctx, receipt.hash, 'EXCHANGE_OPEN_SHORT', { required: true });
   },
 });
@@ -1672,9 +1691,10 @@ const dexSwapFromUsdc = (_lockedNAV: bigint | undefined): OpStep => ({
     console.log(
       `         swap ${fmtUsdc(usdcToSwap)} USDC (deployable≤${fmtUsdc(spendable)}) → ~${fmtAsset(assetNeeded, ctx)} for redeem gap`,
     );
+    const minOutSwap = await resolveSwapMinOut(ctx.kashYield, 'usdcToAsset', usdcToSwap, ctx.price, ctx.assetDecimals);
     await execTx(
       'swapFromUsdc',
-      () => ctx.kashYield.swapFromUsdc(usdcToSwap, swapTxOverrides()),
+      () => ctx.kashYield.swapFromUsdc(usdcToSwap, minOutSwap, swapTxOverrides()),
     );
   },
 });
@@ -1834,7 +1854,8 @@ const dexSwapForUsdc: OpStep = {
     if (Object.keys(swapOpts).length > 0) {
       console.log(`         (OPS_SWAP_GAS_LIMIT set — swap tx uses explicit gasLimit, real Uniswap on-chain)`);
     }
-    await execTx('swapForUsdc', () => ctx.kashYield.swapForUsdc(toSell, swapOpts));
+    const minOutSell = await resolveSwapMinOut(ctx.kashYield, 'assetToUsdc', toSell, ctx.price, ctx.assetDecimals);
+    await execTx('swapForUsdc', () => ctx.kashYield.swapForUsdc(toSell, minOutSell, swapOpts));
   },
 };
 

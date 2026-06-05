@@ -23,6 +23,7 @@ const {
   fmtUsdc,
   fmtAsset,
   exec,
+  resolveSwapMinOut,
   PRODUCT,
   DECIMALS,
 } = require("./_utils");
@@ -59,9 +60,10 @@ async function main() {
 
   // Step 1 — swap all USDC → asset
   console.log(`\nStep 1/3 — swap ${fmtUsdc(state.contractUsdc)} → asset`);
+  const minOut = await resolveSwapMinOut(contract, "usdcToAsset", state.contractUsdc);
   await exec(
-    `swapFromUsdc(${fmtUsdc(state.contractUsdc)})`,
-    contract.swapFromUsdc(state.contractUsdc),
+    `swapFromUsdc(${fmtUsdc(state.contractUsdc)}, minOut=${fmtAsset(minOut)})`,
+    contract.swapFromUsdc(state.contractUsdc, minOut),
   );
   state = await getState(contract);
 

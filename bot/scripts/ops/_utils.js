@@ -30,10 +30,13 @@ const KASH_ABI = [
   "function wbtcAddress() view returns (address)",
   "function usdcAddress() view returns (address)",
   "function aavePoolAddress() view returns (address)",
+  "function exchangeFacade() view returns (address)",
   "function hyperliquidAddress() view returns (address)",
   "function spotDexAddress() view returns (address)",
+  "function maxSwapSlippageBps() view returns (uint256)",
   "function activePerpExchange() view returns (string)",
   "function perpExchanges(string) view returns (address)",
+  "function approveExchangeFacadeUsdc(uint256 amount)",
   "function getCurrentBatchCycle() view returns (uint256)",
   "function batchPhase(uint256) view returns (uint8)",
   "function batchTotalRedeemKash(uint256) view returns (uint256)",
@@ -59,21 +62,9 @@ const KASH_ABI = [
   "function withdrawFromAave(uint256 amount)",
   "function borrowFromAave(address asset, uint256 amount)",
   "function repayToAave(address asset, uint256 amount)",
-  // Perp DEX (USDC-collateral path — HL)
-  "function depositToHyperliquid(uint256 amount)",
-  "function withdrawFromHyperliquid(uint256 amount)",
-  "function addCollateralToHyperliquid(uint256 amount)",
-  "function spotBuyOnHyperliquid(uint256 usdcAmount)",
-  "function spotSellOnHyperliquid(uint256 amount)",
-  "function openShort(string symbol, uint256 size)",
-  "function closeShort(string symbol)",
-  "function closeShort(string symbol, uint256 closeSize)",
-  // Perp DEX (asset-collateral path — Aster or other)
-  "function withdrawEthFromHyperliquid(uint256 amount)",
-  "function withdrawBtcFromHyperliquid(uint256 amount)",
-  // Spot DEX (Uniswap / MockSpotDex)
-  "function swapForUsdc(uint256 amount)",     // ETH/wBTC → USDC
-  "function swapFromUsdc(uint256 usdcAmount)", // USDC → ETH/wBTC
+  // Spot DEX (Uniswap / MockSpotDex) — minOut from bot DEX quote / price fallback
+  "function swapForUsdc(uint256 amount, uint256 minOut)",
+  "function swapFromUsdc(uint256 usdcAmount, uint256 minOut)",
   // Owner rescue
   "function rescueERC20(address token, uint256 amount, address recipient)",
 ];
@@ -91,6 +82,19 @@ const AAVE_ABI = [
 const ERC20_ABI = [
   "function balanceOf(address) view returns (uint256)",
   "function decimals() view returns (uint8)",
+];
+
+// ExchangeFacade — HL write ops moved out of vault for bytecode headroom
+const FACADE_ABI = [
+  "function depositToHyperliquid(uint256 amount)",
+  "function withdrawFromHyperliquid(uint256 amount)",
+  "function withdrawAssetFromHyperliquid(uint256 amount)",
+  "function addCollateralToHyperliquid(uint256 amount)",
+  "function spotBuyOnHyperliquid(uint256 usdcAmount)",
+  "function spotSellOnHyperliquid(uint256 amount)",
+  "function openShort(string symbol, uint256 size)",
+  "function closeShort(string symbol)",
+  "function closeShort(string symbol, uint256 closeSize)",
 ];
 
 // ── Contract helpers ──────────────────────────────────────────────────────────
@@ -111,6 +115,55 @@ async function getContract() {
 async function getSigner() {
   const [signer] = await ethers.getSigners();
   return signer;
+}
+
+/** HL write target: ExchangeFacade when configured, else error. */
+async function getExchangeTarget(vault) {
+  const facade = await vault.exchangeFacade().catch(() => ethers.ZeroAddress);
+  if (!facade || facade === ethers.ZeroAddress) {
+    throw new Error(
+      "exchangeFacade not set on vault — deploy ExchangeFacade and call setExchangeFacade",
+    );
+  }
+  const runner = vault.runner ?? vault.signer;
+  return {
+    target: new ethers.Contract(facade, FACADE_ABI, runner),
+    viaFacade: true,
+    vault,
+  };
+}
+
+async function ensureFacadeUsdcAllowance(vault, amount) {
+  if (amount === 0n) return;
+  await exec(`approveExchangeFacadeUsdc(${fmtUsdc(amount)})`, vault.approveExchangeFacadeUsdc(amount));
+}
+
+function minOutFromQuote(quotedOut, slippageBps) {
+  if (quotedOut === 0n || slippageBps >= 10000n) return 0n;
+  return (quotedOut * (10000n - slippageBps)) / 10000n;
+}
+
+function quoteUsdcFromAsset(assetAmount, priceUsd18, assetDecimals) {
+  const dec = BigInt(assetDecimals);
+  return (assetAmount * priceUsd18) / (10n ** dec) / 10n ** 12n;
+}
+
+function quoteAssetFromUsdc(usdcAmount, priceUsd18, assetDecimals) {
+  if (priceUsd18 === 0n) return 0n;
+  const dec = BigInt(assetDecimals);
+  return (usdcAmount * 10n ** 12n * 10n ** dec) / priceUsd18;
+}
+
+/** Mirror bot/src/batch/swapMinOut.ts — Chainlink price fallback when no DEX quoter. */
+async function resolveSwapMinOut(vault, direction, amountIn, quotedOut) {
+  const slippageBps = BigInt((await vault.maxSwapSlippageBps()).toString());
+  const price = BigInt(
+    (await (IS_BTC ? vault.getBtcPrice() : vault.getEthPrice())).toString(),
+  );
+  const quote = quotedOut ?? (direction === "assetToUsdc"
+    ? quoteUsdcFromAsset(amountIn, price, DECIMALS)
+    : quoteAssetFromUsdc(amountIn, price, DECIMALS));
+  return minOutFromQuote(quote, slippageBps);
 }
 
 // ── State snapshot ────────────────────────────────────────────────────────────
@@ -326,8 +379,10 @@ async function exec(label, txPromise) {
 
 module.exports = {
   PRODUCT, IS_BTC, DECIMALS, ASSET_SYMBOL, USDC_DECIMALS,
-  KASH_ABI, AAVE_ABI, ERC20_ABI,
-  getContract, getSigner, getState, displayState,
+  KASH_ABI, AAVE_ABI, ERC20_ABI, FACADE_ABI,
+  getContract, getSigner, getExchangeTarget, ensureFacadeUsdcAllowance,
+  resolveSwapMinOut, minOutFromQuote, quoteUsdcFromAsset, quoteAssetFromUsdc,
+  getState, displayState,
   getRedeemFraction,
   parseAsset, parseUsdc, fmtAsset, fmtUsdc, fmtUsd18, exec,
   assertKashYieldOpsSigner,

@@ -17,6 +17,7 @@
 const { ethers } = require("hardhat");
 const {
   getContract,
+  getExchangeTarget,
   getState,
   displayState,
   parseUsdc,
@@ -125,7 +126,8 @@ async function main() {
     );
   }
 
-  await exec(`withdrawFromHyperliquid(${fmtUsdc(amount)})`, contract.withdrawFromHyperliquid(amount));
+  const { target: ex } = await getExchangeTarget(contract);
+  await exec(`withdrawFromHyperliquid(${fmtUsdc(amount)})`, ex.withdrawFromHyperliquid(amount));
 
   const vaultUsdcAfter = BigInt((await usdc.balanceOf(vault)).toString());
   const adapterErc20After = BigInt((await usdc.balanceOf(adapter)).toString());

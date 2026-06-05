@@ -16,7 +16,10 @@
  *   PRODUCT=eth npx hardhat run bot/scripts/ops/12-withdraw-asset-from-perp.js --network arbitrumSepolia
  *   PRODUCT=btc npx hardhat run bot/scripts/ops/12-withdraw-asset-from-perp.js --network arbitrumSepolia
  */
-const { getContract, getState, displayState, parseAsset, fmtAsset, exec, PRODUCT, IS_BTC, ASSET_SYMBOL } = require("./_utils");
+const {
+  getContract, getExchangeTarget, getState, displayState,
+  parseAsset, fmtAsset, exec, PRODUCT, ASSET_SYMBOL,
+} = require("./_utils");
 
 async function main() {
   console.log(`\n12 — Withdraw ${ASSET_SYMBOL} from perp DEX (asset-collateral path)  [product=${PRODUCT.toUpperCase()}]`);
@@ -34,12 +37,10 @@ async function main() {
     return;
   }
 
-  const fn = IS_BTC ? "withdrawBtcFromHyperliquid" : "withdrawEthFromHyperliquid";
+  const { target: ex } = await getExchangeTarget(contract);
   await exec(
-    `${fn}(${fmtAsset(amount)})`,
-    IS_BTC
-      ? contract.withdrawBtcFromHyperliquid(amount)
-      : contract.withdrawEthFromHyperliquid(amount)
+    `withdrawAssetFromHyperliquid(${fmtAsset(amount)})`,
+    ex.withdrawAssetFromHyperliquid(amount),
   );
 
   displayState(await getState(contract), "After");

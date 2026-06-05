@@ -17,7 +17,7 @@
 const { ethers } = require("hardhat");
 const {
   getContract, getState, displayState,
-  parseUsdc, fmtUsdc, fmtAsset, exec,
+  parseUsdc, fmtUsdc, fmtAsset, exec, resolveSwapMinOut,
   PRODUCT, IS_BTC, ASSET_SYMBOL, DECIMALS,
 } = require("./_utils");
 
@@ -96,7 +96,11 @@ async function main() {
 
   if (usdcToSwap === 0n) { console.log("\nNothing to swap."); return; }
 
-  await exec(`swapFromUsdc(${fmtUsdc(usdcToSwap)})`, contract.swapFromUsdc(usdcToSwap));
+  const minOut = await resolveSwapMinOut(contract, "usdcToAsset", usdcToSwap);
+  await exec(
+    `swapFromUsdc(${fmtUsdc(usdcToSwap)}, minOut=${fmtAsset(minOut)})`,
+    contract.swapFromUsdc(usdcToSwap, minOut),
+  );
 
   const after = await getState(contract);
   displayState(after, "After");

@@ -4,7 +4,8 @@
  * With directDepositMode=false the HL master account is the **adapter contract**.
  * approveAgent must register agents on that master (query extraAgents(adapter)).
  * Owner-signed approveAgent registers agents on the **owner EOA**, not the adapter —
- * that does not satisfy the bot relay (vaultAddress=adapter) unless HL adds contract signing.
+ * that does not satisfy the bot relay (vaultAddress=adapter) unless HL accepts EIP-1271
+ * via HyperliquidAdapter.isValidSignature (owner signature over the HL payload hash).
  *
  * Works out of the box when the HL master is an EOA (directDepositMode=true / hlAccount=bot):
  *   SIGNER=bot, USE_VAULT_ADDRESS=false, AGENT_ADDRESS=<fresh key used only for HL API>
@@ -17,7 +18,10 @@
  *   AGENT_NAME=kash-bot
  *   AGENT_VALID_DAYS=90
  *   USE_VAULT_ADDRESS=false
- *   SIGNER=owner|bot
+ *   SIGNER=owner|bot|adapter
+ *     adapter — owner signs payloads but SDK reports adapter address (EIP-1271 path
+ *               when Hyperliquid verifies via HyperliquidAdapter.isValidSignature)
+ *   VERIFY_EIP1271=true — on-chain check that owner sigs validate on adapter (no HL API)
  *   BOT_ADDRESS / AGENT_ADDRESS — agent to authorize (must not be an existing HL user)
  */
 require("dotenv").config();
@@ -25,6 +29,39 @@ require("dotenv").config({ path: "./bot/.env", override: false });
 
 const hre = require("hardhat");
 const { ethers } = hre;
+
+const ERC1271_MAGIC = "0x1626ba7e";
+const ADAPTER_EIP1271_ABI = [
+  "function isValidSignature(bytes32 hash, bytes signature) view returns (bytes4)",
+  "function owner() view returns (address)",
+];
+
+/** Owner signs; HL SDK uses adapter address as master account (EIP-1271). */
+function createEip1271AdapterWallet(adapterAddress, ownerWallet) {
+  return new Proxy(ownerWallet, {
+    get(target, prop, receiver) {
+      if (prop === "address") return adapterAddress;
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
+async function verifyAdapterEip1271(adapterAddress, ownerWallet) {
+  const adapter = new ethers.Contract(adapterAddress, ADAPTER_EIP1271_ABI, ethers.provider);
+  const onChainOwner = await adapter.owner();
+  if (onChainOwner.toLowerCase() !== ownerWallet.address.toLowerCase()) {
+    console.warn(
+      `  ⚠️  Signer ${ownerWallet.address} != adapter.owner() ${onChainOwner} — EIP-1271 may reject`,
+    );
+  }
+  const hash = ethers.hexlify(ethers.randomBytes(32));
+  const sig = ownerWallet.signingKey.sign(hash).serialized;
+  const magic = await adapter.isValidSignature(hash, sig);
+  const ok = magic === ERC1271_MAGIC;
+  console.log(`  EIP-1271 probe: ${ok ? "✅ owner sig valid on adapter" : "❌ failed"} (${magic})`);
+  return ok;
+}
 
 async function main() {
   const adapterAddress =
@@ -49,20 +86,36 @@ async function main() {
   }
 
   const signerMode = (process.env.SIGNER || "owner").toLowerCase();
-  let wallet;
+  let ownerWallet;
   if (signerMode === "bot") {
     if (!botPk) throw new Error("SIGNER=bot requires bot HYPERLIQUID_API_PRIVATE_KEY.");
-    wallet = new ethers.Wallet(botPk);
+    ownerWallet = new ethers.Wallet(botPk);
   } else {
     const [hardhatSigner] = await ethers.getSigners();
     if (hardhatSigner) {
-      wallet = hardhatSigner;
+      ownerWallet = hardhatSigner;
     } else if (process.env.PRIVATE_KEY) {
-      wallet = new ethers.Wallet(process.env.PRIVATE_KEY);
+      ownerWallet = new ethers.Wallet(process.env.PRIVATE_KEY);
     } else {
-      throw new Error("SIGNER=owner requires root .env PRIVATE_KEY (Hardhat network accounts).");
+      throw new Error("SIGNER=owner|adapter requires root .env PRIVATE_KEY (Hardhat network accounts).");
     }
   }
+
+  const verifyOnly = (process.env.VERIFY_EIP1271 || "false").toLowerCase() === "true";
+  if (verifyOnly || signerMode === "adapter") {
+    const ok = await verifyAdapterEip1271(adapterAddress, ownerWallet);
+    if (verifyOnly) {
+      process.exitCode = ok ? 0 : 1;
+      return;
+    }
+    if (!ok) {
+      console.warn("  Continuing approveAgent despite failed EIP-1271 probe — HL may still reject.");
+    }
+  }
+
+  const wallet = signerMode === "adapter"
+    ? createEip1271AdapterWallet(adapterAddress, ownerWallet)
+    : ownerWallet;
   const useVaultAddress = (process.env.USE_VAULT_ADDRESS || "false").toLowerCase() === "true";
   const agentNameBase = (process.env.AGENT_NAME || "kash-bot").slice(0, 16);
   const validDays = Math.max(1, parseInt(process.env.AGENT_VALID_DAYS || "90", 10));
@@ -78,6 +131,9 @@ async function main() {
   console.log(`  adapter (HL user): ${adapterAddress}`);
   console.log(`  agent:             ${agentAddress}`);
   console.log(`  signer:            ${wallet.address} (${signerMode})`);
+  if (signerMode === "adapter") {
+    console.log(`  owner (EIP-1271):  ${ownerWallet.address}`);
+  }
   console.log(`  vaultAddress:      ${useVaultAddress ? adapterAddress : "(none)"}`);
   console.log(`  agents before:     ${JSON.stringify(before)}`);
 

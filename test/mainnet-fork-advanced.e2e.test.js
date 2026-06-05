@@ -13,6 +13,9 @@ const {
   manualEthMintOps,
   computeBatchGrossRedeemAsset,
   settleMintPhase2,
+  settleRedeemPhase2,
+  claimRedeemForUser,
+  deployAndWireExchangeFacade,
 } = require("./helpers/forkBatchOps");
 
 // Pin to a recent Arbitrum block for reproducibility
@@ -88,9 +91,14 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     );
     await hlAdapter.waitForDeployment();
 
-    await kashYieldEth.setExchangeSwitchDelay(0);
-    await kashYieldEth.setHyperliquid(await hlAdapter.getAddress());
-    await kashYieldEth.setActivePerpExchange("HL");
+    await deployAndWireExchangeFacade({
+      kashYield: kashYieldEth,
+      owner,
+      bot,
+      usdcAddress: USDC_ADDRESS,
+      primaryAsset: ethers.ZeroAddress,
+      hlAdapter,
+    });
 
     const kashTokenAddr = await kashYieldEth.kashTokenEth();
     kashTokenEth = await ethers.getContractAt("IERC20", kashTokenAddr);
@@ -497,8 +505,8 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     const settlementNav = ethers.parseEther("1.1");
     await kashYieldEth.connect(bot).updateNAV(settlementNav, 0n, 0n, 0n);
     const grossG = await computeBatchGrossRedeemAsset(kashYieldEth, redeemCycle, NAV_1);
-    await kashYieldEth.connect(bot).markBatchOpsDone(redeemCycle, grossG);
-    await kashYieldEth.connect(bot).performUpkeep("0x"); // Phase 2
+    await settleRedeemPhase2({ kashYield: kashYieldEth, bot, batchCycle: redeemCycle, nav: settlementNav, grossG });
+    await claimRedeemForUser(kashYieldEth, user3, redeemCycle);
 
     const ethAfter = await ethers.provider.getBalance(user3.address);
     expect(ethAfter).to.be.gt(ethBefore);
@@ -534,7 +542,7 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     await owner.sendTransaction({ to: await kashYieldEth.getAddress(), value: SWAP_ETH });
 
     const usdcBefore = await usdc.balanceOf(await kashYieldEth.getAddress());
-    await kashYieldEth.connect(bot).swapForUsdc(SWAP_ETH);
+    await kashYieldEth.connect(bot).swapForUsdc(SWAP_ETH, 0);
     const usdcAfter = await usdc.balanceOf(await kashYieldEth.getAddress());
 
     expect(usdcAfter).to.be.gt(usdcBefore);

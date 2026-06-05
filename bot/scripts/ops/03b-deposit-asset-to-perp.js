@@ -11,7 +11,10 @@
  * Usage:
  *   PRODUCT=eth npx hardhat run bot/scripts/ops/03b-deposit-asset-to-perp.js --network arbitrumSepolia
  */
-const { getContract, getState, displayState, parseAsset, fmtAsset, exec, PRODUCT, IS_BTC, ASSET_SYMBOL } = require("./_utils");
+const {
+  getContract, getExchangeTarget, getState, displayState,
+  parseAsset, fmtAsset, exec, PRODUCT, ASSET_SYMBOL,
+} = require("./_utils");
 
 async function main() {
   console.log(`\n03b — Deposit ${ASSET_SYMBOL} to perp DEX (asset-collateral path)  [product=${PRODUCT.toUpperCase()}]`);
@@ -30,10 +33,8 @@ async function main() {
   }
 
   // addCollateralToHyperliquid handles asset-collateral deposits on the active adapter
-  await exec(
-    `addCollateralToHyperliquid(${fmtAsset(amount)})`,
-    contract.addCollateralToHyperliquid(amount)
-  );
+  const { target: ex } = await getExchangeTarget(contract);
+  await exec(`addCollateralToHyperliquid(${fmtAsset(amount)})`, ex.addCollateralToHyperliquid(amount));
 
   displayState(await getState(contract), "After");
 }

@@ -11,7 +11,10 @@
  * Usage:
  *   PRODUCT=eth npx hardhat run bot/scripts/ops/04-spot-buy-asset.js --network arbitrumSepolia
  */
-const { getContract, getState, displayState, parseUsdc, fmtUsdc, fmtAsset, exec, PRODUCT, ASSET_SYMBOL } = require("./_utils");
+const {
+  getContract, getExchangeTarget, getState, displayState,
+  parseUsdc, fmtUsdc, fmtAsset, exec, PRODUCT, ASSET_SYMBOL,
+} = require("./_utils");
 
 async function main() {
   console.log(`\n04 — Spot buy ${ASSET_SYMBOL} on perp DEX  [product=${PRODUCT.toUpperCase()}]`);
@@ -29,10 +32,8 @@ async function main() {
     return;
   }
 
-  await exec(
-    `spotBuyOnHyperliquid(${fmtUsdc(amount)})`,
-    contract.spotBuyOnHyperliquid(amount)
-  );
+  const { target: ex } = await getExchangeTarget(contract);
+  await exec(`spotBuyOnHyperliquid(${fmtUsdc(amount)})`, ex.spotBuyOnHyperliquid(amount));
 
   const after = await getState(contract);
   displayState(after, "After");

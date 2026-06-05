@@ -18,7 +18,7 @@ export type PendingBatchRequest = {
 
 type RequestKind = 'mint' | 'redeem';
 
-type BatchInfoResult = readonly [bigint, bigint, boolean, bigint, bigint];
+type BatchInfoResult = readonly [bigint, bigint, boolean, bigint, bigint, bigint];
 type MintPending = { amountIn?: bigint };
 type RedeemPending = { kashAmount?: bigint };
 

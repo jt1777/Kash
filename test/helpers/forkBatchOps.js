@@ -1,3 +1,5 @@
+const { ethers } = require("hardhat");
+
 /**
  * Manual mint/redeem ops helpers for mainnet-fork e2e tests.
  *
@@ -11,6 +13,38 @@
  */
 
 const USDC_ADDRESS = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831";
+
+async function deployAndWireExchangeFacade({
+  kashYield,
+  owner,
+  bot,
+  usdcAddress,
+  primaryAsset,
+  hlAdapter,
+}) {
+  const ExchangeFacade = await ethers.getContractFactory("ExchangeFacade");
+  const facade = await ExchangeFacade.deploy(
+    owner.address,
+    bot.address,
+    usdcAddress,
+    primaryAsset,
+    await kashYield.getAddress(),
+  );
+  await facade.waitForDeployment();
+  await kashYield.setExchangeFacade(await facade.getAddress());
+  await facade.setHyperliquid(await hlAdapter.getAddress());
+  await facade.setActivePerpExchange("HL");
+  return facade;
+}
+
+async function hlOpsTarget(kashYield, bot) {
+  const facade = await kashYield.exchangeFacade().catch(() => null);
+  if (facade && facade !== "0x0000000000000000000000000000000000000000") {
+    const ExchangeFacade = await ethers.getContractFactory("ExchangeFacade");
+    return { target: ExchangeFacade.attach(facade).connect(bot), viaFacade: true };
+  }
+  throw new Error("exchangeFacade not set — deploy ExchangeFacade in test beforePhase");
+}
 
 function mintProtocolFee(amount, feeBps) {
   return (amount * feeBps) / 10_000n;
@@ -41,12 +75,14 @@ async function manualEthMintOps({
 
   await kashYield.connect(bot).depositToAave(deployEth);
   await kashYield.connect(bot).borrowFromAave(USDC_ADDRESS, borrowUsdc);
-  await kashYield.connect(bot).depositToHyperliquid(borrowUsdc);
+  const { target: ex, viaFacade } = await hlOpsTarget(kashYield, bot);
+  if (viaFacade) await kashYield.connect(bot).approveExchangeFacadeUsdc(borrowUsdc);
+  await ex.depositToHyperliquid(borrowUsdc);
 
-  await kashYield.connect(bot).spotBuyOnHyperliquid(borrowUsdc);
+  await ex.spotBuyOnHyperliquid(borrowUsdc);
   const shortSizeUSD = (deployUsd * shortLeveragePct) / 100n;
   const shortSizeAsset = (shortSizeUSD * 10n ** 18n) / ethPrice;
-  await kashYield.connect(bot).openShort("ETH", shortSizeAsset);
+  await ex.openShort("ETH", shortSizeAsset);
   await hlAdapter.syncPosition("ETH", shortSizeAsset, ethPrice, true);
 
   return { protocolFeeEth, deployEth, borrowUsdc, ethPrice, deployUsd, shortSizeAsset };
@@ -72,12 +108,14 @@ async function manualBtcMintOps({
 
   await kashYield.connect(bot).depositToAave(deployBtc);
   await kashYield.connect(bot).borrowFromAave(USDC_ADDRESS, borrowUsdc);
-  await kashYield.connect(bot).depositToHyperliquid(borrowUsdc);
+  const { target: ex, viaFacade } = await hlOpsTarget(kashYield, bot);
+  if (viaFacade) await kashYield.connect(bot).approveExchangeFacadeUsdc(borrowUsdc);
+  await ex.depositToHyperliquid(borrowUsdc);
 
-  await kashYield.connect(bot).spotBuyOnHyperliquid(borrowUsdc);
+  await ex.spotBuyOnHyperliquid(borrowUsdc);
   const shortSizeUSD = (deployUsd * shortLeveragePct) / 100n;
   const shortSizeAsset = (shortSizeUSD * 10n ** 18n) / btcPrice;
-  await kashYield.connect(bot).openShort("BTC", shortSizeAsset);
+  await ex.openShort("BTC", shortSizeAsset);
   await hlAdapter.syncPosition("BTC", shortSizeAsset, btcPrice, true);
 
   return { protocolFeeBtc, deployBtc, borrowUsdc, btcPrice, deployUsd, shortSizeAsset };
@@ -112,18 +150,74 @@ async function computeBatchGrossRedeemAsset(kashYield, batchCycle, nav) {
   return total;
 }
 
+async function buildRedeemMerkleRoot(kashYield, batchCycle) {
+  const { allocRedeemNetAmounts, buildRedeemMerkleTree } = require("../../bot/dist/batch/redeemMerkle");
+  const redeemKash = BigInt((await kashYield.batchTotalRedeemKash(batchCycle)).toString());
+  if (redeemKash === 0n) return `0x${"0".repeat(64)}`;
+  const info = await kashYield.getBatchInfo(batchCycle);
+  const redeemCount = Number(info[4]);
+  const grossG = BigInt(info[1].toString());
+  const feeBps = BigInt((await kashYield.feeBps()).toString());
+  const redeemers = [];
+  const kashAmounts = [];
+  for (let i = 0; i < redeemCount; i++) {
+    const addr = await kashYield.batchRedeemUsers(batchCycle, i);
+    const req = await kashYield.getPendingRedeemRequest(addr, batchCycle);
+    redeemers.push(addr);
+    kashAmounts.push(BigInt(req.kashAmount.toString()));
+  }
+  const entries = allocRedeemNetAmounts(redeemers, kashAmounts, redeemKash, grossG, feeBps);
+  return buildRedeemMerkleTree(batchCycle, entries).root;
+}
+
 async function settleMintPhase2({ kashYield, bot, batchCycle, nav }) {
   await kashYield.connect(bot).updateNAV(nav, 0n, 0n, 0n);
   await kashYield.connect(bot).markBatchOpsDone(batchCycle, 0);
   await kashYield.connect(bot).performUpkeep("0x");
 }
 
+async function settleRedeemPhase2({ kashYield, bot, batchCycle, nav, grossG }) {
+  await kashYield.connect(bot).updateNAV(nav, 0n, 0n, 0n);
+  await kashYield.connect(bot).markBatchOpsDone(batchCycle, grossG);
+  const root = await buildRedeemMerkleRoot(kashYield, batchCycle);
+  await kashYield.connect(bot).processBatchPhase2ForCycle(batchCycle, root);
+}
+
+async function claimRedeemForUser(kashYield, user, batchCycle) {
+  const { allocRedeemNetAmounts, buildRedeemMerkleTree } = require("../../bot/dist/batch/redeemMerkle");
+  const redeemKash = BigInt((await kashYield.batchTotalRedeemKash(batchCycle)).toString());
+  const info = await kashYield.getBatchInfo(batchCycle);
+  const redeemCount = Number(info[4]);
+  const grossG = BigInt(info[1].toString());
+  const feeBps = BigInt((await kashYield.feeBps()).toString());
+  const redeemers = [];
+  const kashAmounts = [];
+  for (let i = 0; i < redeemCount; i++) {
+    const addr = await kashYield.batchRedeemUsers(batchCycle, i);
+    const req = await kashYield.getPendingRedeemRequest(addr, batchCycle);
+    redeemers.push(addr);
+    kashAmounts.push(BigInt(req.kashAmount.toString()));
+  }
+  const entries = allocRedeemNetAmounts(redeemers, kashAmounts, redeemKash, grossG, feeBps);
+  const { proofs } = buildRedeemMerkleTree(batchCycle, entries);
+  const userAddr = await user.getAddress();
+  const leaf = entries.find((e) => e.user.toLowerCase() === userAddr.toLowerCase());
+  if (!leaf || leaf.amount === 0n) throw new Error("no claim leaf for user");
+  const proof = proofs.get(userAddr.toLowerCase());
+  await kashYield.connect(user).claimRedeem(batchCycle, leaf.amount, proof);
+  return leaf.amount;
+}
+
 module.exports = {
   USDC_ADDRESS,
   mintProtocolFee,
   usdcBorrowForAssetUsd,
+  deployAndWireExchangeFacade,
   manualEthMintOps,
   manualBtcMintOps,
   computeBatchGrossRedeemAsset,
   settleMintPhase2,
+  settleRedeemPhase2,
+  buildRedeemMerkleRoot,
+  claimRedeemForUser,
 };

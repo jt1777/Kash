@@ -172,7 +172,7 @@ export function RecentActivity() {
   const hasRequestByIndex = new Map<number, boolean>();
   const isProcessingByIndex = new Map<number, boolean>();
   if (readResults && address) {
-    type BatchResult = { status: 'success'; result: readonly [bigint, bigint, boolean, bigint, bigint] };
+    type BatchResult = { status: 'success'; result: readonly [bigint, bigint, boolean, bigint, bigint, bigint] };
     type PendingResult = { status: 'success'; result: { amountIn?: bigint; kashAmount?: bigint } };
     for (let i = 0; i < activities.length; i++) {
       const batchIdx = activityToConfigIndex[i];
@@ -216,7 +216,7 @@ export function RecentActivity() {
     setCancelEligibleHashes(prev => {
       const updated = new Set(prev);
       let changed = false;
-      type BatchResult = { status: 'success'; result: readonly [bigint, bigint, boolean, bigint, bigint] };
+      type BatchResult = { status: 'success'; result: readonly [bigint, bigint, boolean, bigint, bigint, bigint] };
       type PendingResult = { status: 'success'; result: { amountIn?: bigint; kashAmount?: bigint } };
       for (let i = 0; i < activities.length; i++) {
         const batchIdx = indexMap[i];

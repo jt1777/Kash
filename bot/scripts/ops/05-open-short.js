@@ -14,7 +14,10 @@
  *   PRODUCT=eth SIZE=1.7 npx hardhat run bot/scripts/ops/05-open-short.js --network arbitrumSepolia
  */
 const { ethers } = require("hardhat");
-const { getContract, getState, displayState, fmtAsset, exec, PRODUCT, IS_BTC, ASSET_SYMBOL, DECIMALS } = require("./_utils");
+const {
+  getContract, getExchangeTarget, getState, displayState,
+  fmtAsset, exec, PRODUCT, IS_BTC, ASSET_SYMBOL, DECIMALS,
+} = require("./_utils");
 
 async function main() {
   console.log(`\n05 — Open short on perp DEX  [product=${PRODUCT.toUpperCase()}]`);
@@ -50,10 +53,8 @@ async function main() {
     console.log(`\n  Opening new ${symbol} short: ${fmtAsset(size)}...`);
   }
 
-  await exec(
-    `openShort("${symbol}", ${fmtAsset(size)})`,
-    contract.openShort(symbol, size)
-  );
+  const { target: ex } = await getExchangeTarget(contract);
+  await exec(`openShort("${symbol}", ${fmtAsset(size)})`, ex.openShort(symbol, size));
 
   displayState(await getState(contract), "After");
 }

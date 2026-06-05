@@ -196,7 +196,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
   });
 
   // Only treat as processed when we have batch info; otherwise show pending/cancel state
-  const batchProcessed = batchInfo ? (batchInfo as readonly [bigint, bigint, boolean, bigint, bigint])[2] : false;
+  const batchProcessed = batchInfo ? (batchInfo as readonly [bigint, bigint, boolean, bigint, bigint, bigint])[2] : false;
   const canCancelMint = Boolean(cancellableMint && cancellableMint.amount > 0n);
   const hasStuckMint = Boolean(stuckMint && stuckMint.amount > 0n);
 
