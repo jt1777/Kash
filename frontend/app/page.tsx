@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { DisclaimerGate } from '@/components/DisclaimerGate';
 import { SiteFooter } from '@/components/SiteFooter';
 import {
   ARBITRUM_ONE_BLOCK_EXPLORER,
@@ -70,7 +71,7 @@ export default function Home() {
   const btcVaultHref = `${ARBITRUM_ONE_BLOCK_EXPLORER}/address/${CONTRACTS.kashYieldBtc}`;
 
   return (
-    <>
+    <DisclaimerGate riskDocsUrl={GITBOOK_RISKS}>
       <style dangerouslySetInnerHTML={{ __html: `
         .landing * { margin: 0; padding: 0; box-sizing: border-box; }
         .landing {
@@ -760,6 +761,6 @@ w3.eth.send_raw_transaction(signed.raw_transaction)
 
         <SiteFooter />
       </div>
-    </>
+    </DisclaimerGate>
   );
 }
