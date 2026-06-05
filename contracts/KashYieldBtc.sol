@@ -132,7 +132,7 @@ contract KashYieldBtc is ReentrancyGuard {
     mapping(address => uint256) public spotDexPending;
 
     // ── Swap slippage ─────────────────────────────────────────────────────
-    uint256 public maxSwapSlippageBps     = 50;   // 0.5% default
+    uint256 public maxSwapSlippageBps     = 100;  // 1% default
     uint256 public constant MAX_SLIPPAGE_BPS = 500; // 5% hard cap
     uint256 private constant REDEEM_PAYOUT_TOLERANCE = 30; // wBTC satoshis — rounding vs locked G
 

@@ -10,6 +10,33 @@ import { arbitrum } from 'wagmi/chains';
 import { http } from 'wagmi';
 import type { Config } from 'wagmi';
 
+function isMobileBrowser(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+}
+
+/**
+ * RainbowKit mobile only lists wallets with ready=true (installed ?? true).
+ * Stock rabbyWallet sets installed=false without the extension, so Rabby is
+ * omitted from the mobile row. On mobile, leave installed unset so Rabby appears
+ * first under Popular with app-store download links.
+ */
+function kashRabbyWallet(): ReturnType<typeof rabbyWallet> {
+  const wallet = rabbyWallet();
+  if (!isMobileBrowser()) return wallet;
+
+  return {
+    ...wallet,
+    installed: undefined,
+    downloadUrls: {
+      ...wallet.downloadUrls,
+      ios: 'https://apps.apple.com/app/rabby-wallet/id6450663781',
+      android:
+        'https://play.google.com/store/apps/details?id=com.debank.rabbymobile',
+    },
+  };
+}
+
 const arbitrumOneRpc =
   (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_RPC_URL?.trim()) ||
   'https://arb1.arbitrum.io/rpc';
@@ -29,12 +56,14 @@ if (typeof window === 'undefined' && typeof global !== 'undefined') {
 
 const wallets = [
   {
-    groupName: 'Recommended',
-    wallets: [rabbyWallet],
-  },
-  {
     groupName: 'Popular',
-    wallets: [safeWallet, rainbowWallet, baseAccount, walletConnectWallet],
+    wallets: [
+      kashRabbyWallet,
+      safeWallet,
+      rainbowWallet,
+      baseAccount,
+      walletConnectWallet,
+    ],
   },
 ];
 

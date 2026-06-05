@@ -138,7 +138,7 @@ contract KashYieldETH is ReentrancyGuard {
     uint256 public spotDexTimelock = 24 hours;
     mapping(address => uint256) public spotDexPending;
 
-    uint256 public maxSwapSlippageBps     = 50;
+    uint256 public maxSwapSlippageBps     = 100;  // 1% default
     uint256 public constant MAX_SLIPPAGE_BPS = 500;
     uint256 private constant REDEEM_PAYOUT_TOLERANCE = 1e13; // wei — rounding vs locked G
 
