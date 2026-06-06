@@ -16,6 +16,8 @@ const {
   settleRedeemPhase2,
   claimRedeemForUser,
   deployAndWireExchangeFacade,
+  depositToHyperliquidViaFacade,
+  withdrawFromHyperliquidViaFacade,
 } = require("./helpers/forkBatchOps");
 
 // Pin to a recent Arbitrum block for reproducibility
@@ -74,7 +76,6 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     await kashYieldEth.waitForDeployment();
 
     // Configure
-    await kashYieldEth.setAllowedSpotDexRouter(await uniAdapter.getAddress(), true);
     await kashYieldEth.setSpotDex(await uniAdapter.getAddress());
     await kashYieldEth.setCycleDurationSeconds(CYCLE_SECS);
     await kashYieldEth.setUserWindowEnd(CYCLE_SECS);
@@ -143,7 +144,7 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
 
     await kashYieldEth.connect(bot).depositToAave(deployTotal);
     await kashYieldEth.connect(bot).borrowFromAave(USDC_ADDRESS, borrowUsdc);
-    await kashYieldEth.connect(bot).depositToHyperliquid(borrowUsdc);
+    await depositToHyperliquidViaFacade(kashYieldEth, bot, borrowUsdc);
 
     await settleMintPhase2({ kashYield: kashYieldEth, bot, batchCycle, nav: NAV_1 });
     return batchCycle;
@@ -167,18 +168,11 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     await hre.network.provider.send("hardhat_stopImpersonatingAccount", [HL_BRIDGE]);
   }
 
-  async function settlePhase2(batchCycle, nav = NAV_1) {
-    await kashYieldEth.connect(bot).updateNAV(nav, 0n, 0n, 0n);
-    await kashYieldEth.connect(bot).markBatchOpsDone(batchCycle, 0);
-    await kashYieldEth.connect(bot).performUpkeep("0x");
-    expect(await kashYieldEth.batchProcessed(batchCycle)).to.be.true;
-  }
-
-  async function settleRedeemCycleThroughAaveAndHl(batchCycle, redeemEthNeeded, nav = NAV_1) {
+  async function settleRedeemCycleThroughAaveAndHl(batchCycle, nav = NAV_1, aaveWithdrawOverride = null) {
     const adapterDeposit = await hlAdapter.usdcBalance();
     if (adapterDeposit > 0n) {
       await simulateHlReturnToAdapter(adapterDeposit);
-      await kashYieldEth.connect(bot).withdrawFromHyperliquid(adapterDeposit);
+      await withdrawFromHyperliquidViaFacade(kashYieldEth, bot, adapterDeposit);
     }
 
     const usdcBal = await usdc.balanceOf(await kashYieldEth.getAddress());
@@ -186,11 +180,14 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
       await kashYieldEth.connect(bot).repayToAave(USDC_ADDRESS, usdcBal);
     }
 
-    if (redeemEthNeeded > 0n) {
-      await kashYieldEth.connect(bot).withdrawFromAave(redeemEthNeeded);
+    const grossG = await computeBatchGrossRedeemAsset(kashYieldEth, batchCycle, nav);
+    const withdrawAmt = aaveWithdrawOverride ?? grossG;
+    if (withdrawAmt > 0n) {
+      await kashYieldEth.connect(bot).withdrawFromAave(withdrawAmt);
     }
 
-    await settlePhase2(batchCycle, nav);
+    await settleRedeemPhase2({ kashYield: kashYieldEth, bot, batchCycle, nav, grossG });
+    expect(await kashYieldEth.batchProcessed(batchCycle)).to.be.true;
   }
 
   async function setMockEthPrice(price18) {
@@ -223,7 +220,7 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
 
     await kashYieldEth.connect(bot).depositToAave(deployTotal);
     await kashYieldEth.connect(bot).borrowFromAave(USDC_ADDRESS, borrowUsdc);
-    await kashYieldEth.connect(bot).depositToHyperliquid(borrowUsdc);
+    await depositToHyperliquidViaFacade(kashYieldEth, bot, borrowUsdc);
 
     await settleMintPhase2({ kashYield: kashYieldEth, bot, batchCycle, nav: NAV_1 });
 
@@ -261,8 +258,9 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     expect(info.redeemUsersCount).to.equal(2n);
     expect(info.totalRedeemKash).to.equal(half1 + half2);
 
-    const redeemEthNeeded = await totalRedeemEthFor([half1, half2]);
-    await settleRedeemCycleThroughAaveAndHl(batchCycle, redeemEthNeeded);
+    await settleRedeemCycleThroughAaveAndHl(batchCycle);
+    await claimRedeemForUser(kashYieldEth, user1, batchCycle);
+    await claimRedeemForUser(kashYieldEth, user2, batchCycle);
 
     expect(await kashTokenEth.balanceOf(user1.address)).to.equal(user1KashBefore - half1);
     expect(await kashTokenEth.balanceOf(user2.address)).to.equal(user2KashBefore - half2);
@@ -294,8 +292,9 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     expect(info.redeemUsersCount).to.equal(2n);
     expect(info.totalRedeemKash).to.equal(b1 + b2);
 
-    const redeemEthNeeded = await totalRedeemEthFor([b1, b2]);
-    await settleRedeemCycleThroughAaveAndHl(batchCycle, redeemEthNeeded);
+    await settleRedeemCycleThroughAaveAndHl(batchCycle);
+    await claimRedeemForUser(kashYieldEth, user1, batchCycle);
+    await claimRedeemForUser(kashYieldEth, user2, batchCycle);
 
     expect(await kashTokenEth.balanceOf(user1.address)).to.equal(0n);
     expect(await kashTokenEth.balanceOf(user2.address)).to.equal(0n);
@@ -327,7 +326,15 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
 
     const user1Before = await kashTokenEth.balanceOf(user1.address);
     const supplyBefore = await kashTokenEth.totalSupply();
-    await settlePhase2(batchCycle);
+
+    await manualEthMintOps({
+      kashYield: kashYieldEth,
+      bot,
+      hlAdapter,
+      mintEthAmount: ethers.parseEther("0.6"),
+    });
+    await settleRedeemCycleThroughAaveAndHl(batchCycle);
+    await claimRedeemForUser(kashYieldEth, user2, batchCycle);
 
     expect(await kashTokenEth.balanceOf(user1.address)).to.be.gt(user1Before);
     expect(user2AfterRequest).to.equal(user2BeforeRequest - redeemAmt);
@@ -372,8 +379,14 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     expect(strat <= gross).to.be.true;
     expect(strat).to.be.lt(gross);
 
-    const redeemEthNeeded = await totalRedeemEthFor([redeemAmt]);
-    await settleRedeemCycleThroughAaveAndHl(batchCycle, redeemEthNeeded);
+    await manualEthMintOps({
+      kashYield: kashYieldEth,
+      bot,
+      hlAdapter,
+      mintEthAmount: ethers.parseEther("0.05"),
+    });
+    await settleRedeemCycleThroughAaveAndHl(batchCycle);
+    await claimRedeemForUser(kashYieldEth, user1, batchCycle);
 
     const user1AfterSettlement = await kashTokenEth.balanceOf(user1.address);
     expect(user1AfterRequest).to.equal(user1BeforeRequest - redeemAmt);
@@ -404,7 +417,8 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     await kashTokenEth.connect(user3).approve(await kashYieldEth.getAddress(), kashBalance);
     await kashYieldEth.connect(user3).requestRedeem(kashBalance);
     await kashYieldEth.connect(bot).performUpkeep("0x");
-    await settleRedeemCycleThroughAaveAndHl(redeemCycle, expectedRedeemEth);
+    await settleRedeemCycleThroughAaveAndHl(redeemCycle);
+    await claimRedeemForUser(kashYieldEth, user3, redeemCycle);
 
     const ethAfter = await ethers.provider.getBalance(user3.address);
     expect(ethAfter - ethBefore).to.be.closeTo(expectedRedeemEth, expectedRedeemEth / 100n);
@@ -435,14 +449,17 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     await kashYieldEth.connect(bot).performUpkeep("0x");
 
     // Falling ETH price means the short profit should fund extra ETH. Simulate that profit by
-    // adding the extra redeem ETH needed beyond the original 1 ETH Aave collateral.
-    if (expectedRedeemEth > ethers.parseEther("1")) {
+    // topping up gross G (net + fees) beyond the ~1 ETH Aave collateral from the mint.
+    const mintCollateral = ethers.parseEther("1");
+    const grossG = await computeBatchGrossRedeemAsset(kashYieldEth, redeemCycle, NAV_1);
+    if (grossG > mintCollateral) {
       await owner.sendTransaction({
         to: await kashYieldEth.getAddress(),
-        value: expectedRedeemEth - ethers.parseEther("1"),
+        value: grossG - mintCollateral,
       });
     }
-    await settleRedeemCycleThroughAaveAndHl(redeemCycle, ethers.parseEther("1"));
+    await settleRedeemCycleThroughAaveAndHl(redeemCycle, NAV_1, mintCollateral);
+    await claimRedeemForUser(kashYieldEth, user3, redeemCycle);
 
     const ethAfter = await ethers.provider.getBalance(user3.address);
     expect(ethAfter - ethBefore).to.be.closeTo(expectedRedeemEth, expectedRedeemEth / 100n);
@@ -483,7 +500,7 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     await usdc.connect(bridgeSigner).transfer(await hlAdapter.getAddress(), hlReturn);
     await hre.network.provider.send("hardhat_stopImpersonatingAccount", [HL_BRIDGE]);
 
-    await kashYieldEth.connect(bot).withdrawFromHyperliquid(hlReturn);
+    await withdrawFromHyperliquidViaFacade(kashYieldEth, bot, hlReturn);
 
     // Repay Aave — pool takes only the actual debt; profit USDC stays in contract.
     const usdcBal = await usdc.balanceOf(await kashYieldEth.getAddress());
@@ -493,7 +510,10 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     // UniswapV3Adapter doesn't handle native ETH as tokenOut (only WETH), so we skip
     // that call here and instead directly fund the contract with the equivalent ETH.
     // swapForUsdc (ETH→USDC) is tested separately and confirms the swap path works.
-    await kashYieldEth.connect(bot).withdrawFromAave(ethers.parseEther("1"));
+    const mintEth = ethers.parseEther("1");
+    const feeBps = BigInt(await kashYieldEth.feeBps());
+    const deployEth = mintEth - mintProtocolFee(mintEth, feeBps);
+    await kashYieldEth.connect(bot).withdrawFromAave(deployEth);
 
     // Send 0.15 ETH from owner to simulate the HL profit converted to ETH.
     await owner.sendTransaction({
@@ -521,7 +541,7 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     await kashYieldEth.connect(bot).depositToAave(ethers.parseEther("1"));
 
     await kashYieldEth.connect(bot).borrowFromAave(USDC_ADDRESS, 500n * 10n ** 6n);
-    await kashYieldEth.connect(bot).depositToHyperliquid(500n * 10n ** 6n);
+    await depositToHyperliquidViaFacade(kashYieldEth, bot, 500n * 10n ** 6n);
     console.log(`       ✅ Moved 500 USDC from Aave → HL`);
 
     // Move USDC back: simulate HL returning 300 USDC.
@@ -532,7 +552,7 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     await usdc.connect(bridgeSigner).transfer(await hlAdapter.getAddress(), RETURN);
     await hre.network.provider.send("hardhat_stopImpersonatingAccount", [HL_BRIDGE]);
 
-    await kashYieldEth.connect(bot).withdrawFromHyperliquid(RETURN);
+    await withdrawFromHyperliquidViaFacade(kashYieldEth, bot, RETURN);
     await kashYieldEth.connect(bot).repayToAave(USDC_ADDRESS, RETURN);
     console.log(`       ✅ Moved 300 USDC from HL → Aave repay`);
   });

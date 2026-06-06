@@ -31,9 +31,13 @@ async function deployAndWireExchangeFacade({
     await kashYield.getAddress(),
   );
   await facade.waitForDeployment();
-  await kashYield.setExchangeFacade(await facade.getAddress());
+  const facadeAddr = await facade.getAddress();
+  await kashYield.setExchangeFacade(facadeAddr);
   await facade.setHyperliquid(await hlAdapter.getAddress());
   await facade.setActivePerpExchange("HL");
+  if (typeof hlAdapter.setAuthorizedCaller === "function") {
+    await hlAdapter.connect(owner).setAuthorizedCaller(facadeAddr);
+  }
   return facade;
 }
 
@@ -79,7 +83,6 @@ async function manualEthMintOps({
   if (viaFacade) await kashYield.connect(bot).approveExchangeFacadeUsdc(borrowUsdc);
   await ex.depositToHyperliquid(borrowUsdc);
 
-  await ex.spotBuyOnHyperliquid(borrowUsdc);
   const shortSizeUSD = (deployUsd * shortLeveragePct) / 100n;
   const shortSizeAsset = (shortSizeUSD * 10n ** 18n) / ethPrice;
   await ex.openShort("ETH", shortSizeAsset);
@@ -112,7 +115,6 @@ async function manualBtcMintOps({
   if (viaFacade) await kashYield.connect(bot).approveExchangeFacadeUsdc(borrowUsdc);
   await ex.depositToHyperliquid(borrowUsdc);
 
-  await ex.spotBuyOnHyperliquid(borrowUsdc);
   const shortSizeUSD = (deployUsd * shortLeveragePct) / 100n;
   const shortSizeAsset = (shortSizeUSD * 10n ** 18n) / btcPrice;
   await ex.openShort("BTC", shortSizeAsset);
@@ -208,11 +210,31 @@ async function claimRedeemForUser(kashYield, user, batchCycle) {
   return leaf.amount;
 }
 
+async function depositToHyperliquidViaFacade(kashYield, bot, amount) {
+  const { target: ex, viaFacade } = await hlOpsTarget(kashYield, bot);
+  if (viaFacade) await kashYield.connect(bot).approveExchangeFacadeUsdc(amount);
+  await ex.depositToHyperliquid(amount);
+}
+
+async function withdrawFromHyperliquidViaFacade(kashYield, bot, amount) {
+  const { target: ex } = await hlOpsTarget(kashYield, bot);
+  await ex.withdrawFromHyperliquid(amount);
+}
+
+async function closeShortViaFacade(kashYield, bot, symbol) {
+  const { target: ex } = await hlOpsTarget(kashYield, bot);
+  await ex.getFunction("closeShort(string)").send(symbol);
+}
+
 module.exports = {
   USDC_ADDRESS,
   mintProtocolFee,
   usdcBorrowForAssetUsd,
   deployAndWireExchangeFacade,
+  hlOpsTarget,
+  depositToHyperliquidViaFacade,
+  withdrawFromHyperliquidViaFacade,
+  closeShortViaFacade,
   manualEthMintOps,
   manualBtcMintOps,
   computeBatchGrossRedeemAsset,

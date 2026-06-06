@@ -173,7 +173,7 @@ Legacy **`handleNetMint` / `handleNetRedeem`** handlers were removed from `batch
 When `batchTotalRedeemKash > 0`:
 
 1. Bot computes net redeem allocations (mirrors on-chain `_allocRedeem*` + fee rounding).
-2. Builds Merkle tree (`bot/src/batch/redeemMerkle.ts`); writes manifest to `bot/data/redeem-proofs/{product}-batch-{cycle}.json`.
+2. Builds Merkle tree (`bot/src/batch/redeemMerkle.ts`); writes manifest to `bot/data/redeem-proofs/{product}-batch-{cycle}.json`, then publishes after successful redeem Phase 2: **Vercel Blob** if `BLOB_READ_WRITE_TOKEN` is set in `bot/.env`, otherwise copies to `frontend/public/redeem-proofs/` (git + deploy).
 3. Calls **`processBatchPhase2ForCycle(batchCycle, merkleRoot)`** — mints KASH (push), commits root, reserves `lockedClaimWbtc` / `lockedClaimEth`.
 4. Users **`claimRedeem(batchCycle, amount, proof)`** in the frontend (pull; user pays gas).
 

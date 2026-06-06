@@ -325,7 +325,7 @@ NEXT_PUBLIC_REDEEM_PROOF_BASE_URL=https://your-cdn.example.com/redeem-proofs
 - [ ] **`BOT_ADDRESS`** set on both vault deploy commands to the **bot** address (not omitted).
 - [ ] **`directDepositMode = false`** on **both** HL adapters; HL withdrawals target **adapter** address.
 - [ ] HL **agent** approved for bot on each adapter’s HL account; adapter **`operator`** = bot (deploy env or `setOperator`).
-- [ ] **ExchangeFacade** deployed per vault; `setExchangeFacade` + `facade.setHyperliquid` + `facade.setActivePerpExchange("HL")` complete.
+- [ ] **ExchangeFacade** deployed per vault; `setExchangeFacade` + `facade.setHyperliquid` + `facade.setActivePerpExchange("HL")` + `hlAdapter.setAuthorizedCaller(facade)` complete.
 - [ ] ExchangeFacade timelock is **24h** for future adapter proposals (first HL registration is immediate).
 - [ ] Contracts verified on Arbiscan (vault, facade, adapters); `diagnose-eth.js` (and BTC ops smoke) clean.
 - [ ] `bot/.env` + `frontend/.env.local` point at **new** vault/token addresses; `NEXT_PUBLIC_REDEEM_PROOF_BASE_URL` set; proof hosting plan in place.
@@ -539,9 +539,11 @@ const facade = await ethers.getContractAt("ExchangeFacade", "<EXCHANGE_FACADE_ET
 await (await vault.setExchangeFacade("<EXCHANGE_FACADE_ETH>")).wait()
 await (await facade.setHyperliquid("<HL_ADAPTER_ADDRESS_ETH>")).wait()
 await (await facade.setActivePerpExchange("HL")).wait()
+const hlAdapter = await ethers.getContractAt("HyperliquidAdapter", "<HL_ADAPTER_ADDRESS_ETH>")
+await (await hlAdapter.setAuthorizedCaller("<EXCHANGE_FACADE_ETH>")).wait()
 ```
 
-**Readback:** `await vault.exchangeFacade()` ≠ zero; `await facade.hyperliquidAddress()` = adapter; bot `npm start` ops can call `depositToHyperliquid` via facade.
+**Readback:** `await vault.exchangeFacade()` ≠ zero; `await facade.hyperliquidAddress()` = adapter; `await hlAdapter.authorizedCaller()` = facade; bot `npm start` ops can call `depositToHyperliquid` via facade.
 
 ### Step 5 — Set Chainlink ETH oracle (recommended)
 
@@ -749,6 +751,8 @@ const facade = await ethers.getContractAt("ExchangeFacade", "<EXCHANGE_FACADE_BT
 await (await vault.setExchangeFacade("<EXCHANGE_FACADE_BTC>")).wait()
 await (await facade.setHyperliquid("<HL_ADAPTER_ADDRESS_BTC>")).wait()
 await (await facade.setActivePerpExchange("HL")).wait()
+const hlAdapter = await ethers.getContractAt("HyperliquidAdapter", "<HL_ADAPTER_ADDRESS_BTC>")
+await (await hlAdapter.setAuthorizedCaller("<EXCHANGE_FACADE_BTC>")).wait()
 ```
 
 Run `approveHlAgent.js` for the BTC adapter (`HL_ADAPTER_ADDRESS_BTC`).

@@ -25,7 +25,10 @@ async function main() {
   await facade.waitForDeployment();
 
   console.log("ExchangeFacade:", await facade.getAddress());
-  console.log("Next: kashYield.setExchangeFacade(facade) and facade.setHyperliquid(adapter)");
+  console.log("Next:");
+  console.log("  1. kashYield.setExchangeFacade(facade)");
+  console.log("  2. facade.setHyperliquid(adapter); facade.setActivePerpExchange('HL')");
+  console.log("  3. hlAdapter.setAuthorizedCaller(facade)  // allow facade → adapter HL ops");
 }
 
 main().catch((e) => {

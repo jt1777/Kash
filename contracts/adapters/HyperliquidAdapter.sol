@@ -92,6 +92,9 @@ contract HyperliquidAdapter is IPerpExchange {
     address public owner;
     address public pendingOwner;
 
+    /// @notice Optional ExchangeFacade (or other vault delegate) authorised for capital-movement calls.
+    address public authorizedCaller;
+
     /// @notice Bot / worker authorised to call syncBalances and syncPosition when non-zero.
     address public operator;
 
@@ -126,6 +129,7 @@ contract HyperliquidAdapter is IPerpExchange {
     event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event OperatorUpdated(address indexed previousOperator, address indexed newOperator);
+    event AuthorizedCallerUpdated(address indexed caller);
     event BalancesSynced(uint256 usdcBalance, uint256 assetBalance);
     event PositionSynced(string symbol, uint256 size, uint256 entryPrice, bool isActive);
 
@@ -145,10 +149,12 @@ contract HyperliquidAdapter is IPerpExchange {
         _;
     }
 
-    /// @dev Allows the KashYield contract or the owner (ops scripts / manual ops).
+    /// @dev KashYield, ExchangeFacade (when set), or owner (ops scripts / manual ops).
     modifier onlyAuthorized() {
+        address snd = msg.sender;
         require(
-            msg.sender == kashYieldAddress || msg.sender == owner,
+            snd == kashYieldAddress || snd == owner
+                || (authorizedCaller != address(0) && snd == authorizedCaller),
             "Unauthorized"
         );
         _;
@@ -198,6 +204,12 @@ contract HyperliquidAdapter is IPerpExchange {
     function setOperator(address newOperator) external onlyOwner {
         emit OperatorUpdated(operator, newOperator);
         operator = newOperator;
+    }
+
+    /// @notice Authorise ExchangeFacade (or delegate) to call capital-movement functions.
+    function setAuthorizedCaller(address caller) external onlyOwner {
+        authorizedCaller = caller;
+        emit AuthorizedCallerUpdated(caller);
     }
 
     // ── Capital movement ──────────────────────────────────────────────────────

@@ -21,6 +21,8 @@ import {
   buildRedeemMerkleTree,
   manifestFromTree,
 } from './redeemMerkle';
+import { publishRedeemProof } from './redeemProofPublish';
+import { redeemProofBotDir, redeemProofFilename } from './redeemProofPaths';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -739,9 +741,9 @@ export class BatchProcessor {
     const { root, proofs } = buildRedeemMerkleTree(batchCycle, entries);
     const manifest = manifestFromTree(batchCycle, entries, root, proofs);
 
-    const outDir = path.join(process.cwd(), 'bot', 'data', 'redeem-proofs');
+    const outDir = redeemProofBotDir();
     fs.mkdirSync(outDir, { recursive: true });
-    const outFile = path.join(outDir, `${config.product}-batch-${batchCycle.toString()}.json`);
+    const outFile = path.join(outDir, redeemProofFilename(config.product, batchCycle));
     fs.writeFileSync(outFile, JSON.stringify(manifest, null, 2));
     console.log(`   📄 Redeem proof manifest: ${outFile}`);
     console.log(`   🌳 Merkle root: ${root}\n`);
@@ -761,10 +763,16 @@ export class BatchProcessor {
       console.log(`   ✅ Phase 2 for batch ${batchCycle} done in block ${receipt2.blockNumber}`);
       console.log(`   Tx hash: ${receipt2.hash}\n`);
       await this.handleEventsFromReceipt(receipt2);
+      if (redeemKash > 0n) {
+        await publishRedeemProof(config.product, batchCycle);
+      }
     } catch (err: any) {
       const info = await this.kashYield.getBatchInfo(batchCycle).catch(() => null);
       if (info?.processed) {
         console.log(`   ℹ️  Phase 2 for batch ${batchCycle} already completed — skipping.\n`);
+        if (redeemKash > 0n) {
+          await publishRedeemProof(config.product, batchCycle);
+        }
         return;
       }
       const errData: string = err?.data ?? err?.error?.data ?? '';
