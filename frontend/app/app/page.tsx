@@ -249,6 +249,15 @@ function AppContent() {
         .app-page .bg-amber-50 { background: rgba(255, 189, 46, 0.12) !important; border-color: rgba(255, 189, 46, 0.35) !important; }
         .app-page .border-amber-200 { border-color: rgba(255, 189, 46, 0.35) !important; }
         .app-page .text-amber-800, .app-page .text-amber-700 { color: #ffbd2e !important; }
+        .app-page .bg-orange-50 { background: rgba(255, 189, 46, 0.12) !important; }
+        .app-page .border-orange-200 { border-color: rgba(255, 189, 46, 0.35) !important; }
+        .app-page .text-orange-800, .app-page .text-orange-900, .app-page .text-orange-700 { color: #ffbd2e !important; }
+        .app-page .bg-amber-600, .app-page button.bg-amber-600 { background: #ffbd2e !important; color: #0A0A1E !important; border: 2px solid #ffbd2e; }
+        .app-page .hover\\:bg-amber-700:hover { background: transparent !important; color: #ffbd2e !important; box-shadow: 0 0 16px rgba(255, 189, 46, 0.35); }
+        .app-page .bg-green-700, .app-page button.bg-green-700 { background: #00FFFF !important; color: #0A0A1E !important; border: 2px solid #00FFFF; box-shadow: 0 0 10px rgba(0, 255, 255, 0.35); }
+        .app-page .hover\\:bg-green-800:hover { background: transparent !important; color: #00FFFF !important; box-shadow: 0 0 20px rgba(0, 255, 255, 0.35); }
+        .app-page .text-gray-800 { color: rgba(255, 255, 255, 0.9) !important; }
+        .app-page .kash-notice-nested { background: rgba(0, 255, 255, 0.05) !important; border-color: rgba(0, 255, 255, 0.22) !important; }
         .app-page .bg-red-50 { background: rgba(255, 95, 86, 0.15) !important; border-color: rgba(255, 95, 86, 0.4) !important; }
         .app-page .border-red-200 { border-color: rgba(255, 95, 86, 0.4) !important; }
         .app-page .text-red-800, .app-page .text-red-700, .app-page .text-red-600, .app-page .text-red-500 { color: #ff5f56 !important; }

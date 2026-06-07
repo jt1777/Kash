@@ -1,14 +1,32 @@
 'use client';
 
 import { useState, useMemo, useEffect } from 'react';
-import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadContract, useReadContracts, useEstimateFeesPerGas } from 'wagmi';
+import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadContract, useReadContracts, useEstimateFeesPerGas, usePublicClient } from 'wagmi';
 import { CONTRACTS, ARBITRUM_ONE_BLOCK_EXPLORER, HARDHAT_CHAIN_ID } from '@/lib/contracts/addresses';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 import { kashTokenABI } from '@/lib/contracts/kashTokenABI';
 import { usePendingBatchRequest, type PendingBatchRequest } from '@/lib/usePendingBatchRequest';
-import { fetchRedeemProof } from '@/lib/redeemProofs';
+import { resolveClaimProof, formatClaimPayoutAmount } from '@/lib/redeemProofs';
+import {
+  BATCH_USER_CAP,
+  type BatchInfoRow,
+  batchCapNotice,
+  isBatchProcessed,
+  isNewUserBlockedByBatchCap,
+  isRedeemCapReachedError,
+  redeemUsersCountFromBatchInfo,
+} from '@/lib/batchUserCap';
 import { parseEther, formatEther } from 'viem';
 import { useChainId } from 'wagmi';
+
+function isUserRejectedWalletError(error: Error | null | undefined): boolean {
+  if (!error) return false;
+  const msg = `${error.name} ${error.message} ${error.cause instanceof Error ? error.cause.message : ''}`.toLowerCase();
+  return (
+    /user rejected|user denied|rejected the request|denied transaction signature|reject this request/i.test(msg) ||
+    error.name === 'UserRejectedRequestError'
+  );
+}
 
 function formatApproxUsd(usdWei18: bigint | null): string {
   if (usdWei18 === null) return '—';
@@ -36,6 +54,7 @@ function dispatchActivityRefresh() {
 
 export function RedeemForm({ product = 'eth' }: { product?: Product }) {
   const { address } = useAccount();
+  const publicClient = usePublicClient();
   const chainId = useChainId();
 
   const isBtc = product === 'btc' && CONTRACTS.kashYieldBtc && CONTRACTS.kashTokenBtc;
@@ -49,6 +68,8 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
   const [claimingCycle, setClaimingCycle] = useState<string | null>(null);
   const [pendingClaimCycle, setPendingClaimCycle] = useState<bigint | null>(null);
   const [claimErrors, setClaimErrors] = useState<Record<string, string>>({});
+  const [claimPayouts, setClaimPayouts] = useState<Record<string, bigint | null>>({});
+  const claimAssetSymbol = isBtc ? 'wBTC' : 'ETH';
 
   const { data: feesPerGas } = useEstimateFeesPerGas();
   const gasOptions = useMemo(() => {
@@ -80,6 +101,14 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
     address: kashYield,
     abi: kashYieldABI,
     functionName: 'getCurrentBatchCycle',
+  });
+
+  const { data: batchInfo } = useReadContract({
+    address: kashYield,
+    abi: kashYieldABI,
+    functionName: 'getBatchInfo',
+    args: currentBatchCycle !== undefined ? [currentBatchCycle] : undefined,
+    query: { refetchInterval: 15_000 },
   });
 
   const { data: currentNav, isFetched: navFetched } = useReadContract({
@@ -138,6 +167,37 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
 
   const needsClaim = claimableRedeems.length > 0;
 
+  useEffect(() => {
+    if (!address || claimableRedeems.length === 0) {
+      setClaimPayouts({});
+      return;
+    }
+    let cancelled = false;
+    setClaimPayouts({});
+    const loadPayouts = async () => {
+      const entries = await Promise.all(
+        claimableRedeems.map(async (req) => {
+          const key = req.batchCycle.toString();
+          const proof = await resolveClaimProof({
+            product,
+            batchCycle: req.batchCycle,
+            userAddress: address,
+            kashYield,
+            publicClient,
+          });
+          return [key, proof && proof.amount > 0n ? proof.amount : null] as const;
+        }),
+      );
+      if (!cancelled) {
+        setClaimPayouts(Object.fromEntries(entries));
+      }
+    };
+    void loadPayouts();
+    return () => {
+      cancelled = true;
+    };
+  }, [address, claimableRedeems, product, publicClient, kashYield]);
+
   const pendingRedeemCycle =
     cancellableRedeem?.batchCycle ??
     stuckRedeem?.batchCycle ??
@@ -158,19 +218,35 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
     query: { refetchInterval: 15000 },
   });
 
+  const { data: currentCycleRedeemRequest } = useReadContract({
+    address: kashYield,
+    abi: kashYieldABI,
+    functionName: 'getPendingRedeemRequest',
+    args: address && currentBatchCycle !== undefined ? [address, currentBatchCycle] : undefined,
+    query: { refetchInterval: 15000 },
+  });
+
+  const batchInfoRow = batchInfo as BatchInfoRow | undefined;
+  const batchProcessed = isBatchProcessed(batchInfoRow);
+  const redeemUsersCount = redeemUsersCountFromBatchInfo(batchInfoRow);
+  const userInCurrentRedeemBatch = (currentCycleRedeemRequest?.kashAmount ?? 0n) > 0n;
+  const redeemBatchCapBlocked =
+    isNewUserBlockedByBatchCap(redeemUsersCount, userInCurrentRedeemBatch) && !batchProcessed;
+
   const canCancelRedeem = Boolean(cancellableRedeem && cancellableRedeem.amount > 0n);
   const hasStuckRedeem = Boolean(stuckRedeem && stuckRedeem.amount > 0n);
 
   const { writeContract: approve, data: approveHash, isPending: isApprovePending } = useWriteContract();
   const redeemWriteResult = useWriteContract();
-  const { writeContract: redeem, data: redeemHash, isPending: isRedeemPending } = redeemWriteResult;
+  const { writeContract: redeem, data: redeemHash, isPending: isRedeemPending, error: redeemError } = redeemWriteResult;
   const resetRedeem = 'reset' in redeemWriteResult ? (redeemWriteResult as { reset: () => void }).reset : () => {};
   const { writeContract: cancelRedeem, data: cancelRedeemHash, isPending: isCancelRedeemPending } = useWriteContract();
   const claimWrite = useWriteContract();
   const { writeContract: claimRedeem, data: claimHash, isPending: isClaimPending } = claimWrite;
 
   const { isLoading: isApproveConfirming, isSuccess: isApproveSuccess } = useWaitForTransactionReceipt({ hash: approveHash });
-  const { isLoading: isRedeemConfirming, isSuccess: isRedeemSuccess } = useWaitForTransactionReceipt({ hash: redeemHash });
+  const { isLoading: isRedeemConfirming, isSuccess: isRedeemSuccess, isError: isRedeemError } =
+    useWaitForTransactionReceipt({ hash: redeemHash });
   const { isLoading: isCancelRedeemConfirming } = useWaitForTransactionReceipt({ hash: cancelRedeemHash });
   const { isLoading: isClaimConfirming, isSuccess: isClaimSuccess } = useWaitForTransactionReceipt({ hash: claimHash });
 
@@ -184,11 +260,17 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
     });
     setClaimingCycle(cycleKey);
     try {
-      const proofData = await fetchRedeemProof(product, batchCycle, address);
+      const proofData = await resolveClaimProof({
+        product,
+        batchCycle,
+        userAddress: address,
+        kashYield,
+        publicClient,
+      });
       if (!proofData) {
         setClaimErrors((prev) => ({
           ...prev,
-          [cycleKey]: 'Claim proof not available yet. Try again shortly or contact the operator.',
+          [cycleKey]: 'Could not build claim proof for this batch. Contact the operator.',
         }));
         setClaimingCycle(null);
         return;
@@ -410,7 +492,7 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
               <button
                 type="button"
                 onClick={() => void handleRedeem()}
-                disabled={isRedeemPending || isRedeemConfirming}
+                disabled={isRedeemPending || isRedeemConfirming || redeemBatchCapBlocked}
                 className="flex-1 px-6 py-3 rounded-lg bg-linear-to-r from-purple-600 to-pink-600 text-white font-medium hover:from-purple-700 hover:to-pink-700 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed cursor-pointer transition-all shadow-lg disabled:shadow-none border-2 border-transparent"
               >
                 Confirm
@@ -455,8 +537,7 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
           <p className="text-sm text-green-800 font-medium">
             {claimableRedeems.length === 1
               ? `Your redeem for batch cycle ${claimableRedeems[0].batchCycle.toString()} is settled.`
-              : `You have ${claimableRedeems.length} settled redeems ready to claim.`}{' '}
-            Claim {isBtc ? 'wBTC' : 'ETH'} to your wallet (one transaction per batch; you pay gas).
+              : `You have ${claimableRedeems.length} settled redeems ready to claim.`}
           </p>
           <ul className="space-y-2">
             {claimableRedeems.map((req) => {
@@ -468,12 +549,23 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
               return (
                 <li
                   key={cycleKey}
-                  className="rounded-md border border-green-200/80 bg-white/60 p-3 space-y-2"
+                  className="kash-notice-nested rounded-md border border-green-200 p-3 space-y-2"
                 >
-                  <p className="text-sm text-gray-800">
-                    <span className="font-medium">Batch {cycleKey}</span>
+                  <p className="text-sm text-gray-700">
+                    <span className="font-medium text-green-800">Batch {cycleKey}</span>
                     {' · '}
                     {Number(formatEther(req.amount)).toFixed(4)} {redeemSymbol} redeemed
+                    {claimPayouts[cycleKey] === undefined ? (
+                      <span className="text-gray-500"> · loading {claimAssetSymbol} claim amount…</span>
+                    ) : claimPayouts[cycleKey] !== null ? (
+                      <>
+                        {' · '}
+                        <span className="font-medium text-green-800">
+                          {formatClaimPayoutAmount(product, claimPayouts[cycleKey]!)} {claimAssetSymbol}
+                        </span>
+                        {' '}to claim
+                      </>
+                    ) : null}
                   </p>
                   {cycleError && <p className="text-sm text-red-700">{cycleError}</p>}
                   <button
@@ -511,17 +603,26 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
 
       {/* Stuck redeem: batch started processing — cancel no longer possible */}
       {hasStuckRedeem && stuckRedeem && !canCancelRedeem && (
-        <div className="rounded-lg border border-orange-200 bg-orange-50 p-3">
-          <p className="text-sm text-orange-900 font-medium mb-1">Redeem in progress (batch cycle {stuckRedeem.batchCycle.toString()})</p>
+        <div className="rounded-lg border border-orange-200 bg-orange-50 p-3 space-y-2">
+          <p className="text-sm text-orange-900 font-medium">
+            Redeem in progress (batch cycle {stuckRedeem.batchCycle.toString()})
+          </p>
+          <p className="text-sm text-gray-600">
+            {paused
+              ? 'The protocol is paused — you can recover your KASH via emergencyWithdrawRedeem on the contract.'
+              : `Your ${isBtc ? 'wBTC' : 'ETH'} will be sent to your wallet when the batch finishes. After settlement, claim from this form. If this stays stuck, contact the operator.`}
+          </p>
           <p className="text-sm text-orange-800">
             {Number(formatEther(stuckRedeem.amount)).toFixed(4)} {redeemSymbol} is locked on the vault while the batch
             completes (phase {stuckRedeem.phase}). Cancellation is not available once processing has started.
           </p>
-          <p className="text-xs text-orange-700 mt-2">
-            {paused
-              ? 'The protocol is paused — you can recover your KASH via emergencyWithdrawRedeem on the contract.'
-              : `After the batch settles, claim ${isBtc ? 'wBTC' : 'ETH'} from this form. If this stays stuck, contact the operator.`}
-          </p>
+        </div>
+      )}
+
+      {redeemBatchCapBlocked && redeemUsersCount !== null && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+          <p className="text-sm font-medium text-amber-900">Redeem batch full</p>
+          <p className="text-sm text-amber-800 mt-1">{batchCapNotice('redeem', redeemUsersCount)}</p>
         </div>
       )}
 
@@ -541,12 +642,48 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
         <button
           type="button"
           onClick={() => setShowRedeemConfirm(true)}
-          disabled={isRedeemPending || isRedeemConfirming || !amount || needsApproval || (kashBalance !== undefined && parsedAmount > kashBalance)}
+          disabled={
+            isRedeemPending ||
+            isRedeemConfirming ||
+            !amount ||
+            needsApproval ||
+            redeemBatchCapBlocked ||
+            (kashBalance !== undefined && parsedAmount > kashBalance)
+          }
           className="w-full px-6 py-3 bg-linear-to-r from-purple-600 to-pink-600 text-white rounded-lg font-medium hover:from-purple-700 hover:to-pink-700 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed cursor-pointer transition-all shadow-lg"
         >
           {isRedeemPending || isRedeemConfirming ? 'Processing...' : 'Submit Redeem Request'}
         </button>
       </div>
+
+      {(redeemError || isRedeemError) && (
+        <div className="p-3 rounded-lg border border-red-200 bg-red-50 text-left">
+          {isUserRejectedWalletError(redeemError) ? (
+            <>
+              <p className="text-sm font-medium text-red-800">Redeem request cancelled</p>
+              <p className="text-xs text-red-600/90 mt-1.5 leading-relaxed">
+                You closed the wallet prompt or declined the transaction. No funds were spent. Submit again when you are ready.
+              </p>
+            </>
+          ) : isRedeemCapReachedError(redeemError) ? (
+            <>
+              <p className="text-sm font-medium text-red-800">Redeem batch full</p>
+              <p className="text-xs text-red-600 mt-1.5 leading-relaxed">
+                {redeemUsersCount !== null
+                  ? batchCapNotice('redeem', redeemUsersCount)
+                  : batchCapNotice('redeem', BATCH_USER_CAP)}
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="text-sm font-medium text-red-800">Transaction failed</p>
+              <p className="text-xs text-red-600 mt-1.5 leading-relaxed">
+                The redeem request could not be completed. Try again, or check your wallet for details.
+              </p>
+            </>
+          )}
+        </div>
+      )}
 
       {/*<p className="text-xs text-gray-500 text-center">
         Fee: 0.05% | Processed at next batch (23:45 UTC)

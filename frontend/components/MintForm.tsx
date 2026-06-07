@@ -6,6 +6,15 @@ import { CONTRACTS, ARBITRUM_ONE_BLOCK_EXPLORER, HARDHAT_CHAIN_ID } from '@/lib/
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 import { kashTokenABI } from '@/lib/contracts/kashTokenABI';
 import { usePendingBatchRequest } from '@/lib/usePendingBatchRequest';
+import {
+  BATCH_USER_CAP,
+  type BatchInfoRow,
+  batchCapNotice,
+  isBatchProcessed,
+  isMintCapReachedError,
+  isNewUserBlockedByBatchCap,
+  mintUsersCountFromBatchInfo,
+} from '@/lib/batchUserCap';
 import { chainlinkAggregatorABI } from '@/lib/contracts/chainlinkAggregatorABI';
 import { parseEther, parseUnits, formatEther, formatUnits, zeroAddress } from 'viem';
 import { useChainId } from 'wagmi';
@@ -195,8 +204,19 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
     query: { refetchInterval: 15000 },
   });
 
-  // Only treat as processed when we have batch info; otherwise show pending/cancel state
-  const batchProcessed = batchInfo ? (batchInfo as readonly [bigint, bigint, boolean, bigint, bigint, bigint])[2] : false;
+  const { data: currentCycleMintRequest } = useReadContract({
+    address: kashYield,
+    abi: kashYieldABI,
+    functionName: 'getPendingMintRequest',
+    args: address && currentBatchCycle !== undefined ? [address, currentBatchCycle] : undefined,
+    query: { refetchInterval: 15000 },
+  });
+
+  const batchInfoRow = batchInfo as BatchInfoRow | undefined;
+  const batchProcessed = isBatchProcessed(batchInfoRow);
+  const mintUsersCount = mintUsersCountFromBatchInfo(batchInfoRow);
+  const userInCurrentMintBatch = (currentCycleMintRequest?.amountIn ?? 0n) > 0n;
+  const mintBatchCapBlocked = isNewUserBlockedByBatchCap(mintUsersCount, userInCurrentMintBatch) && !batchProcessed;
   const canCancelMint = Boolean(cancellableMint && cancellableMint.amount > 0n);
   const hasStuckMint = Boolean(stuckMint && stuckMint.amount > 0n);
 
@@ -456,7 +476,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
               <button
                 type="button"
                 onClick={() => void handleMint()}
-                disabled={isMintPending || isMintConfirming || mintBelowMinUsd || mintUsdUnavailable}
+                disabled={isMintPending || isMintConfirming || mintBelowMinUsd || mintUsdUnavailable || mintBatchCapBlocked}
                 className="flex-1 px-6 py-3 rounded-lg bg-linear-to-r from-indigo-600 to-purple-600 text-white font-medium hover:from-indigo-700 hover:to-purple-700 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed cursor-pointer transition-all shadow-lg disabled:shadow-none border-2 border-transparent"
               >
                 Confirm
@@ -592,6 +612,13 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
         </div>
       )}
 
+      {mintBatchCapBlocked && mintUsersCount !== null && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+          <p className="text-sm font-medium text-amber-900">Mint batch full</p>
+          <p className="text-sm text-amber-800 mt-1">{batchCapNotice('mint', mintUsersCount)}</p>
+        </div>
+      )}
+
       {/* Action Buttons */}
       <div className="space-y-2">
         {needsApproval && (
@@ -616,7 +643,8 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
             exceedsBalance ||
             !!exceedsWbtcBalance ||
             mintBelowMinUsd ||
-            mintUsdUnavailable
+            mintUsdUnavailable ||
+            mintBatchCapBlocked
           }
           className="w-full px-6 py-3 bg-linear-to-r from-indigo-600 to-purple-600 text-white rounded-lg font-medium hover:from-indigo-700 hover:to-purple-700 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed cursor-pointer transition-all shadow-lg"
         >
@@ -632,6 +660,13 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
               <p className="text-sm font-medium text-red-800">Mint request cancelled</p>
               <p className="text-xs text-red-600/90 mt-1.5 leading-relaxed">
                 You closed the wallet prompt or declined the transaction. No funds were spent. Submit again when you are ready.
+              </p>
+            </>
+          ) : isMintCapReachedError(mintError) ? (
+            <>
+              <p className="text-sm font-medium text-red-800">Mint batch full</p>
+              <p className="text-xs text-red-600 mt-1.5 leading-relaxed">
+                {mintUsersCount !== null ? batchCapNotice('mint', mintUsersCount) : batchCapNotice('mint', BATCH_USER_CAP)}
               </p>
             </>
           ) : (

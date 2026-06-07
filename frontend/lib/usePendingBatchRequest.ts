@@ -4,8 +4,8 @@ import { useMemo } from 'react';
 import { useReadContracts } from 'wagmi';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 
-/** How many past batch cycles to scan for uncleared mint/redeem requests. */
-export const PENDING_REQUEST_LOOKBACK = 20;
+/** Past batch cycles to scan (daily batches → 30 ≈ claim expiry window on-chain). */
+export const PENDING_REQUEST_LOOKBACK = 30;
 
 export type PendingBatchRequest = {
   batchCycle: bigint;

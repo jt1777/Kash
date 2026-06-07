@@ -84,6 +84,16 @@ export const kashYieldABI = [
     type: "function",
   },
   {
+    inputs: [
+      { name: "batchCycle", type: "uint256" },
+      { name: "index", type: "uint256" },
+    ],
+    name: "batchRedeemUsers",
+    outputs: [{ name: "", type: "address" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
     inputs: [{ name: "batchCycle", type: "uint256" }],
     name: "getBatchInfo",
     outputs: [

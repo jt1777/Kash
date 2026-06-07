@@ -16,7 +16,8 @@
     "owner:update-nav:hourly": "ts-node src/scripts/owner-update-nav.ts",
     "owner:withdraw-excess-asset": "ts-node src/scripts/owner-withdraw-excess-asset.ts",
     "owner:withdraw-excess-wbtc": "ts-node src/scripts/owner-withdraw-excess-asset.ts",
-    "owner:recover-hl-usdc": "ts-node src/scripts/recover-hl-usdc-to-aave.ts"
+    "owner:recover-hl-usdc": "ts-node src/scripts/recover-hl-usdc-to-aave.ts",
+    "redeem-proof:blob-url": "ts-node src/scripts/redeem-proof-blob-url.ts"
   },
   "dependencies": {
     "@vercel/blob": "^0.27.0",
