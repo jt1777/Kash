@@ -1,11 +1,11 @@
 'use client';
 
 import { useState, useMemo, useEffect } from 'react';
-import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadContract, useEstimateFeesPerGas } from 'wagmi';
+import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadContract, useReadContracts, useEstimateFeesPerGas } from 'wagmi';
 import { CONTRACTS, ARBITRUM_ONE_BLOCK_EXPLORER, HARDHAT_CHAIN_ID } from '@/lib/contracts/addresses';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 import { kashTokenABI } from '@/lib/contracts/kashTokenABI';
-import { usePendingBatchRequest } from '@/lib/usePendingBatchRequest';
+import { usePendingBatchRequest, type PendingBatchRequest } from '@/lib/usePendingBatchRequest';
 import { fetchRedeemProof } from '@/lib/redeemProofs';
 import { parseEther, formatEther } from 'viem';
 import { useChainId } from 'wagmi';
@@ -46,10 +46,9 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
   const [showRedeemConfirm, setShowRedeemConfirm] = useState(false);
   const [submittedRedeem, setSubmittedRedeem] = useState<{ hash: `0x${string}`; amount: string } | null>(null);
   const [lastActivityRefreshHash, setLastActivityRefreshHash] = useState<`0x${string}` | null>(null);
-  const [hideSettled, setHideSettled] = useState(false);
-  const [hadPendingBeforeBatch, setHadPendingBeforeBatch] = useState(false);
-  const [claimLoading, setClaimLoading] = useState(false);
-  const [claimError, setClaimError] = useState<string | null>(null);
+  const [claimingCycle, setClaimingCycle] = useState<string | null>(null);
+  const [pendingClaimCycle, setPendingClaimCycle] = useState<bigint | null>(null);
+  const [claimErrors, setClaimErrors] = useState<Record<string, string>>({});
 
   const { data: feesPerGas } = useEstimateFeesPerGas();
   const gasOptions = useMemo(() => {
@@ -90,38 +89,65 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
     query: { refetchInterval: 15_000 },
   });
 
-  const { data: batchInfo } = useReadContract({
-    address: kashYield,
-    abi: kashYieldABI,
-    functionName: 'getBatchInfo',
-    args: currentBatchCycle !== undefined ? [currentBatchCycle] : undefined,
-    query: { refetchInterval: 15000 },
+  const {
+    requests: redeemRequests,
+    cancellable: cancellableRedeem,
+    stuck: stuckRedeem,
+    refetch: refetchPendingLookback,
+  } = usePendingBatchRequest({
+    kashYield,
+    userAddress: address,
+    currentBatchCycle,
+    kind: 'redeem',
   });
+
+  const processedRedeems = useMemo(
+    () => redeemRequests.filter((r) => r.processed && r.amount > 0n),
+    [redeemRequests],
+  );
+
+  const redeemClaimedContracts = useMemo(() => {
+    if (!address || processedRedeems.length === 0) return [];
+    return processedRedeems.map((r) => ({
+      address: kashYield,
+      abi: kashYieldABI,
+      functionName: 'redeemClaimed' as const,
+      args: [r.batchCycle, address] as const,
+    }));
+  }, [kashYield, address, processedRedeems]);
+
+  const { data: redeemClaimedResults, refetch: refetchClaimStatuses } = useReadContracts({
+    contracts: redeemClaimedContracts,
+    query: {
+      enabled: redeemClaimedContracts.length > 0,
+      refetchInterval: 15_000,
+    },
+  });
+
+  const claimableRedeems = useMemo((): PendingBatchRequest[] => {
+    const unclaimed: PendingBatchRequest[] = [];
+    for (let i = 0; i < processedRedeems.length; i++) {
+      const req = processedRedeems[i];
+      const claimed =
+        redeemClaimedResults?.[i]?.status === 'success' &&
+        redeemClaimedResults[i].result === true;
+      if (!claimed) unclaimed.push(req);
+    }
+    return unclaimed.sort((a, b) => (a.batchCycle > b.batchCycle ? -1 : 1));
+  }, [processedRedeems, redeemClaimedResults]);
+
+  const needsClaim = claimableRedeems.length > 0;
+
+  const pendingRedeemCycle =
+    cancellableRedeem?.batchCycle ??
+    stuckRedeem?.batchCycle ??
+    currentBatchCycle;
 
   const { data: paused } = useReadContract({
     address: kashYield,
     abi: kashYieldABI,
     functionName: 'paused',
     query: { refetchInterval: 15_000 },
-  });
-
-  const { cancellable: cancellableRedeem, stuck: stuckRedeem, refetch: refetchPendingLookback } =
-    usePendingBatchRequest({
-      kashYield,
-      userAddress: address,
-      currentBatchCycle,
-      kind: 'redeem',
-    });
-
-  const pendingRedeemCycle = cancellableRedeem?.batchCycle ?? stuckRedeem?.batchCycle ?? currentBatchCycle;
-  const batchProcessed = batchInfo ? (batchInfo as readonly [bigint, bigint, boolean, bigint, bigint, bigint])[2] : false;
-
-  const { data: alreadyClaimed } = useReadContract({
-    address: kashYield,
-    abi: kashYieldABI,
-    functionName: 'redeemClaimed',
-    args: address && pendingRedeemCycle !== undefined ? [pendingRedeemCycle, address] : undefined,
-    query: { enabled: Boolean(batchProcessed && address && pendingRedeemCycle !== undefined) },
   });
 
   const { data: pendingRedeemRequest, refetch: refetchPendingRedeem } = useReadContract({
@@ -134,33 +160,6 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
 
   const canCancelRedeem = Boolean(cancellableRedeem && cancellableRedeem.amount > 0n);
   const hasStuckRedeem = Boolean(stuckRedeem && stuckRedeem.amount > 0n);
-
-  // localStorage key scoped to wallet + cycle + product so it persists across page refreshes
-  const pendingStorageKey = useMemo(
-    () => address && pendingRedeemCycle !== undefined
-      ? `kash-redeem-pending-${address}-${pendingRedeemCycle}-${product}`
-      : null,
-    [address, pendingRedeemCycle, product]
-  );
-
-  // Load persisted flag on mount / when cycle changes
-  useEffect(() => {
-    if (!pendingStorageKey) return;
-    setHadPendingBeforeBatch(localStorage.getItem(pendingStorageKey) === '1');
-  }, [pendingStorageKey]);
-
-  // Record that a pre-batch request exists the moment the cancel button becomes available
-  useEffect(() => {
-    if (canCancelRedeem && pendingStorageKey) {
-      localStorage.setItem(pendingStorageKey, '1');
-      setHadPendingBeforeBatch(true);
-    }
-  }, [canCancelRedeem, pendingStorageKey]);
-
-  // "settled" = batch ran AND we have proof the request was submitted before the batch ran
-  const redeemSettled = batchProcessed && hadPendingBeforeBatch && Boolean(pendingRedeemRequest?.kashAmount && pendingRedeemRequest.kashAmount > 0n);
-  const needsClaim = redeemSettled && !alreadyClaimed;
-  const claimComplete = redeemSettled && Boolean(alreadyClaimed);
 
   const { writeContract: approve, data: approveHash, isPending: isApprovePending } = useWriteContract();
   const redeemWriteResult = useWriteContract();
@@ -175,27 +174,40 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
   const { isLoading: isCancelRedeemConfirming } = useWaitForTransactionReceipt({ hash: cancelRedeemHash });
   const { isLoading: isClaimConfirming, isSuccess: isClaimSuccess } = useWaitForTransactionReceipt({ hash: claimHash });
 
-  const handleClaimRedeem = async () => {
-    if (!address || pendingRedeemCycle === undefined) return;
-    setClaimError(null);
-    setClaimLoading(true);
+  const handleClaimRedeem = async (batchCycle: bigint) => {
+    if (!address) return;
+    const cycleKey = batchCycle.toString();
+    setClaimErrors((prev) => {
+      const next = { ...prev };
+      delete next[cycleKey];
+      return next;
+    });
+    setClaimingCycle(cycleKey);
     try {
-      const proofData = await fetchRedeemProof(product, pendingRedeemCycle, address);
+      const proofData = await fetchRedeemProof(product, batchCycle, address);
       if (!proofData) {
-        setClaimError('Claim proof not available yet. Try again shortly or contact the operator.');
+        setClaimErrors((prev) => ({
+          ...prev,
+          [cycleKey]: 'Claim proof not available yet. Try again shortly or contact the operator.',
+        }));
+        setClaimingCycle(null);
         return;
       }
+      setPendingClaimCycle(batchCycle);
       claimRedeem({
         address: kashYield,
         abi: kashYieldABI,
         functionName: 'claimRedeem',
-        args: [pendingRedeemCycle, proofData.amount, proofData.proof],
+        args: [batchCycle, proofData.amount, proofData.proof],
         ...gasOptions,
       });
     } catch (e) {
-      setClaimError(e instanceof Error ? e.message : 'Failed to load claim proof');
-    } finally {
-      setClaimLoading(false);
+      setClaimErrors((prev) => ({
+        ...prev,
+        [cycleKey]: e instanceof Error ? e.message : 'Failed to load claim proof',
+      }));
+      setClaimingCycle(null);
+      setPendingClaimCycle(null);
     }
   };
 
@@ -224,6 +236,16 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
       refetchPendingLookback();
     }
   }, [isRedeemSuccess, refetchPendingRedeem, refetchPendingLookback]);
+
+  useEffect(() => {
+    if (isClaimSuccess) {
+      setClaimingCycle(null);
+      setPendingClaimCycle(null);
+      refetchClaimStatuses();
+      refetchPendingLookback();
+      dispatchActivityRefresh();
+    }
+  }, [isClaimSuccess, refetchClaimStatuses, refetchPendingLookback]);
 
   useEffect(() => {
     if (isRedeemSuccess && redeemHash && amount && lastActivityRefreshHash !== redeemHash) {
@@ -284,7 +306,7 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
     }
   };
 
-  if (submittedRedeem) {
+  if (submittedRedeem && !needsClaim) {
     const txUrl = `${ARBITRUM_ONE_BLOCK_EXPLORER}/tx/${submittedRedeem.hash}`;
     return (
       <div className="text-center py-8">
@@ -427,41 +449,45 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
       </div>
 
 
-      {/* Settled redeem: success message */}
-      {needsClaim && !hideSettled && (
+      {/* Settled redeems: one claim action per batch */}
+      {needsClaim && (
         <div className="rounded-lg border border-green-200 bg-green-50 p-3 space-y-3">
           <p className="text-sm text-green-800 font-medium">
-            Your redeem batch is settled. Claim {isBtc ? 'wBTC' : 'ETH'} to your wallet (you pay gas for this transaction).
+            {claimableRedeems.length === 1
+              ? `Your redeem for batch cycle ${claimableRedeems[0].batchCycle.toString()} is settled.`
+              : `You have ${claimableRedeems.length} settled redeems ready to claim.`}{' '}
+            Claim {isBtc ? 'wBTC' : 'ETH'} to your wallet (one transaction per batch; you pay gas).
           </p>
-          {claimError && <p className="text-sm text-red-700">{claimError}</p>}
-          <button
-            type="button"
-            onClick={() => void handleClaimRedeem()}
-            disabled={claimLoading || isClaimPending || isClaimConfirming}
-            className="w-full px-4 py-2 bg-green-700 text-white rounded-lg text-sm font-medium hover:bg-green-800 disabled:bg-gray-300 disabled:cursor-not-allowed cursor-pointer transition-colors"
-          >
-            {claimLoading || isClaimPending || isClaimConfirming ? 'Claiming...' : `Claim ${isBtc ? 'wBTC' : 'ETH'}`}
-          </button>
-        </div>
-      )}
-
-      {claimComplete && !hideSettled && (
-        <div className="rounded-lg border border-green-200 bg-green-50 p-3 flex items-start justify-between gap-2">
-          <p className="text-sm text-green-800 font-medium">Redeem claimed! {isBtc ? 'wBTC' : 'ETH'} has been sent to your wallet.</p>
-          <button
-            type="button"
-            onClick={() => {
-              setHideSettled(true);
-              if (pendingStorageKey) localStorage.removeItem(pendingStorageKey);
-              setHadPendingBeforeBatch(false);
-            }}
-            className="text-green-600 hover:text-green-800 transition shrink-0 cursor-pointer"
-            aria-label="Dismiss"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+          <ul className="space-y-2">
+            {claimableRedeems.map((req) => {
+              const cycleKey = req.batchCycle.toString();
+              const isClaimingThis =
+                claimingCycle === cycleKey ||
+                (pendingClaimCycle === req.batchCycle && (isClaimPending || isClaimConfirming));
+              const cycleError = claimErrors[cycleKey];
+              return (
+                <li
+                  key={cycleKey}
+                  className="rounded-md border border-green-200/80 bg-white/60 p-3 space-y-2"
+                >
+                  <p className="text-sm text-gray-800">
+                    <span className="font-medium">Batch {cycleKey}</span>
+                    {' · '}
+                    {Number(formatEther(req.amount)).toFixed(4)} {redeemSymbol} redeemed
+                  </p>
+                  {cycleError && <p className="text-sm text-red-700">{cycleError}</p>}
+                  <button
+                    type="button"
+                    onClick={() => void handleClaimRedeem(req.batchCycle)}
+                    disabled={isClaimingThis}
+                    className="w-full px-4 py-2 bg-green-700 text-white rounded-lg text-sm font-medium hover:bg-green-800 disabled:bg-gray-300 disabled:cursor-not-allowed cursor-pointer transition-colors"
+                  >
+                    {isClaimingThis ? 'Claiming...' : `Claim ${isBtc ? 'wBTC' : 'ETH'}`}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
         </div>
       )}
 
