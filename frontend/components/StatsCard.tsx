@@ -1,7 +1,11 @@
 'use client';
 
 import { useReadContract, useAccount } from 'wagmi';
-import { CONTRACTS } from '@/lib/contracts/addresses';
+import {
+  CONTRACTS,
+  arbiscanAddressUrl,
+  isArbiscanVerifiedKashToken,
+} from '@/lib/contracts/addresses';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 import { kashTokenABI } from '@/lib/contracts/kashTokenABI';
 import { formatEther } from 'viem';
@@ -16,6 +20,8 @@ export function StatsCard({ product = 'eth' }: { product?: Product }) {
   const isBtc = product === 'btc' && CONTRACTS.kashYieldBtc && CONTRACTS.kashTokenBtc;
   const kashYield = isBtc ? CONTRACTS.kashYieldBtc! : CONTRACTS.kashYieldEth;
   const kashToken = isBtc ? CONTRACTS.kashTokenBtc! : CONTRACTS.kashTokenEth;
+  const kashTokenVerified = isArbiscanVerifiedKashToken(kashToken);
+  const kashTokenShort = `${kashToken.slice(0, 6)}…${kashToken.slice(-4)}`;
 
   const { data: nav, refetch: refetchNav, isFetching: isNavFetching } = useReadContract({
     address: kashYield,
@@ -163,10 +169,22 @@ export function StatsCard({ product = 'eth' }: { product?: Product }) {
           {isBtc ? 'KASH-BTC' : 'KASH-ETH'} tokens
         </p>
         <div className="mt-3 pt-3 border-t border-gray-100">
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-500 font-mono truncate" title={kashToken}>
-              {kashToken.slice(0, 6)}…{kashToken.slice(-4)}
-            </span>
+          <div className="flex flex-wrap items-center gap-2">
+            {kashTokenVerified ? (
+              <a
+                href={arbiscanAddressUrl(kashToken, { code: true })}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-indigo-600 hover:text-indigo-700 font-mono transition"
+                title={`${kashToken} — verified on Arbiscan`}
+              >
+                {kashTokenShort} ↗
+              </a>
+            ) : (
+              <span className="text-xs text-gray-500 font-mono truncate" title={kashToken}>
+                {kashTokenShort}
+              </span>
+            )}
             <button
               type="button"
               onClick={() => navigator.clipboard.writeText(kashToken)}

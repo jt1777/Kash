@@ -5,6 +5,8 @@ import {
   ARBITRUM_ONE_BLOCK_EXPLORER,
   ARBITRUM_ONE_CHAIN_ID,
   CONTRACTS,
+  arbiscanAddressUrl,
+  isArbiscanVerifiedKashYield,
 } from '@/lib/contracts/addresses';
 
 export const metadata = {
@@ -20,6 +22,10 @@ const GITBOOK_SPACE =
 const GITBOOK_AGENT_QUICKSTART = `${GITBOOK_SPACE}/agent-integration/agent-quickstart`;
 const GITBOOK_HOW_YIELD_WORKS = `${GITBOOK_SPACE}/how-it-works/how-yield-works`;
 const GITBOOK_RISKS = `${GITBOOK_SPACE}/how-it-works/risks`;
+
+function shortenAddress(address: string): string {
+  return `${address.slice(0, 6)}…${address.slice(-4)}`;
+}
 
 export default function Home() {
   const agentBrief = {
@@ -67,8 +73,11 @@ export default function Home() {
     mechanicsDocs: GITBOOK_HOW_YIELD_WORKS,
   };
 
-  const ethVaultHref = `${ARBITRUM_ONE_BLOCK_EXPLORER}/address/${CONTRACTS.kashYieldEth}`;
-  const btcVaultHref = `${ARBITRUM_ONE_BLOCK_EXPLORER}/address/${CONTRACTS.kashYieldBtc}`;
+  const ethVaultHref = arbiscanAddressUrl(CONTRACTS.kashYieldEth);
+  const btcVaultHref = arbiscanAddressUrl(CONTRACTS.kashYieldBtc, {
+    code: isArbiscanVerifiedKashYield(CONTRACTS.kashYieldBtc),
+  });
+  const btcVaultVerified = isArbiscanVerifiedKashYield(CONTRACTS.kashYieldBtc);
 
   return (
     <DisclaimerGate riskDocsUrl={GITBOOK_RISKS}>
@@ -494,11 +503,11 @@ export default function Home() {
             <h1>KASH<span className="cursor" /></h1>
             <h2>Enhanced Yield Protocol</h2>
             <p className="subtitle">
-              Programmable treasury yield on Arbitrum: deposit ETH or wBTC into KashYield, receive ERC-20 KASH priced off NAV, redeem through daily batches.
-              Returns depend on funding rates and protocol risks — verify contracts and NAV before allocating capital.
+              Programmable treasury yield on Arbitrum: deposit ETH or wBTC, receive KASH tokens, redeem through daily batches.
+              Returns based on funding rates — verify contracts and risk disclosure before allocating capital.
             </p>
             <p className="hero-human-hint" role="note">
-              <strong>For humans:</strong> read <strong>Documentation</strong> first, then click <strong>Launch App</strong> to begin.
+              <strong>FOR HUMANS:</strong> read <strong>Documentation</strong> first, then click <strong>Launch App</strong> to begin.
             </p>
             <div>
               <Link href="/app" className="cta-button">🚀 Launch App</Link>
@@ -511,9 +520,9 @@ export default function Home() {
         <section className="stats">
           <div className="container">
             <div className="stats-grid">
-              <div><div className="stat-value">5 bps</div><div className="stat-label">Protocol fee</div></div>
-              <div><div className="stat-value">Δ</div><div className="stat-label">Delta-neutral strategies</div></div>
-              <div><div className="stat-value">UTC</div><div className="stat-label">Daily batch window</div></div>
+              <div><div className="stat-value">On-Chain</div><div className="stat-label">NAV published on-chain; mints and settlements verifiable</div></div>
+              <div><div className="stat-value">Δ</div><div className="stat-label">Market-neutral at all times</div></div>
+              <div><div className="stat-value">AI</div><div className="stat-label">Batch Ops managed by AI Agent</div></div>
             </div>
           </div>
         </section>
@@ -536,14 +545,14 @@ export default function Home() {
                 <div className="feature-icon">🔋</div>
                 <h3 className="feature-title">Funding Rate Yield</h3>
                 <p className="feature-desc">
-                  Strategy targets delta-neutral funding income; funding can be positive or negative — NAV reflects outcomes.
+                  Strategy targets delta-neutral funding income; superior yield from innovative strategies.
                 </p>
               </div>
               <div className="feature-card">
                 <div className="feature-icon">🌐</div>
                 <h3 className="feature-title">Arbitrum Native</h3>
                 <p className="feature-desc">
-                  Low gas on Arbitrum One for deposits, redemptions, and read-heavy monitoring against shared batch cadence.
+                  Low gas on Arbitrum One for mints, redeems, and on-chain reads — NAV, fees, and pending requests settle on a daily batch schedule.
                 </p>
               </div>
               <div className="feature-card">
@@ -557,7 +566,7 @@ export default function Home() {
                 <div className="feature-icon">🤖</div>
                 <h3 className="feature-title">Agent Optimized</h3>
                 <p className="feature-desc">
-                  Predictable daily windows for mint/redeem requests and settlement — easy to cron without micromanaging intraday swaps.
+                  Predictable daily windows for mint/redeem requests and settlement — no need to micromanage intraday swaps.
                 </p>
               </div>
             </div>
@@ -592,7 +601,7 @@ export default function Home() {
           <div className="container">
             <h2 className="section-title">Verify before you allocate</h2>
             <p className="section-caption">
-              Verification checklist: confirm each item against live chain state using your own RPC, Arbiscan, or an indexer before you size or route capital.
+              Verification checklist: confirm each item against live chain state using your own RPC, Arbiscan, or an indexer before you allocate capital.
             </p>
             <div className="proof-grid">
               <div className="proof-card">
@@ -608,7 +617,7 @@ export default function Home() {
               <div className="proof-card">
                 <h3>Fee</h3>
                 <p>
-                  Read <code style={{ color: '#00FFFF' }}>feeBps()</code> on the same contracts. The app markets <strong>5 bps</strong>; confirm on-chain before sizing trades.
+                  Read <code style={{ color: '#00FFFF' }}>feeBps()</code> on the same contracts. Protocol fee is <strong>5 bps</strong>; confirm on-chain before sizing trades.
                 </p>
               </div>
               <div className="proof-card">
@@ -622,6 +631,26 @@ export default function Home() {
                 <h3>TVL &amp; historical performance</h3>
                 <p>
                   Not displayed on this page. Derive exposure from total KASH supply × NAV, protocol holdings, and your own dashboards — do not infer APY from marketing copy alone.
+                </p>
+              </div>
+              <div className="proof-card">
+                <h3>Verified source code</h3>
+                <p>
+                  {btcVaultVerified ? (
+                    <>
+                      KashYield BTC vault contract is verified on Arbiscan:{' '}
+                      <a href={btcVaultHref} target="_blank" rel="noopener noreferrer">
+                        View verified code ↗
+                      </a>
+                      {' '}({shortenAddress(CONTRACTS.kashYieldBtc)}).
+                    </>
+                  ) : (
+                    <>
+                      Review vault bytecode and source on{' '}
+                      <a href={btcVaultHref} target="_blank" rel="noopener noreferrer">Arbiscan</a>
+                      {' '}before allocating.
+                    </>
+                  )}
                 </p>
               </div>
             </div>

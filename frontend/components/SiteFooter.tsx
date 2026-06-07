@@ -1,6 +1,9 @@
 'use client';
 
-import { ARBITRUM_ONE_BLOCK_EXPLORER } from '@/lib/contracts/addresses';
+import {
+  arbiscanAddressUrl,
+  isArbiscanVerifiedKashYield,
+} from '@/lib/contracts/addresses';
 import styles from './SiteFooter.module.css';
 
 type SiteFooterProps = {
@@ -10,6 +13,8 @@ type SiteFooterProps = {
 };
 
 export function SiteFooter({ className, contractAddress }: SiteFooterProps) {
+  const verified = contractAddress ? isArbiscanVerifiedKashYield(contractAddress) : false;
+
   return (
     <footer className={[styles.footer, className].filter(Boolean).join(' ')}>
       <div className={styles.inner}>
@@ -21,11 +26,11 @@ export function SiteFooter({ className, contractAddress }: SiteFooterProps) {
           <a href="https://kash-2.gitbook.io/kash-enhanced-yield-protocol" target="_blank" rel="noopener noreferrer">Documentation</a>
           {contractAddress && (
             <a
-              href={`${ARBITRUM_ONE_BLOCK_EXPLORER}/address/${contractAddress}`}
+              href={arbiscanAddressUrl(contractAddress, { code: verified })}
               target="_blank"
               rel="noopener noreferrer"
             >
-              Contract Address
+              {verified ? 'Verified on Arbiscan ↗' : 'Contract Address'}
             </a>
           )}
         </div>

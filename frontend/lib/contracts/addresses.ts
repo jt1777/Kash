@@ -54,6 +54,32 @@ export const ARBITRUM_ONE_CHAIN_ID = 42161;
 export const ARBITRUM_ONE_BLOCK_EXPLORER = 'https://arbiscan.io';
 export const HARDHAT_CHAIN_ID = 31337;
 
+/** KashYield vaults with verified source on Arbiscan (#code tab). */
+export const ARBISCAN_VERIFIED_KASH_YIELD = new Set<string>([
+  CONTRACTS.kashYieldBtc.toLowerCase(),
+]);
+
+/** KASH ERC-20 tokens with verified source on Arbiscan (#code tab). */
+export const ARBISCAN_VERIFIED_KASH_TOKEN = new Set<string>([
+  CONTRACTS.kashTokenBtc.toLowerCase(),
+]);
+
+export function arbiscanAddressUrl(
+  address: `0x${string}`,
+  options?: { code?: boolean },
+): string {
+  const base = `${ARBITRUM_ONE_BLOCK_EXPLORER}/address/${address}`;
+  return options?.code ? `${base}#code` : base;
+}
+
+export function isArbiscanVerifiedKashYield(address: `0x${string}`): boolean {
+  return ARBISCAN_VERIFIED_KASH_YIELD.has(address.toLowerCase());
+}
+
+export function isArbiscanVerifiedKashToken(address: `0x${string}`): boolean {
+  return ARBISCAN_VERIFIED_KASH_TOKEN.has(address.toLowerCase());
+}
+
 export function isConfiguredAddress(address: `0x${string}`): boolean {
   return address !== ZERO_ADDRESS && /^0x[0-9a-fA-F]{40}$/.test(address);
 }

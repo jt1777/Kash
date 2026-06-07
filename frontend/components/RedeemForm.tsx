@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadContract, useReadContracts, useEstimateFeesPerGas, usePublicClient } from 'wagmi';
 import { CONTRACTS, ARBITRUM_ONE_BLOCK_EXPLORER, HARDHAT_CHAIN_ID } from '@/lib/contracts/addresses';
+import { ContractVerifiedBadge } from '@/components/ContractVerifiedBadge';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 import { kashTokenABI } from '@/lib/contracts/kashTokenABI';
 import { usePendingBatchRequest, type PendingBatchRequest } from '@/lib/usePendingBatchRequest';
@@ -502,8 +503,11 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
         </div>
       )}
       {/* Token (single option per product) */}
-      <div className="text-sm font-medium text-gray-700">
-        Redeem: {redeemSymbol}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-sm font-medium text-gray-700">
+          Redeem: {redeemSymbol}
+        </div>
+        <ContractVerifiedBadge contractAddress={kashYield} />
       </div>
 
       {/* Amount Input */}
