@@ -1519,14 +1519,15 @@ const hlCloseShort = (shortTargets: RedeemHlShortTargets): OpStep => ({
     }
     const szDecimals = await fetchHlPerpSzDecimals(ctx, symbol);
     closeSize = ensureHlPartialCloseSize(ctx, closeSize, fullSize, szDecimals);
+    const ex = await exchangeTarget(ctx);
     if (closeSize >= fullSize) {
       console.log(`         closing full ${symbol} short`);
-      const receipt = await execTx('closeShort(full)', () => ctx.kashYield['closeShort(string)'](symbol));
+      const receipt = await execTx('closeShort(full)', () => ex['closeShort(string)'](symbol));
       await maybeRunHlEventRelay(ctx, receipt.hash, 'EXCHANGE_CLOSE_SHORT', { required: true });
     } else {
       console.log(`         closing ${fmtHlPerpSize(closeSize, ctx)} of ${fmtHlPerpSize(fullSize, ctx)}`);
       const receipt = await execTx('closeShort(partial)', () =>
-        ctx.kashYield['closeShort(string,uint256)'](symbol, closeSize),
+        ex['closeShort(string,uint256)'](symbol, closeSize),
       );
       await maybeRunHlEventRelay(ctx, receipt.hash, 'EXCHANGE_CLOSE_SHORT', { required: true });
     }
