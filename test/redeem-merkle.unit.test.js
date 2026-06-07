@@ -3,7 +3,7 @@ const { ethers } = require("hardhat");
 const {
   allocRedeemNetAmounts,
   buildRedeemMerkleTree,
-} = require("../bot/dist/batch/redeemMerkle");
+} = require("./helpers/redeemMerkle");
 
 describe("redeem merkle", function () {
   it("allocates net redeem amounts with last-redeemer dust rule", function () {

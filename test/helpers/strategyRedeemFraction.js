@@ -1,5 +1,5 @@
 /**
- * Keep in sync with bot/src/batch/strategyRedeemFraction.ts (pure helpers only).
+ * Keep in sync with kash-ops bot/src/batch/strategyRedeemFraction.ts (pure helpers only).
  */
 
 const WAD = 10n ** 18n;

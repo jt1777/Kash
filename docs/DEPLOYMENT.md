@@ -19,7 +19,7 @@ Use **two different Arbitrum addresses**. Do not reuse the deployer key for batc
 | Role | Wallet | Keys / env | On-chain identity |
 |------|--------|------------|-------------------|
 | **Owner** | Cold / multisig (high security) | Root `.env` → **`PRIVATE_KEY`** only for **owner** scripts | `KashYield*.owner()` — config, reserves, `setSpotDex`, `setExchangeFacade`, `ownerWithdraw*`; **ExchangeFacade** owner — `setHyperliquid`, timelocks |
-| **Bot / keeper** | Hot operator (limited funds) | **`bot/.env` → `PRIVATE_KEY`** and **`HYPERLIQUID_API_PRIVATE_KEY`** (same bot address) | `KashYield*.botAddress()` — `performUpkeep`, batch ops, `markBatchOpsDone`, Aave/spot on vault; HL writes via **ExchangeFacade** |
+| **Bot / keeper** | Hot operator (limited funds) | **Private `kash-ops` repo `.env`** — `PRIVATE_KEY` and `HYPERLIQUID_API_PRIVATE_KEY` (same bot address) | `KashYield*.botAddress()` — `performUpkeep`, batch ops, `markBatchOpsDone`, Aave/spot on vault; HL writes via **ExchangeFacade** |
 
 **Deploy wiring**
 
@@ -160,7 +160,7 @@ Hyperliquid bridges USDC to **whichever Arbitrum address you specify** (HL API `
 **Operational rules**
 
 - **Always** set the HL withdrawal **destination** to your deployed **HyperliquidAdapter** address for protocol float—not the KashYield vault by default unless your runbook explicitly allows it, and **not** an operator EOA unless you intend temporary custody outside the adapter.
-- Prefer **automated** withdrawals: bot `withdraw3` with `destination =` adapter (same pattern as `maybeInitiateHlOffchainWithdraw` in `bot/src/batch/opsExec.ts`). If you use the **HL web app**, open the destination field and **paste the adapter address**; do **not** assume the default “linked wallet” is correct.
+- Prefer **automated** withdrawals: operator bot `withdraw3` with `destination =` adapter. If you use the **HL web app**, open the destination field and **paste the adapter address**; do **not** assume the default “linked wallet” is correct.
 - After USDC lands on Arbitrum, confirm **`USDC.balanceOf(adapter)`** (script `08-withdraw-usdc-from-perp.js` prints this) before expecting `08` to move meaningful balances.
 
 **`directDepositMode` — ideal vs bootstrap**
@@ -170,7 +170,7 @@ Hyperliquid bridges USDC to **whichever Arbitrum address you specify** (HL API `
 | `false` | Adapter contract | Agent on `extraAgents(adapter)` | Master (contract) must sign — EIP-1271 | **Blocked:** HL off-chain does not honor contract master |
 | `true` | Bot EOA (`hlAccount`) | Not needed | Bot master signs directly | **Production fallback** (this guide) |
 
-- **`directDepositMode = true` (bootstrap):** Vault → adapter `depositCollateral` forwards USDC to **`hlAccount`** (bot EOA); bot bridges to HL. Bot signs HL orders and **`withdraw3`**. Repo bot hardcodes **`destination =` HyperliquidAdapter** (`maybeInitiateHlOffchainWithdraw` in `bot/src/batch/opsExec.ts`). **Ops rule:** never use the HL web UI for withdrawals (defaults to bot EOA). Mis-routed USDC on the bot EOA: forward **EOA → adapter** on Arbitrum, then ops `08`.
+- **`directDepositMode = true` (bootstrap):** Vault → adapter `depositCollateral` forwards USDC to **`hlAccount`** (bot EOA); bot bridges to HL. Bot signs HL orders and **`withdraw3`** with **`destination =` HyperliquidAdapter**. **Ops rule:** never use the HL web UI for withdrawals (defaults to bot EOA). Mis-routed USDC on the bot EOA: forward **EOA → adapter** on Arbitrum, then manual ops step `08` (private `kash-ops` repo).
 - **`directDepositMode = false` (ideal, not viable alone on HL today):** Deposits bridge as adapter-as-account. Documented for future HL contract-wallet support or test environments where agent + master paths work.
 
 **Bot key compromise (bootstrap mode):** the bot **cannot** change `hlAccount` on-chain (`setDirectDepositMode` is **owner-only**). A stolen **HL master** private key can still call HL’s API directly and sign **`withdraw3` to any Arbitrum address** — they do not need your bot software or the adapter config. Exposure is limited to **HL float** (USDC/perps on that HL account), not vault/Aave user collateral. Rotate: owner `setBotAddress` + new adapter `setOperator` + stop bot + new HL master wallet.
@@ -222,7 +222,7 @@ npx hardhat run scripts/wire-exchange-facade.js --network arbitrumOne
 
 - **Mint-only batches** can still use `performUpkeep` for Phase 2 (no Merkle root).
 - **Redeem batches** must use bot-driven Phase 2 with root; `performUpkeep` reverts when redeems need a root.
-- Bot writes proofs to `bot/data/redeem-proofs/{product}-batch-{cycle}.json`.
+- Operator bot writes proofs and publishes to static hosting (see redeem proof hosting below).
 - Frontend: `NEXT_PUBLIC_REDEEM_PROOF_BASE_URL` → base URL where those JSON files are hosted (e.g. `https://cdn.example.com/redeem-proofs`).
 
 Claim expiry: **30 days** after settlement; unclaimed amounts can be swept per on-chain policy (`sweepExpiredClaims`).
@@ -270,41 +270,11 @@ HL_BRIDGE_ADDRESS=0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7
 # HL_ADAPTER_ADDRESS_BTC=
 ```
 
-### `bot/.env` — bot operator only (Arbitrum One)
+### Bot operator configuration (private repo)
 
-**Separate file, separate key.** Must match **`botAddress`** on the vault you operate. Never commit this file.
+Bot signing keys, HL API keys, vault addresses for batch ops, and manual ops scripts live in the **private `kash-ops` repository** (not published here). After deploy, configure the operator `.env` there to match on-chain `botAddress()`.
 
-```env
-# BOT — batch ops + HL API (hot wallet; not the owner)
-PRIVATE_KEY=0x...
-HYPERLIQUID_API_PRIVATE_KEY=0x...
-HYPERLIQUID_API_URL=https://api.hyperliquid.xyz
-
-RPC_URL=https://arb1.g.alchemy.com/v2/YOUR_API_KEY
-CHAIN_ID=42161
-
-PRODUCT=eth
-KASH_YIELD_ETH_ADDRESS=<KashYieldETH>
-KASH_TOKEN_ETH=<KashTokenEth>
-
-AAVE_POOL_ADDRESS=0x794a61358D6845594F94dc1DB02A252b5b4814aD
-AAVE_USDC_ADDRESS=0xaf88d065e77c8cC2239327C5EDb3A432268e5831
-USDC_ADDRESS=0xaf88d065e77c8cC2239327C5EDb3A432268e5831
-WETH_ADDRESS=0x82aF49447D8a07e3bd95BD0d56f35241523fBab1
-WBTC_ADDRESS=0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f
-ETH_ORACLE_ADDRESS=0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612
-BTC_ORACLE_ADDRESS=0x6ce185860a4963106506C203335A2910413708e9
-```
-
-Add **BTC product** lines when operating the BTC vault:
-
-```env
-# PRODUCT=btc
-# KASH_YIELD_BTC_ADDRESS=<KashYieldBtc>
-# KASH_TOKEN_BTC=<KashTokenBtc>
-```
-
-**Batch bot (`bot/package.json` → `npm run start`):** With **`PRODUCT=btc`** (or `product` / `Product` — same as in code), **`CHAIN_ID=42161`**, and **`KASH_YIELD_BTC_ADDRESS`** set, `node dist/index.js` loads **`KashYieldBtc`**, uses wBTC / **`getBtcPrice`**, HL short symbol **BTC**, and the same ops playbooks with 8-decimal asset math. Run **`npm run build`** after pulling changes, then **`npm run start`** from **`bot/`**. Ops scripts under `bot/scripts/ops/` also read **`PRODUCT`** (same variants) from **`bot/.env`**.
+See the private ops repo runbook (`docs/DEPLOYMENT-OPS.md`) for field-by-field env setup, batch bot startup, and mainnet ops playbooks.
 
 ### `frontend/.env.local`
 
@@ -327,15 +297,15 @@ NEXT_PUBLIC_REDEEM_PROOF_BASE_URL=https://your-cdn.example.com/redeem-proofs
 
 - [ ] `npx hardhat compile` — no EIP-170 size errors on `KashYieldETH` / `KashYieldBtc`.
 - [ ] Smart contract audit completed (or accepted risk documented).
-- [ ] **Two wallets:** owner `PRIVATE_KEY` (root `.env`) ≠ bot `PRIVATE_KEY` (`bot/.env`); on-chain `owner()` ≠ `botAddress()`.
+- [ ] **Two wallets:** owner `PRIVATE_KEY` (root `.env`) ≠ bot operator key (private `kash-ops` repo); on-chain `owner()` ≠ `botAddress()`.
 - [ ] **`BOT_ADDRESS`** set on both vault deploy commands to the **bot** address (not omitted).
 - [ ] **`directDepositMode = true`** + `hlAccount = botAddress` on each **HyperliquidAdapter** (bootstrap); bot `.env` uses **same key** for `PRIVATE_KEY` and `HYPERLIQUID_API_PRIVATE_KEY`; HL `withdraw3` targets **adapter** only.
 - [ ] HL **bootstrap** configured per adapter (`set-direct-deposit-mode.js`); adapter **`operator`** = bot (deploy env or `setOperator`). Skip `approveHlAgent` unless you revert to `directDepositMode=false`.
 - [ ] **ExchangeFacade** deployed per vault you operate; `setExchangeFacade` + `facade.setHyperliquid` + `facade.setActivePerpExchange("HL")` + `hlAdapter.setAuthorizedCaller(facade)` complete.
 - [ ] ExchangeFacade timelock is **24h** for future adapter proposals (first HL registration is immediate).
 - [ ] Contracts verified on Arbiscan (vault, facade, adapters); `diagnose-eth.js` (and BTC ops smoke) clean.
-- [ ] `bot/.env` + `frontend/.env.local` point at **new** vault/token addresses; `NEXT_PUBLIC_REDEEM_PROOF_BASE_URL` set; proof hosting plan in place.
-- [ ] `npm run build` in `bot/` before `npm start`; fork/unit tests pass if you have RPC (`test/redeem-merkle.unit.test.js`, optional fork e2e).
+- [ ] `frontend/.env.local` points at **new** vault/token addresses; `NEXT_PUBLIC_REDEEM_PROOF_BASE_URL` set; proof hosting plan in place.
+- [ ] Configure private `kash-ops` repo with matching vault addresses; fork/unit tests pass if you have RPC (`test/redeem-merkle.unit.test.js`, optional fork e2e).
 
 ---
 
@@ -508,7 +478,7 @@ USDC_ADDRESS=0xaf88d065e77c8cC2239327C5EDb3A432268e5831 \
 npx hardhat run scripts/deploy-arbitrum-sepolia.js --network arbitrumOne
 ```
 
-Save to root `.env`, `bot/.env`, and `frontend/.env.local`:
+Save to root `.env`, private `kash-ops` `.env`, and `frontend/.env.local`:
 
 ```env
 KASH_YIELD_ETH_ADDRESS=<KashYieldETH from output>
@@ -530,7 +500,7 @@ MOCK_HL_ADDRESS=0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7 \
 USDC_ADDRESS=0xaf88d065e77c8cC2239327C5EDb3A432268e5831 \
 IS_ETH_ASSET=true \
 KASH_YIELD_ADDRESS=<KASH_YIELD_ETH_ADDRESS from step 3> \
-HL_ADAPTER_OPERATOR_ADDRESS=<BOT_WALLET from bot/.env> \
+HL_ADAPTER_OPERATOR_ADDRESS=<BOT_WALLET from kash-ops .env> \
 npx hardhat run scripts/deploy-hyperliquid-adapter.js --network arbitrumOne
 ```
 
@@ -552,7 +522,7 @@ npx hardhat run scripts/set-direct-deposit-mode.js --network arbitrumOne
 
 **Readback:** `directDepositMode` is **`true`**; `hlAccount` matches **`BOT_ADDRESS`** (on-chain `botAddress`).
 
-Then complete **Hyperliquid adapter setup (bootstrap)** — same `PRIVATE_KEY` and `HYPERLIQUID_API_PRIVATE_KEY` in `bot/.env`; skip `approveHlAgent.js`.
+Then complete **Hyperliquid adapter setup (bootstrap)** in the private `kash-ops` repo — same key for `PRIVATE_KEY` and `HYPERLIQUID_API_PRIVATE_KEY`.
 
 **Deploy-time operator (recommended):** `HL_ADAPTER_OPERATOR_ADDRESS=<BOT_WALLET>` when running `deploy-hyperliquid-adapter.js`.
 
@@ -674,11 +644,11 @@ npx hardhat run scripts/diagnose-eth.js --network arbitrumOne
 - [ ] HyperliquidAdapter (ETH) deployed; `HL_ADAPTER_ADDRESS_ETH` saved; **Hyperliquid custody mode** set per Step 4a
 - [ ] **ExchangeFacade** deployed and wired (Step 4b); `EXCHANGE_FACADE_ETH` saved
 - [ ] `setEthOracle.js` run (recommended)
-- [ ] HL bootstrap: `set-direct-deposit-mode.js`; `bot/.env` same key for `PRIVATE_KEY` + `HYPERLIQUID_API_PRIVATE_KEY` (skip `approveHlAgent` unless `directDepositMode=false`)
+- [ ] HL bootstrap: `set-direct-deposit-mode.js`; `kash-ops` `.env` same key for `PRIVATE_KEY` + `HYPERLIQUID_API_PRIVATE_KEY`
 - [ ] `setAllowedSpotDexRouter.js` + `setSpotDex.js` — spot DEX live (confirm timelock if applicable)
 - [ ] `setCycleDuration.js` for ETH
 - [ ] Contracts verified; `diagnose-eth.js` clean
-- [ ] `bot/.env` and `frontend/.env.local` updated (`NEXT_PUBLIC_REDEEM_PROOF_BASE_URL` for claims)
+- [ ] Private `kash-ops` repo and `frontend/.env.local` updated (`NEXT_PUBLIC_REDEEM_PROOF_BASE_URL` for claims)
 
 ---
 
@@ -700,7 +670,7 @@ BTC_ORACLE_ADDRESS=0x6ce185860a4963106506C203335A2910413708e9 \
 npx hardhat run scripts/deploy-kashyieldbtc.js --network arbitrumOne
 ```
 
-Save to root `.env`, `bot/.env`, and `frontend/.env.local`:
+Save to root `.env`, private `kash-ops` `.env`, and `frontend/.env.local`:
 
 ```env
 KASH_YIELD_BTC_ADDRESS=<KashYieldBtc from output>
@@ -723,7 +693,7 @@ USDC_ADDRESS=0xaf88d065e77c8cC2239327C5EDb3A432268e5831 \
 WBTC_ADDRESS=0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f \
 IS_ETH_ASSET=false \
 KASH_YIELD_BTC_ADDRESS=<KASH_YIELD_BTC_ADDRESS from step B1> \
-HL_ADAPTER_OPERATOR_ADDRESS=<BOT_WALLET from bot/.env> \
+HL_ADAPTER_OPERATOR_ADDRESS=<BOT_WALLET from kash-ops .env> \
 npx hardhat run scripts/deploy-hyperliquid-adapter.js --network arbitrumOne
 ```
 
@@ -745,7 +715,7 @@ npx hardhat run scripts/set-direct-deposit-mode.js --network arbitrumOne
 
 **Readback:** `directDepositMode` is **`true`**; `hlAccount` = **`BOT_ADDRESS`**.
 
-Confirm **`operator`** is the bot (`HL_ADAPTER_OPERATOR_ADDRESS` at deploy or `setOperator`). Complete **Hyperliquid adapter setup (bootstrap)** in `bot/.env` — **no `approveHlAgent.js`**.
+Confirm **`operator`** is the bot (`HL_ADAPTER_OPERATOR_ADDRESS` at deploy or `setOperator`). Complete **Hyperliquid adapter setup (bootstrap)** in the private `kash-ops` repo.
 
 ### Step B4 — BTC oracle
 
@@ -772,7 +742,7 @@ HL_ADAPTER_ADDRESS_BTC=<HL_ADAPTER_ADDRESS_BTC> \
 npx hardhat run scripts/wire-exchange-facade.js --network arbitrumOne
 ```
 
-**HL master key (`bot/.env`)** — skip if you completed Step B3 bootstrap:
+**HL master key (private `kash-ops` repo)** — skip if you completed Step B3 bootstrap:
 
 ```env
 PRIVATE_KEY=0x...                 # on-chain botAddress
@@ -837,10 +807,10 @@ npx hardhat verify --network arbitrumOne <EXCHANGE_FACADE_BTC> <OWNER> <BOT_ADDR
 - [ ] Shared Step **0** + **U** — `UNISWAP_ADAPTER_ADDRESS` saved; spot DEX wired on KashYieldBtc (Step U auto-register or B7)
 - [ ] `deploy-kashyieldbtc.js` — `KASH_YIELD_BTC_ADDRESS`, `KASH_TOKEN_BTC`, Chainlink BTC oracle wired
 - [ ] HyperliquidAdapter (BTC) deployed; `HL_ADAPTER_ADDRESS_BTC` saved; **Hyperliquid custody mode** set per Step B3
-- [ ] **ExchangeFacade** deployed and wired (Step B5); `EXCHANGE_FACADE_BTC` saved; HL bootstrap (`directDepositMode=true`, bot master key in `bot/.env`)
+- [ ] **ExchangeFacade** deployed and wired (Step B5); `EXCHANGE_FACADE_BTC` saved; HL bootstrap (`directDepositMode=true`, bot master key in `kash-ops`)
 - [ ] `setAllowedSpotDexRouter.js` + `setSpotDex.js` with `PRODUCT=btc` — using `UNISWAP_ADAPTER_ADDRESS` from Step U (or auto-registered during Step U)
 - [ ] `setCycleDuration.js` with `PRODUCT=btc`
-- [ ] Contracts verified; bot/frontend envs updated for **PRODUCT=btc** when operating BTC
+- [ ] Contracts verified; `kash-ops` and frontend envs updated for **PRODUCT=btc** when operating BTC
 
 ---
 
@@ -884,14 +854,6 @@ npx hardhat run scripts/checkBalance.js --network arbitrumOne
 
 ---
 
-## Ops scripts on mainnet
-
-Use **`--network arbitrumOne`**. Set **`PRODUCT=btc`** (in the shell or **`bot/.env`**) when targeting **`KashYieldBtc`** so scripts resolve **`KASH_YIELD_BTC_ADDRESS`** and wBTC decimals.
-
-HL trading steps (`04`–`07`) use the **Hyperliquid API** on mainnet; on-chain HL **writes** go through **ExchangeFacade**; Aave and spot swaps call the **vault**. Swaps pass **`minOut`** (bot-computed from DEX quote + `maxSwapSlippageBps`). **HL → Arbitrum USDC withdrawals must target the HyperliquidAdapter**; script `08-withdraw-usdc-from-perp.js` forwards USDC that has **already** landed on the adapter. See `bot/scripts/ops/README.md` for per-script usage.
-
----
-
 ## Network reference
 
 | Network | Chain ID | RPC | Explorer |
@@ -903,7 +865,7 @@ HL trading steps (`04`–`07`) use the **Hyperliquid API** on mainnet; on-chain 
 ## Security
 
 - Never commit `.env` or private keys.
-- **Owner** (root `.env`) and **bot** (`bot/.env`) are different wallets with different key material.
+- **Owner** (root `.env`) and **bot operator** (private `kash-ops` repo) are different wallets with different key material.
 - Owner holds governance/config; bot holds only enough ETH for gas and never owns the vault `owner()` role.
 - Audit contracts before significant TVL.
 - Keep `exchangeSwitchDelay` non-zero on mainnet unless you explicitly accept operational risk on future adapter changes.
@@ -913,32 +875,11 @@ HL trading steps (`04`–`07`) use the **Hyperliquid API** on mainnet; on-chain 
 
 ## Post-deploy operational notes
 
-Items called out elsewhere in this guide but easy to miss during cutover:
-
-### Hyperliquid bootstrap (per adapter — default)
-
-```bash
-HL_ADAPTER_ADDRESS_BTC=0x... HL_ACCOUNT_ADDRESS=<BOT_ADDRESS> \
-  npx hardhat run scripts/set-direct-deposit-mode.js --network arbitrumOne
-```
-
-`bot/.env`: same value for `PRIVATE_KEY` and `HYPERLIQUID_API_PRIVATE_KEY`. No `approveHlAgent`.
-
-<details>
-<summary>Legacy — `approveAgent` only if `directDepositMode = false` and HL supports contract master</summary>
-
-```bash
-HL_ADAPTER_ADDRESS=0x... SIGNER=adapter \
-  npx hardhat run scripts/approveHlAgent.js --network arbitrumOne
-```
-
-Success requires `extraAgents(adapter)` (not owner). EIP-1271 on-chain probe alone is insufficient.
-
-</details>
+Items called out elsewhere in this guide but easy to miss during cutover. Detailed batch ops, HL bootstrap env, and manual ops scripts are documented in the **private `kash-ops` repository**.
 
 ### Redeem proof hosting (required for claim UI)
 
-After each redeem Phase 2, the bot writes `bot/data/redeem-proofs/{product}-batch-{cycle}.json`. Upload/sync these files to static hosting and set **`NEXT_PUBLIC_REDEEM_PROOF_BASE_URL`** in `frontend/.env.local`. Users claim via **`claimRedeem`** in the app (not automatic transfer).
+After each redeem Phase 2, the operator bot publishes Merkle proof manifests to static hosting. Set **`NEXT_PUBLIC_REDEEM_PROOF_BASE_URL`** in `frontend/.env.local`. Users claim via **`claimRedeem`** in the app (not automatic transfer).
 
 External reference: [Hyperliquid docs](https://hyperliquid.gitbook.io/hyperliquid-docs/).
 
@@ -956,18 +897,12 @@ PRODUCT=btc KASH_YIELD_BTC_ADDRESS=<KASH_YIELD_BTC> BOT_ADDRESS=<bot_wallet> \
   npx hardhat run scripts/setBotAddress.js --network arbitrumOne
 ```
 
-Verify on-chain: `owner() ≠ botAddress()` and `botAddress()` matches **`bot/.env`** `PRIVATE_KEY`.
+Verify on-chain: `owner() ≠ botAddress()` and `botAddress()` matches the bot operator wallet configured in `kash-ops`.
 
 ### `rescueERC20` and USDC on the vault
 
 **`rescueERC20`** lets the **owner** transfer arbitrary ERC-20 balances held by the vault. **wBTC and ETH (deposit assets) are blocked**; **USDC is not**. That means owner can pull **all on-vault USDC**, including float that backs user NAV — not only **`ownerUsdcReserve`**. Use only for mis-sent tokens, wind-down, or other cases you accept the risk for.
 
 - Policy and trust model: [SECURITY.md](SECURITY.md)
-- Ops script (owner key, repo root): `bot/scripts/ops/15-rescue-usdc-from-contract.js`
-
-```bash
-PRODUCT=btc npx hardhat run bot/scripts/ops/15-rescue-usdc-from-contract.js --network arbitrumOne
-# Optional: AMOUNT=8.5 RESCUE_TO=0x...
-```
 
 Prefer **`markOwnerUsdcDeposit`** / **`coverUsdcShortfall`** / batch ops for normal treasury and working-float USDC.

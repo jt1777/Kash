@@ -153,7 +153,7 @@ async function computeBatchGrossRedeemAsset(kashYield, batchCycle, nav) {
 }
 
 async function buildRedeemMerkleRoot(kashYield, batchCycle) {
-  const { allocRedeemNetAmounts, buildRedeemMerkleTree } = require("../../bot/dist/batch/redeemMerkle");
+  const { allocRedeemNetAmounts, buildRedeemMerkleTree } = require("./redeemMerkle");
   const redeemKash = BigInt((await kashYield.batchTotalRedeemKash(batchCycle)).toString());
   if (redeemKash === 0n) return `0x${"0".repeat(64)}`;
   const info = await kashYield.getBatchInfo(batchCycle);
@@ -186,7 +186,7 @@ async function settleRedeemPhase2({ kashYield, bot, batchCycle, nav, grossG }) {
 }
 
 async function claimRedeemForUser(kashYield, user, batchCycle) {
-  const { allocRedeemNetAmounts, buildRedeemMerkleTree } = require("../../bot/dist/batch/redeemMerkle");
+  const { allocRedeemNetAmounts, buildRedeemMerkleTree } = require("./redeemMerkle");
   const redeemKash = BigInt((await kashYield.batchTotalRedeemKash(batchCycle)).toString());
   const info = await kashYield.getBatchInfo(batchCycle);
   const redeemCount = Number(info[4]);

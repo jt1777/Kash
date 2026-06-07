@@ -310,7 +310,7 @@ require(block.timestamp - updatedAt < MAX_ORACLE_STALENESS, "Stale price");
 
 ### 13. Operational / supply chain
 
-- Leaked `bot/.env` private keys
+- Leaked bot operator private keys (private `kash-ops` repo)
 - Compromised npm dependency in bot or frontend
 - Malicious deploy script or CI artifact
 
@@ -422,7 +422,7 @@ Multi-sig owner is the highest-leverage next step: industry standard, one transa
 
 **Detailed runbooks:**
 
-- **[Owner key compromise](./INCIDENT-RESPONSE-OWNER-KEY.md)** — pause, snapshot, rotate owner/bot/oracle, flatten strategy, user comms
+- **Owner key compromise** — pause, snapshot, rotate owner/bot/oracle, flatten strategy, user comms (see internal ops runbook in private `kash-ops` repository)
 - **Bot / keeper key only** — same doc §0–15 min (stop bot, revoke HL agent); rotate `setBotAddress` from owner; attacker cannot `rescueERC20` or replace oracle without owner
 
 **Short checklist (any privileged key incident):**
@@ -463,7 +463,7 @@ Merged from preliminary review (2026-02-20). Status as of current `KashYieldETH`
 | L3 | Missing events on setters | Low | **Partial** — `FeeUpdated`, `OracleUpdated`, adapter events exist |
 | L4 | Emergency withdraw batch cleanup | Low | **Open** — see **§17** |
 | I1 | Gas / unbounded batch arrays | Info | **Open** — see **§8**, **§17** |
-| I6 | HL adapter interface versioning | Info | **Open** — see `contracts/interfaces/IPerpExchange.sol`, [bot/README.md](../bot/README.md) (Mainnet Hyperliquid Setup), [DEPLOYMENT.md](DEPLOYMENT.md) |
+| I6 | HL adapter interface versioning | Info | **Open** — see `contracts/interfaces/IPerpExchange.sol`, [DEPLOYMENT.md](DEPLOYMENT.md) |
 
 **Not a substitute for professional audit.** Before scaling TVL: third-party audit, bug bounty, and fork tests covering the checklist below.
 
@@ -544,7 +544,7 @@ Recommended before major releases:
 
 - [ ] Slither static analysis
 - [ ] Mythril / Echidna / Foundry fuzz on batch math
-- [ ] Mainnet fork tests (`bot/`, `test/`)
+- [ ] Mainnet fork tests (`test/`)
 - [ ] Manual review of Phase 2 distribution and reserved math
 - [ ] Economic / game-theory review of NAV trust model
 
@@ -552,7 +552,6 @@ Recommended before major releases:
 
 - Public risks: [risks.md](risks.md)
 - Deployment: [DEPLOYMENT.md](DEPLOYMENT.md)
-- Hyperliquid ops: [bot/README.md](../bot/README.md), [DEPLOYMENT.md](DEPLOYMENT.md)
 - Contracts: `contracts/KashYieldETH.sol`, `contracts/KashYieldBtc.sol`
 - [OpenZeppelin Security Guidelines](https://docs.openzeppelin.com/contracts/)
 - [Consensys Smart Contract Best Practices](https://consensys.github.io/smart-contract-best-practices/)

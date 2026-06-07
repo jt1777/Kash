@@ -4,7 +4,7 @@
  * Bootstrap path when HL contract-master approveAgent is unavailable:
  *   directDepositMode=true, hlAccount=<on-chain bot EOA>
  * HL master = bot EOA (same as KashYield botAddress). No approveAgent — bot signs HL API directly.
- * Set bot/.env PRIVATE_KEY and HYPERLIQUID_API_PRIVATE_KEY to the same bot key.
+ * Set kash-ops repo .env PRIVATE_KEY and HYPERLIQUID_API_PRIVATE_KEY to the same bot key.
  *
  * Usage (BTC):
  *   HL_ADAPTER_ADDRESS_BTC=0x... HL_ACCOUNT_ADDRESS=<BOT_ADDRESS> \
@@ -72,7 +72,7 @@ async function main() {
   console.log(`  hlAccount = ${await adapter.hlAccount()}`);
   console.log(
     enabled
-      ? "\n✅ Bootstrap mode on. Next: bot/.env — same key for PRIVATE_KEY + HYPERLIQUID_API_PRIVATE_KEY (hlAccount). No approveHlAgent."
+      ? "\n✅ Bootstrap mode on. Next: kash-ops repo .env — same key for PRIVATE_KEY + HYPERLIQUID_API_PRIVATE_KEY (hlAccount)."
       : "\n✅ Custody mode off (adapter is HL account). Wire HL agent via approveHlAgent.js (SIGNER=adapter).",
   );
 }

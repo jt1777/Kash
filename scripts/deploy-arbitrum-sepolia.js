@@ -113,7 +113,7 @@ async function main() {
   console.log("  Fee (bps):   ", await kashYieldEth.feeBps());
   console.log("  Paused:      ", await kashYieldEth.paused());
   console.log("====================================\n");
-  console.log("Add to .env, frontend/.env.local, and bot/.env:");
+  console.log("Add to .env, frontend/.env.local, and private kash-ops repo .env:");
   console.log(`  KASH_YIELD_ETH_ADDRESS=${kashYieldEthAddress}`);
   console.log(`  KASH_TOKEN_ETH=${kashTokenEthAddress}`);
 

@@ -1,5 +1,5 @@
 {
-  "name": "hardhat-project",
+  "name": "kash",
   "scripts": {
     "test": "npx hardhat test test/batch-process-math.unit.test.js test/strategy-redeem-fraction.unit.test.js test/redeem-merkle.unit.test.js test/mainnet-fork.e2e.test.js test/mainnet-fork-advanced.e2e.test.js",
     "test:math": "npx hardhat test test/batch-process-math.unit.test.js test/strategy-redeem-fraction.unit.test.js test/redeem-merkle.unit.test.js",

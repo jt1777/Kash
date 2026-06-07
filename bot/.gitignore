@@ -1,7 +1,0 @@
-node_modules/
-dist/
-.cache/
-.env
-.env.bak
-*.log
-.DS_Store

@@ -143,7 +143,7 @@ async function main() {
   console.log("  WETH:            ", wethAddr);
   console.log("  Default fee tier:", defaultFeeTier);
   console.log("====================================");
-  console.log("\nAdd to .env and bot/.env:");
+  console.log("\nAdd to .env and private kash-ops repo .env:");
   console.log(`  UNISWAP_ADAPTER_ADDRESS=${adapterAddress}`);
   console.log("\nIf not auto-registered above, set manually:");
   console.log(`  KASH_YIELD_ETH_ADDRESS=<addr> SPOT_DEX_ADDRESS=${adapterAddress} \\`);

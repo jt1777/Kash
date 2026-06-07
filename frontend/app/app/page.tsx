@@ -317,7 +317,7 @@ function AppContent() {
             <div className="app-nav-links">
               <Link href="/" className="nav-link">Home</Link>
               <Link href="#features" className="nav-link">Features</Link>
-              <a href="https://github.com/jt1777/yieldproduct" className="nav-link" target="_blank" rel="noopener noreferrer">GitHub</a>
+              <a href="https://github.com/jt1777/Kash" className="nav-link" target="_blank" rel="noopener noreferrer">GitHub</a>
             </div>
             <div className="app-nav-wallet">
               <CustomWalletButton />

@@ -86,7 +86,7 @@ async function main() {
   console.log("  BTC feed: ", btcOracleAddress);
   console.log("====================================\n");
 
-  console.log("Add to .env, frontend/.env.local, and bot/.env:");
+  console.log("Add to .env, frontend/.env.local, and private kash-ops repo .env:");
   console.log(`  KASH_YIELD_BTC_ADDRESS=${kashYieldBtcAddress}`);
   console.log(`  KASH_TOKEN_BTC=${kashTokenBtcAddress}`);
   console.log("");

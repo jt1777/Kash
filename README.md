@@ -15,7 +15,7 @@ A capital-efficient yield strategy protocol. Users deposit ETH or wBTC and recei
 - **Batch user caps**: `MAX_MINT_USERS` / `MAX_REDEEM_USERS` (500) enforced via active per-cycle counters (cancel-safe).
 - **Security**: `ReentrancyGuard` on all user-facing functions, two-step ownership transfer (`transferOwnership` / `acceptOwnership`), and custom Solidity errors (smaller bytecode, cheaper reverts).
 - **Aave**: Lending/borrowing for capital deployment (owner/bot).
-- **Owner reserves**: On-chain USDC and native ETH / WBTC buffers the treasury can mark as **not** user NAV (`ownerUsdcReserve`, `ownerEthReserve` on ETH, `ownerWbtcReserve` on BTC), plus `coverUsdcShortfall` for the bot to draw reserved USDC into the working float. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) and `bot/scripts/ops/_utils.js` (`getState` returns raw balances and owner-adjusted `contractAsset` / `contractUsdc`).
+- **Owner reserves**: On-chain USDC and native ETH / WBTC buffers the treasury can mark as **not** user NAV (`ownerUsdcReserve`, `ownerEthReserve` on ETH, `ownerWbtcReserve` on BTC), plus `coverUsdcShortfall` for the bot to draw reserved USDC into the working float. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## 📋 Architecture
 
@@ -51,8 +51,10 @@ A capital-efficient yield strategy protocol. Users deposit ETH or wBTC and recei
 
 ### Off-chain bot
 
-1. **Processing window** (last 15 minutes of each cycle by default): Bot runs five-step batch flow (`phase1` → `ops` → `nav` → `mark-done` → `phase2`) via `performUpkeep` and related calls. See [bot/README.md](bot/README.md).
+1. **Processing window** (last 15 minutes of each cycle by default): The operator bot runs a five-step batch flow (`phase1` → `ops` → `nav` → `mark-done` → `phase2`) via `performUpkeep` and related calls.
 2. **Ops between Phase 1 and Phase 2:** Target-state engine deploys or unwinds capital (Aave + Hyperliquid) before settlement NAV, **`markBatchOpsDone(batchCycle, G)`**, and Phase 2 distribution — not event-driven post-batch reactions.
+
+Batch operator tooling (bot source, ops scripts, runbooks) lives in a **private repository** (`kash-ops`), separate from this public contracts repo.
 
 ## 🕐 Batch Cycle and Time Windows
 
@@ -105,19 +107,6 @@ npx hardhat test test/redeem-merkle.unit.test.js
 
 # Mainnet fork e2e (requires ARBITRUM_MAINNET_RPC_URL)
 npm run test:fork
-```
-
-### Start Off-Chain Bot
-
-See [bot/README.md](bot/README.md) for the batch bot specification (env vars, five-step flow, Hyperliquid setup, ops playbooks).
-
-```bash
-cd bot
-npm install
-cp .env.example .env
-# Edit .env with your contract addresses
-npm run build
-npm start
 ```
 
 ### Start Frontend
@@ -175,7 +164,7 @@ Liabilities:
 ## 📁 Project Structure
 
 ```
-yieldproduct/
+Kash/
 ├── contracts/
 │   ├── KashYieldETH.sol            # Main ETH product (Merkle redeem claims)
 │   ├── KashYieldBtc.sol            # Main BTC product
@@ -195,15 +184,11 @@ yieldproduct/
 │   ├── deploy-arbitrum-sepolia.js      # Deploy ETH product
 │   ├── deploy-hyperliquid-adapter.js   # Deploy HyperliquidAdapter
 │   ├── deploy-exchange-facade.js       # Deploy ExchangeFacade per vault
-│   ├── approveHlAgent.js               # HL approveAgent + EIP-1271 probe
 │   └── ...
 ├── test/
 ├── docs/
-│   ├── DEPLOYMENT.md               # Full deployment guide (ExchangeFacade, Merkle claims)
+│   ├── DEPLOYMENT.md               # Deploy + verify guide (public)
 │   └── ...
-├── bot/                            # Off-chain bot (batch, Aave/exchange)
-│   ├── src/batch/batchProcessor.ts
-│   └── README.md
 ├── frontend/                       # Next.js 15 + wagmi + RainbowKit
 │   ├── app/
 │   ├── components/
@@ -258,19 +243,29 @@ npx hardhat run scripts/deploy-kashyieldbtc.js --network arbitrumSepolia
 - **Frontend**: Live on Arbitrum Sepolia. Landing at `/`, app at `/app`. Mint (ETH), redeem (ETH/wETH/wBTC), stats (NAV, deposits from chain events, KASH balance), time-window status.
 - **Contracts**: `KashYieldETH`, `KashYieldBtc`, and their KASH tokens are deployed. Addresses are in `frontend/lib/contracts/addresses.ts`; update after each deploy (see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)).
 - **Exchange adapters**: Deploy `HyperliquidAdapter` + **`ExchangeFacade`** per vault; wire with `setExchangeFacade` and `facade.setHyperliquid` / `setActivePerpExchange`. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
-- **Redeem claims**: Bot publishes Merkle proofs to `bot/data/redeem-proofs/`; frontend fetches via `NEXT_PUBLIC_REDEEM_PROOF_BASE_URL`.
+- **Redeem claims**: The operator bot publishes Merkle proofs to static hosting; the frontend fetches via `NEXT_PUBLIC_REDEEM_PROOF_BASE_URL`.
 - **Spot DEX**: On Arbitrum One, deploy/register `UniswapV3Adapter`.
-- **Bot**: 5-step batch flow; redeem Phase 2 uses `processBatchPhase2ForCycle(cycle, merkleRoot)`. See [bot/README.md](bot/README.md).
+- **Batch ops**: Five-step batch flow; redeem Phase 2 uses `processBatchPhase2ForCycle(cycle, merkleRoot)`. Operator tooling is in the private `kash-ops` repository.
 
 ## 🌐 Frontend
 
 - **Stack**: Next.js 15 (App Router), Tailwind, wagmi + viem + RainbowKit. Network: Arbitrum Sepolia.
 - **Features**: Mobile-first UI, wallet connect, mint KASH (ETH), redeem (ETH/wBTC), **claim redeem** after settlement, real-time NAV and deposits (from chain events), KASH balance, time-window status.
 - **Contract addresses**: Set in `frontend/lib/contracts/addresses.ts` (`CONTRACTS.kashYieldEth`, `CONTRACTS.kashTokenEth`, tokens, oracles). Update when you deploy (see [DEPLOYMENT.md](DEPLOYMENT.md)).
-- **Mint flow**: Select ETH → enter amount → approve if needed → submit mint → wait for batch (KASH in Phase 2). **Redeem**: Enter KASH → approve → submit → after Phase 2, **Claim** (pull payout; user pays gas). Set `NEXT_PUBLIC_REDEEM_PROOF_BASE_URL` to hosted bot proof manifests.
+- **Mint flow**: Select ETH → enter amount → approve if needed → submit mint → wait for batch (KASH in Phase 2). **Redeem**: Enter KASH → approve → submit → after Phase 2, **Claim** (pull payout; user pays gas). Set `NEXT_PUBLIC_REDEEM_PROOF_BASE_URL` to hosted redeem proof manifests.
 - **Time windows**: User window spans most of each cycle (requests); processing window is the last segment (`processBatch()`). Default cycle = 24 h; adjustable via `setCycleDurationSeconds`.
 - **Build**: `cd frontend && npm run build && npm start`. **Deploy**: e.g. `vercel` or Docker (see [DEPLOYMENT.md](DEPLOYMENT.md) for full checklist).
 - **Troubleshooting**: Use Arbitrum Sepolia; set WalletConnect project ID in `.env.local`; ensure user window for mint/redeem; check addresses in `lib/contracts/addresses.ts`. Testnet ETH: [Alchemy Arbitrum Sepolia faucet](https://www.alchemy.com/faucets/arbitrum-sepolia).
+
+## Post-release ABI sync checklist
+
+After every verified contract upgrade, update **all** of the following:
+
+1. **`frontend/lib/contracts/kashYieldABI.ts`** — match compiled vault ABI from this repo.
+2. **`frontend/lib/contracts/addresses.ts`** — new vault/token/facade addresses after cutover.
+3. **Private `kash-ops` repo** — sync `bot/src/contracts/kashYieldABI.ts`, `protocolActionCodes.ts`, `.env` addresses, and `contracts/` copy (see kash-ops README).
+
+Mismatch between this repo and `kash-ops` ABIs is the primary operational risk after a split.
 
 ## 📄 License
 

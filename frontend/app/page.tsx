@@ -512,7 +512,7 @@ export default function Home() {
             <div>
               <Link href="/app" className="cta-button">🚀 Launch App</Link>
               <a href="https://kash-2.gitbook.io/kash-enhanced-yield-protocol" target="_blank" rel="noopener noreferrer" className="secondary-cta">Documentation</a>
-              <a href="https://github.com/jt1777/yieldproduct" className="secondary-cta" target="_blank" rel="noopener noreferrer">GitHub →</a>
+              <a href="https://github.com/jt1777/Kash" className="secondary-cta" target="_blank" rel="noopener noreferrer">GitHub →</a>
             </div>
           </div>
         </section>
@@ -678,7 +678,7 @@ export default function Home() {
                 <h3>1. Load facts</h3>
                 <p>
                   Chain ID <strong>{ARBITRUM_ONE_CHAIN_ID}</strong>, RPC <code style={{ color: '#00FFFF' }}>https://arb1.arbitrum.io/rpc</code>, ABI from{' '}
-                  <a href="https://github.com/jt1777/yieldproduct/blob/main/frontend/lib/contracts/kashYieldABI.ts" target="_blank" rel="noopener noreferrer">kashYieldABI.ts</a>.
+                  <a href="https://github.com/jt1777/Kash/blob/main/frontend/lib/contracts/kashYieldABI.ts" target="_blank" rel="noopener noreferrer">kashYieldABI.ts</a>.
                 </p>
               </div>
               <div className="proof-card">

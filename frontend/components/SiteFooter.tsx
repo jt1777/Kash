@@ -20,7 +20,7 @@ export function SiteFooter({ className, contractAddress }: SiteFooterProps) {
       <div className={styles.inner}>
         <p>KASH — Enhanced Yield Protocol</p>
         <div className={styles.links}>
-          <a href="https://github.com/jt1777/yieldproduct" target="_blank" rel="noopener noreferrer">
+          <a href="https://github.com/jt1777/Kash" target="_blank" rel="noopener noreferrer">
             GitHub
           </a>
           <a href="https://kash-2.gitbook.io/kash-enhanced-yield-protocol" target="_blank" rel="noopener noreferrer">Documentation</a>
