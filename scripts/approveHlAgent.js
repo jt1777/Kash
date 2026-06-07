@@ -47,16 +47,27 @@ function createEip1271AdapterWallet(adapterAddress, ownerWallet) {
   });
 }
 
+/** JsonRpcSigner (hardhat --network) has no signingKey; EIP-1271 needs raw hash sig from PRIVATE_KEY. */
+function walletForLocalSign(signerOrWallet) {
+  if (signerOrWallet.signingKey) return signerOrWallet;
+  const pk = process.env.PRIVATE_KEY;
+  if (pk) return new ethers.Wallet(pk);
+  throw new Error(
+    "EIP-1271 probe requires root .env PRIVATE_KEY (remote network signers cannot sign raw hashes).",
+  );
+}
+
 async function verifyAdapterEip1271(adapterAddress, ownerWallet) {
   const adapter = new ethers.Contract(adapterAddress, ADAPTER_EIP1271_ABI, ethers.provider);
+  const signingWallet = walletForLocalSign(ownerWallet);
   const onChainOwner = await adapter.owner();
-  if (onChainOwner.toLowerCase() !== ownerWallet.address.toLowerCase()) {
+  if (onChainOwner.toLowerCase() !== signingWallet.address.toLowerCase()) {
     console.warn(
-      `  ⚠️  Signer ${ownerWallet.address} != adapter.owner() ${onChainOwner} — EIP-1271 may reject`,
+      `  ⚠️  Signer ${signingWallet.address} != adapter.owner() ${onChainOwner} — EIP-1271 may reject`,
     );
   }
   const hash = ethers.hexlify(ethers.randomBytes(32));
-  const sig = ownerWallet.signingKey.sign(hash).serialized;
+  const sig = signingWallet.signingKey.sign(hash).serialized;
   const magic = await adapter.isValidSignature(hash, sig);
   const ok = magic === ERC1271_MAGIC;
   console.log(`  EIP-1271 probe: ${ok ? "✅ owner sig valid on adapter" : "❌ failed"} (${magic})`);
@@ -72,32 +83,37 @@ async function main() {
     throw new Error("Set HL_ADAPTER_ADDRESS (or HL_ADAPTER_ADDRESS_BTC / HL_ADAPTER_ADDRESS_ETH).");
   }
 
-  let agentAddress =
-    process.env.AGENT_ADDRESS ||
-    process.env.BOT_ADDRESS ||
-    process.env.HL_ADAPTER_OPERATOR_ADDRESS ||
-    "";
-  const botPk = process.env.HYPERLIQUID_API_PRIVATE_KEY || process.env.BOT_PRIVATE_KEY || "";
-  if ((!agentAddress || !ethers.isAddress(agentAddress)) && botPk) {
-    agentAddress = new ethers.Wallet(botPk).address;
+  const hlApiPk = process.env.HYPERLIQUID_API_PRIVATE_KEY || process.env.BOT_PRIVATE_KEY || "";
+  // Prefer dedicated HL API key over root BOT_ADDRESS (on-chain bot is often an existing HL user).
+  let agentAddress = process.env.AGENT_ADDRESS || "";
+  if (!agentAddress || !ethers.isAddress(agentAddress)) {
+    if (hlApiPk) {
+      agentAddress = new ethers.Wallet(hlApiPk).address;
+    } else {
+      agentAddress =
+        process.env.BOT_ADDRESS || process.env.HL_ADAPTER_OPERATOR_ADDRESS || "";
+    }
   }
   if (!agentAddress || !ethers.isAddress(agentAddress)) {
-    throw new Error("Set AGENT_ADDRESS, BOT_ADDRESS, or HYPERLIQUID_API_PRIVATE_KEY.");
+    throw new Error(
+      "Set AGENT_ADDRESS or bot/.env HYPERLIQUID_API_PRIVATE_KEY (fresh HL agent key, not on-chain BOT_ADDRESS).",
+    );
   }
 
   const signerMode = (process.env.SIGNER || "owner").toLowerCase();
   let ownerWallet;
   if (signerMode === "bot") {
-    if (!botPk) throw new Error("SIGNER=bot requires bot HYPERLIQUID_API_PRIVATE_KEY.");
-    ownerWallet = new ethers.Wallet(botPk);
+    if (!hlApiPk) throw new Error("SIGNER=bot requires bot HYPERLIQUID_API_PRIVATE_KEY.");
+    ownerWallet = new ethers.Wallet(hlApiPk);
   } else {
-    const [hardhatSigner] = await ethers.getSigners();
-    if (hardhatSigner) {
-      ownerWallet = hardhatSigner;
-    } else if (process.env.PRIVATE_KEY) {
+    if (process.env.PRIVATE_KEY) {
       ownerWallet = new ethers.Wallet(process.env.PRIVATE_KEY);
     } else {
-      throw new Error("SIGNER=owner|adapter requires root .env PRIVATE_KEY (Hardhat network accounts).");
+      const [hardhatSigner] = await ethers.getSigners();
+      if (!hardhatSigner) {
+        throw new Error("SIGNER=owner|adapter requires root .env PRIVATE_KEY.");
+      }
+      ownerWallet = hardhatSigner;
     }
   }
 
@@ -113,8 +129,10 @@ async function main() {
     }
   }
 
+  const signingWallet =
+    signerMode === "adapter" ? walletForLocalSign(ownerWallet) : ownerWallet;
   const wallet = signerMode === "adapter"
-    ? createEip1271AdapterWallet(adapterAddress, ownerWallet)
+    ? createEip1271AdapterWallet(adapterAddress, signingWallet)
     : ownerWallet;
   const useVaultAddress = (process.env.USE_VAULT_ADDRESS || "false").toLowerCase() === "true";
   const agentNameBase = (process.env.AGENT_NAME || "kash-bot").slice(0, 16);
@@ -126,7 +144,13 @@ async function main() {
   const { ExchangeClient, InfoClient, HttpTransport } = await import("@nktkas/hyperliquid");
 
   const info = new InfoClient({ transport: new HttpTransport({ apiUrl: hlApiUrl }) });
-  const before = await info.extraAgents({ user: adapterAddress }).catch(() => []);
+  const ownerAddr = ownerWallet?.address;
+  const beforeAdapter = await info.extraAgents({ user: adapterAddress }).catch(() => []);
+  const beforeOwner =
+    ownerAddr && ownerAddr.toLowerCase() !== adapterAddress.toLowerCase()
+      ? await info.extraAgents({ user: ownerAddr }).catch(() => [])
+      : [];
+
   console.log("\napproveHlAgent");
   console.log(`  adapter (HL user): ${adapterAddress}`);
   console.log(`  agent:             ${agentAddress}`);
@@ -135,7 +159,32 @@ async function main() {
     console.log(`  owner (EIP-1271):  ${ownerWallet.address}`);
   }
   console.log(`  vaultAddress:      ${useVaultAddress ? adapterAddress : "(none)"}`);
-  console.log(`  agents before:     ${JSON.stringify(before)}`);
+  console.log(`  agents (adapter):  ${JSON.stringify(beforeAdapter)}`);
+  if (beforeOwner.length) {
+    console.log(`  agents (owner):    ${JSON.stringify(beforeOwner)}`);
+  }
+
+  const agentLower = agentAddress.toLowerCase();
+  const alreadyOnAdapter = beforeAdapter.some((a) => a.address.toLowerCase() === agentLower);
+  const alreadyOnOwner = beforeOwner.some((a) => a.address.toLowerCase() === agentLower);
+
+  if (alreadyOnAdapter) {
+    console.log("\n✅ Agent already listed on adapter HL account — nothing to do.");
+    return;
+  }
+
+  if (alreadyOnOwner) {
+    console.warn("\n⚠️  Agent already registered on adapter.owner() HL account, not on adapter.");
+    console.warn("    HL will reject re-approval: 'Extra agent already used.'");
+    console.warn("    Bot needs extraAgents(adapter) for directDepositMode=false.");
+    console.warn("    Options:");
+    console.warn("      1. Revoke agent on owner at https://app.hyperliquid.xyz/agents (owner wallet),");
+    console.warn("         generate a NEW HYPERLIQUID_API_PRIVATE_KEY, retry SIGNER=adapter;");
+    console.warn("      2. Contact Hyperliquid re: approveAgent for contract master accounts;");
+    console.warn("      3. Last resort: directDepositMode=true bootstrap (see DEPLOYMENT.md).");
+    process.exitCode = 1;
+    return;
+  }
 
   const exchange = new ExchangeClient({
     transport: new HttpTransport({ apiUrl: hlApiUrl }),
@@ -144,11 +193,20 @@ async function main() {
   });
 
   const opts = useVaultAddress ? { vaultAddress: adapterAddress } : undefined;
-  const result = await exchange.approveAgent(
-    { agentAddress, agentName },
-    opts,
-  );
-  console.log("  approveAgent response:", JSON.stringify(result));
+  let result;
+  try {
+    result = await exchange.approveAgent({ agentAddress, agentName }, opts);
+    console.log("  approveAgent response:", JSON.stringify(result));
+  } catch (err) {
+    const msg = String(err?.response?.response || err?.message || err);
+    if (msg.includes("Extra agent already used")) {
+      console.warn("\n⚠️  HL: Extra agent already used — this agent is bound to another HL master.");
+      console.warn("    Revoke at https://app.hyperliquid.xyz/agents (owner wallet) or use a new agent key.");
+      process.exitCode = 1;
+      return;
+    }
+    throw err;
+  }
 
   await new Promise((r) => setTimeout(r, 1500));
   const after = await info.extraAgents({ user: adapterAddress }).catch(() => []);
@@ -159,21 +217,35 @@ async function main() {
     console.log(`  agents after (signer):  ${JSON.stringify(onSigner)}`);
   }
 
-  const listedOnAdapter = after.some(
-    (a) => a.address.toLowerCase() === agentAddress.toLowerCase(),
-  );
-  const listedOnSigner = onSigner.some(
-    (a) => a.address.toLowerCase() === agentAddress.toLowerCase(),
-  );
+  const onOwner = await info.extraAgents({ user: ownerAddr }).catch(() => []);
+  if (onOwner.length) {
+    console.log(`  agents after (owner):   ${JSON.stringify(onOwner)}`);
+  }
+
+  const listedOnAdapter = after.some((a) => a.address.toLowerCase() === agentLower);
+  const listedOnSigner = onSigner.some((a) => a.address.toLowerCase() === agentLower);
+  const listedOnOwner = onOwner.some((a) => a.address.toLowerCase() === agentLower);
   if (listedOnAdapter) {
     console.log("\n✅ Agent listed on adapter HL account (directDepositMode=false path).");
+  } else if (listedOnOwner) {
+    console.warn(
+      "\n⚠️  Agent listed on adapter.owner() HL account only, not extraAgents(adapter).",
+    );
+    console.warn(
+      "    Bot relay needs extraAgents(adapter) for directDepositMode=false. HL likely attributed",
+    );
+    console.warn(
+      "    SIGNER=adapter approval to the owner EOA (EIP-1271 user-signed path unverified on HL).",
+    );
+    console.warn("    Do not start live batches until extraAgents(adapter) lists the agent.");
+    process.exitCode = 1;
   } else if (listedOnSigner) {
     console.warn(
-      "\n⚠️  Agent approved on signer EOA only. For directDepositMode=false, extraAgents(adapter) must list the agent — adapter (contract) must sign approveAgent (EIP-1271) or use directDepositMode=true bootstrap.",
+      "\n⚠️  Agent approved on signer EOA only. For directDepositMode=false, extraAgents(adapter) must list the agent.",
     );
     process.exitCode = 1;
   } else {
-    console.warn("\n⚠️  Agent not listed on adapter or signer extraAgents.");
+    console.warn("\n⚠️  Agent not listed on adapter, owner, or signer extraAgents.");
     process.exitCode = 1;
   }
 }

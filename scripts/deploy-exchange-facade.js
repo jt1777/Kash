@@ -24,11 +24,11 @@ async function main() {
   const facade = await ExchangeFacade.deploy(owner.address, bot, usdc, primaryAsset, kashYield);
   await facade.waitForDeployment();
 
-  console.log("ExchangeFacade:", await facade.getAddress());
+  const facadeAddr = await facade.getAddress();
+  console.log("ExchangeFacade:", facadeAddr);
   console.log("Next:");
-  console.log("  1. kashYield.setExchangeFacade(facade)");
-  console.log("  2. facade.setHyperliquid(adapter); facade.setActivePerpExchange('HL')");
-  console.log("  3. hlAdapter.setAuthorizedCaller(facade)  // allow facade → adapter HL ops");
+  console.log("  npx hardhat run scripts/wire-exchange-facade.js --network <network>");
+  console.log("  (set EXCHANGE_FACADE_* / HL_ADAPTER_ADDRESS_* + vault address + PRODUCT)");
 }
 
 main().catch((e) => {

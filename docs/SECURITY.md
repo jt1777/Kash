@@ -155,13 +155,15 @@ KASH is a batch-processed yield vault. Users queue mints/redeems; a bot/keeper r
 - Bot executes HL trades off-chain; on-chain adapter records state via `syncBalances` / `syncPosition`
 - Compromised bot reports false balances before/after moving USDC on HL L1
 - HL bridge/API downtime prevents withdraw or hedge adjustment
-- `directDepositMode`: USDC credited to bot EOA on HL — custody blur between protocol and hot wallet
+- `directDepositMode = true` (bootstrap): bot EOA is HL **master** — HL USDC/perp float exposed to bot key; ideal adapter-as-master blocked (EIP-1271 not honored off-chain by HL)
+- Compromised HL master key: attacker signs **`withdraw3` to any Arbitrum address** via HL API (does not need bot software); cannot change `hlAccount` on-chain (`setDirectDepositMode` is owner-only)
 
 **Mitigations (current):**
 
 - Adapter capital movement restricted to KashYield + owner
-- Documented ops: HL actions then adapter sync
-- Prefer adapter-as-HL-account (`directDepositMode = false`) in production
+- Bot code hardcodes `withdraw3` → adapter; ops ban HL UI withdrawals
+- Vault/Aave user collateral not directly accessible via HL master key alone
+- Bootstrap is the production fallback until HL supports contract-master agents + withdrawals
 
 **Mitigations (roadmap):**
 

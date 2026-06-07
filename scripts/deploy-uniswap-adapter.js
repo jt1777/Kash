@@ -100,21 +100,8 @@ async function main() {
   const ethContractAddr = process.env.KASH_YIELD_ETH_ADDRESS || process.env.KASH_YIELD_ADDRESS;
   if (ethContractAddr && hre.ethers.isAddress(ethContractAddr)) {
     const kashYieldEth = await hre.ethers.getContractAt("KashYieldETH", ethContractAddr);
-    // 1. Whitelist the new adapter
-    await (await kashYieldEth.setAllowedSpotDexRouter(adapterAddress, true)).wait();
-    console.log("✅ setAllowedSpotDexRouter on KashYieldETH →", adapterAddress);
-    // 2. Propose the new spot DEX (starts 24-hour timelock if one is already set)
-    const currentSpotDex = await kashYieldEth.spotDexAddress();
     await (await kashYieldEth.setSpotDex(adapterAddress)).wait();
-    if (currentSpotDex === hre.ethers.ZeroAddress) {
-      console.log("✅ setSpotDex on KashYieldETH → immediate (first-ever):", adapterAddress);
-    } else {
-      const readyAt = await kashYieldEth.spotDexPending(adapterAddress);
-      const readyDate = new Date(Number(readyAt) * 1000).toISOString();
-      console.log("⏳ setSpotDex on KashYieldETH → 24h timelock started. Ready at:", readyDate);
-      console.log("   Run after that time:");
-      console.log(`     KASH_YIELD_ETH_ADDRESS=${ethContractAddr} SPOT_DEX_ADDRESS=${adapterAddress} npx hardhat run scripts/confirmSpotDex.js --network ${network}`);
-    }
+    console.log("✅ setSpotDex on KashYieldETH →", adapterAddress);
   }
 
   // ── Optional: register as spot DEX on KashYieldBtc ───────────────────────
@@ -141,18 +128,8 @@ async function main() {
         currentSpotDexBtc = null;
       }
       if (currentSpotDexBtc !== null) {
-        await (await kashYieldBtc.setAllowedSpotDexRouter(adapterAddress, true)).wait();
-        console.log("✅ setAllowedSpotDexRouter on KashYieldBtc →", adapterAddress);
         await (await kashYieldBtc.setSpotDex(adapterAddress)).wait();
-        if (currentSpotDexBtc === hre.ethers.ZeroAddress) {
-          console.log("✅ setSpotDex on KashYieldBtc → immediate (first-ever):", adapterAddress);
-        } else {
-          const readyAtBtc = await kashYieldBtc.spotDexPending(adapterAddress);
-          const readyDateBtc = new Date(Number(readyAtBtc) * 1000).toISOString();
-          console.log("⏳ setSpotDex on KashYieldBtc → 24h timelock started. Ready at:", readyDateBtc);
-          console.log("   Run after that time:");
-          console.log(`     KASH_YIELD_BTC_ADDRESS=${btcContractAddr} SPOT_DEX_ADDRESS=${adapterAddress} npx hardhat run scripts/confirmSpotDex.js --network ${network}`);
-        }
+        console.log("✅ setSpotDex on KashYieldBtc →", adapterAddress);
       }
     }
   }

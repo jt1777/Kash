@@ -265,7 +265,7 @@ Before running the bot in production:
 1. ✅ KashYield contract deployed
 2. ✅ **ExchangeFacade** deployed per vault (`scripts/deploy-exchange-facade.js`)
 3. ✅ Owner wired: `setExchangeFacade` + `facade.setHyperliquid` + `facade.setActivePerpExchange("HL")`
-4. ✅ HyperliquidAdapter deployed; `directDepositMode=false`; `approveHlAgent.js` lists bot on `extraAgents(adapter)`
+4. ✅ HyperliquidAdapter deployed; bootstrap `directDepositMode=true` + `hlAccount=bot`; same key in `PRIVATE_KEY` / `HYPERLIQUID_API_PRIVATE_KEY`
 5. ✅ Spot DEX set on vault (`setSpotDex`)
 6. ✅ Bot wallet matches `botAddress()` on vault and facade
 7. ✅ `bot/.env` configured; `npm run build` before `npm start`
@@ -292,13 +292,13 @@ Before running the bot in production:
 
 ## Mainnet Hyperliquid Setup (Important)
 
-Real Hyperliquid trading is off-chain (API), not an Arbitrum contract call. Production mainnet uses **`directDepositMode = false`** (adapter contract = HL account; bot signs as **HL agent**). Full deploy order, two-wallet split, and agent/operator setup: **[DEPLOYMENT.md](../docs/DEPLOYMENT.md)** (sections *Two wallets on mainnet*, *Hyperliquid adapter setup (production)*, Steps 4a / B3).
+Real Hyperliquid trading is off-chain (API), not an Arbitrum contract call. **Mainnet uses bootstrap `directDepositMode = true`:** bot EOA is the HL **master** (EIP-1271 contract-master `approveAgent` is not available on HL production). Full deploy order: **[DEPLOYMENT.md](../docs/DEPLOYMENT.md)** (*Hyperliquid adapter setup (bootstrap)*, Steps 4a / B3).
 
 **Summary**
 
-1. **Owner** (root `.env`): deploy vaults with `BOT_ADDRESS=<bot>`, set `setDirectDepositMode(false, 0x0)` on each adapter, optional `HL_ADAPTER_OPERATOR_ADDRESS` at adapter deploy.
-2. **Bot** (`bot/.env`): same address as `KashYield*.botAddress()`; `HYPERLIQUID_API_PRIVATE_KEY` for HL API after `approveAgent` for the adapter’s HL account.
-3. **Withdrawals:** HL `withdraw3` / UI must use **`destination =` HyperliquidAdapter address**, not the bot EOA.
+1. **Owner** (root `.env`): `scripts/set-direct-deposit-mode.js` with `hlAccount = BOT_ADDRESS`; optional `HL_ADAPTER_OPERATOR_ADDRESS` at adapter deploy.
+2. **Bot** (`bot/.env`): **same key** for `PRIVATE_KEY` and `HYPERLIQUID_API_PRIVATE_KEY` (= on-chain `botAddress` = HL master). No `approveHlAgent`.
+3. **Withdrawals:** bot `withdraw3` hardcodes **`destination =` HyperliquidAdapter** — do not use HL web UI (defaults to bot EOA).
 
 ### 1) Bot `.env` for real HL
 
@@ -312,7 +312,7 @@ KASH_TOKEN_ETH=<...>
 
 # HL API
 HYPERLIQUID_API_URL=https://api.hyperliquid.xyz
-HYPERLIQUID_API_PRIVATE_KEY=0x...   # bot signer key
+HYPERLIQUID_API_PRIVATE_KEY=0x...   # same as PRIVATE_KEY in bootstrap mode (HL master)
 HL_EVENT_RELAY_ENABLED=true          # default true; execute HL API orders inline during npm start
 HL_EVENT_RELAY_STRICT=false          # if true, fail ops step when relay fails
 
@@ -330,7 +330,7 @@ The batch ops playbooks execute Hyperliquid API actions inline during `npm start
 
 After each HL order, the bot syncs adapter state (`syncBalances` + `syncPosition`) on Arbitrum.
 
-With **`directDepositMode = false`**, deposits bridge to the **adapter** HL account (not the bot EOA). Do not enable `directDepositMode = true` on mainnet unless you accept bot-wallet HL custody risk (see DEPLOYMENT.md Option B, reference only).
+With **`directDepositMode = true`** (bootstrap), the adapter forwards USDC to the bot EOA; the bot bridges to HL. HL float is on the bot master account; vault/Aave collateral stays on-chain. See DEPLOYMENT.md for custody and compromise notes.
 
 If `HL_EVENT_RELAY_ENABLED=false`, on-chain intent txs still run but no real HL API trades are executed.
 
@@ -355,7 +355,7 @@ Do not use that mode on live user batches unless you explicitly intend that beha
 | Native USDC | `0xaf88d065e77c8cC2239327C5EDb3A432268e5831` |
 | API base URL | `https://api.hyperliquid.xyz` |
 
-HL **writes** go through **ExchangeFacade** → **`HyperliquidAdapter`**. Trades and **`withdraw3`** are **off-chain via the HL API**; the bot syncs adapter state on Arbitrum after each action. **`approveHlAgent.js`**: `VERIFY_EIP1271=true` probes adapter `isValidSignature`; `SIGNER=adapter` for contract-master signing attempts. Custody: [DEPLOYMENT.md](../docs/DEPLOYMENT.md).
+HL **writes** go through **ExchangeFacade** → **`HyperliquidAdapter`**. Trades and **`withdraw3`** are **off-chain via the HL API** (bot HL master in bootstrap mode); the bot syncs adapter state on Arbitrum after each action. Custody: [DEPLOYMENT.md](../docs/DEPLOYMENT.md).
 
 **External docs:** [Hyperliquid docs](https://hyperliquid.gitbook.io/hyperliquid-docs/) · [Python SDK](https://github.com/hyperliquid-dex/hyperliquid-python-sdk)
 

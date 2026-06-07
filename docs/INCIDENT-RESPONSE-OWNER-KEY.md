@@ -106,7 +106,7 @@ Execute in this order after `acceptOwnership`:
 
 From adapter owner (or new adapter owner after `transferOwnership`):
 
-- Verify `directDepositMode == false` for production
+- Verify `directDepositMode` / `hlAccount` match your runbook (bootstrap: `true` + bot EOA)
 - Verify `hlAccount` / operator are not attacker-controlled
 - `setOperator(newBot)` or `address(0)` until recovery complete
 
