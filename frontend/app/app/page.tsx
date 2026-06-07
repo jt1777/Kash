@@ -11,7 +11,7 @@ import { StatsCard } from '@/components/StatsCard';
 import { StatusIndicator } from '@/components/StatusIndicator';
 import { ClientOnly } from '@/components/ClientOnly';
 import { SiteFooter } from '@/components/SiteFooter';
-import { CONTRACTS } from '@/lib/contracts/addresses';
+import { CONTRACTS, isConfiguredAddress } from '@/lib/contracts/addresses';
 import { useState } from 'react';
 import { useAccount } from 'wagmi';
 import Link from 'next/link';
@@ -142,9 +142,9 @@ function AppContent() {
   const showMintRedeem = isConnected;
   const isWalletSettling = status === 'connecting' || status === 'reconnecting';
   const [product, setProduct] = useState<'eth' | 'btc'>(() =>
-    CONTRACTS.kashYieldBtc ? 'btc' : 'eth'
+    isConfiguredAddress(CONTRACTS.kashYieldBtc) ? 'btc' : 'eth'
   );
-  const showBtcTab = !!CONTRACTS.kashYieldBtc;
+  const showBtcTab = isConfiguredAddress(CONTRACTS.kashYieldBtc);
 
   return (
     <>
