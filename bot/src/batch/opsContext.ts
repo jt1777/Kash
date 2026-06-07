@@ -203,6 +203,37 @@ export async function getAaveSuppliedAmountV3(
  *   - runStepMarkDone preflight gate
  *   - 11b swap sizing (how much USDC to swap for the asset shortfall)
  */
+/**
+ * Phase-1-era NAV for ops sizing and mark-done G — never use post-settlement `currentNAV()`.
+ * Prefers on-chain batch redeem USD / KASH while batch is still phase 1.
+ */
+export async function resolvePhase1EraNAV(
+  kashYield: ethers.Contract,
+  batchCycle: bigint,
+  override?: bigint,
+): Promise<bigint> {
+  if (override != null && override > 0n) return override;
+  try {
+    const phase = Number(await kashYield.batchPhase(batchCycle));
+    if (phase === 1) {
+      const info = await kashYield.getBatchInfo(batchCycle);
+      const redeemUsd = BigInt(
+        (info.totalRedeemUSD ?? info[1]).toString(),
+      );
+      const kash = BigInt(
+        (info.totalRedeemKash ?? info[5]).toString(),
+      );
+      if (kash > 0n && redeemUsd > 0n) {
+        const nav = (redeemUsd * 10n ** 18n) / kash;
+        if (nav > 0n) return nav;
+      }
+    }
+  } catch {
+    // legacy / RPC — fall through
+  }
+  return BigInt((await kashYield.currentNAV()).toString());
+}
+
 export async function computeTotalRedeemAsset(
   kashYield: ethers.Contract,
   batchCycle: bigint,

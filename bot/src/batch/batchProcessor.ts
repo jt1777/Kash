@@ -5,6 +5,7 @@ import { config } from '../config';
 import {
   snapshotOpsContext,
   computeTotalRedeemAsset,
+  resolvePhase1EraNAV,
   vaultCoversRedeemPayout,
   vaultCoversRedeemPayoutFromGross,
   getAaveBorrowedAmountV3,
@@ -266,13 +267,16 @@ export class BatchProcessor {
       }
       if (step === 'ops') {
         if (phaseNum !== 1 && !(batchInfo.processed && config.allowProcessedBatch)) throw new Error(`Batch ${batchCycle} is in phase ${phaseNum}; run step phase1 first.`);
-        const phase1EraNav =
-          config.lockedNav ?? BigInt((await this.kashYield.currentNAV()).toString());
+        const phase1EraNav = await resolvePhase1EraNAV(
+          this.kashYield,
+          batchCycle,
+          config.lockedNav ?? undefined,
+        );
         if (config.lockedNav != null) {
           console.log(`📊 Using --locked-nav for ops sizing: $${ethers.formatEther(config.lockedNav)} per KASH\n`);
         } else {
           console.log(
-            `📊 Ops sizing uses on-chain currentNAV (Phase-1 era): $${ethers.formatEther(phase1EraNav)} per KASH\n`,
+            `📊 Ops sizing uses Phase-1-era NAV (batchIndicative / redeem USD÷KASH): $${ethers.formatEther(phase1EraNav)} per KASH\n`,
           );
         }
         await this.runStepOps(batchCycle, batchInfo, phase1EraNav);
@@ -289,8 +293,11 @@ export class BatchProcessor {
       }
       if (step === 'mark-done') {
         if (phaseNum !== 1) throw new Error(`Batch ${batchCycle} is in phase ${phaseNum}; run step nav first.`);
-        const phase1Nav =
-          config.lockedNav ?? BigInt((await this.kashYield.currentNAV()).toString());
+        const phase1Nav = await resolvePhase1EraNAV(
+          this.kashYield,
+          batchCycle,
+          config.lockedNav ?? undefined,
+        );
         await this.runStepMarkDone(batchCycle, phase1Nav);
         return;
       }
@@ -325,8 +332,11 @@ export class BatchProcessor {
     }
 
     if (phaseNum === 1) {
-      // Resume: Phase 1 already ran; on-chain currentNAV should be the pre-Phase-1 MTM for this batch.
-      const phase1EraNav = BigInt((await this.kashYield.currentNAV()).toString());
+      const phase1EraNav = await resolvePhase1EraNAV(
+        this.kashYield,
+        batchCycle,
+        config.lockedNav ?? undefined,
+      );
       console.log(
         `📊 Resuming from phase 1 — ops sizing uses Phase-1-era NAV: $${ethers.formatEther(phase1EraNav)} per KASH`,
       );
@@ -462,6 +472,63 @@ export class BatchProcessor {
       await runTestAaveLoopPlaybook(ctx);
     }
 
+    if (scenario === 'redeem_hl') {
+      await this.assertVaultCoversGAfterOps(batchCycle, phase1EraNAV);
+    }
+  }
+
+  /** Fail ops before mark-done when vault wBTC/ETH is still short of locked G + fees + owner reserve. */
+  private async assertVaultCoversGAfterOps(
+    batchCycle: bigint,
+    phase1EraNAV?: bigint,
+  ): Promise<void> {
+    const redeemKash = BigInt((await this.kashYield.batchTotalRedeemKash(batchCycle)).toString());
+    if (redeemKash === 0n) return;
+
+    const nav = phase1EraNAV ?? await resolvePhase1EraNAV(this.kashYield, batchCycle);
+    const assetDecimals = isBtc ? 8n : 18n;
+    const decimals = isBtc ? 8 : 18;
+    const price = isBtc
+      ? BigInt((await this.kashYield.getBtcPrice()).toString())
+      : BigInt((await this.kashYield.getEthPrice()).toString());
+    const grossG = await computeTotalRedeemAsset(
+      this.kashYield,
+      batchCycle,
+      nav,
+      price,
+      assetDecimals,
+    );
+    if (grossG === 0n) return;
+
+    const cover = await vaultCoversRedeemPayoutFromGross(
+      this.kashYield,
+      this.provider,
+      batchCycle,
+      grossG,
+      isBtc,
+    );
+    if (cover.covers) {
+      const tolNote =
+        cover.shortfall > 0n && cover.shortfall <= cover.toleranceAsset
+          ? ` (within ${ethers.formatUnits(cover.toleranceAsset, decimals)} tolerance)`
+          : '';
+      console.log(
+        `   ✅ Post-ops G check: vault has ${ethers.formatUnits(cover.contractBalance, decimals)} ` +
+          `(need ${ethers.formatUnits(cover.required, decimals)} = G ${ethers.formatUnits(cover.grossRedeemAsset, decimals)} + ` +
+          `mint fees ${ethers.formatUnits(cover.mintFeeAsset, decimals)} + owner reserve ${ethers.formatUnits(cover.ownerAssetReserve, decimals)})${tolNote}\n`,
+      );
+      return;
+    }
+
+    const assetSymbol = isBtc ? 'wBTC' : 'ETH';
+    throw new Error(
+      `Ops finished but vault is short for mark-done: holds ${ethers.formatUnits(cover.contractBalance, decimals)} ${assetSymbol} ` +
+        `but needs ${ethers.formatUnits(cover.required, decimals)} ` +
+        `(G ${ethers.formatUnits(cover.grossRedeemAsset, decimals)} + mint fees ${ethers.formatUnits(cover.mintFeeAsset, decimals)} + ` +
+        `owner reserve ${ethers.formatUnits(cover.ownerAssetReserve, decimals)}; ` +
+        `short ${ethers.formatUnits(cover.shortfall, decimals)}, tolerance ${ethers.formatUnits(cover.toleranceAsset, decimals)}). ` +
+        `Re-run ops (rising tail should cover HL fee from ownerUsdcReserve) or inspect owner USDC reserve / 11b.`,
+    );
   }
 
   /**

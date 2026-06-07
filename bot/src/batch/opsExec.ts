@@ -221,6 +221,8 @@ export async function executeRedeemTailDeltaPipeline(
       break;
     case 'rising':
       phases = [
+        { deltaId: 'Δtail cover_hl_fee_shortfall', step: tailCoverHlFeeShortfall },
+        { deltaId: 'Δtail rising_cover_owner_usdc (pre-11a)', step: risingTailCoverOwnerUsdc },
         { deltaId: 'Δtail repay_contract_first', step: aaveRepayContractFirst },
         { deltaId: 'Δtail aave_withdraw_partial', step: aaveWithdrawPartial },
         { deltaId: 'Δtail dex_swap_11a', step: dexSwapForUsdc },
@@ -228,6 +230,8 @@ export async function executeRedeemTailDeltaPipeline(
         { deltaId: 'Δtail repay_rising_final', step: aaveRepayRisingFinal },
         { deltaId: 'Δtail repay_residual_owner', step: aaveRepayResidualDebtFromOwnerReserve },
         { deltaId: 'Δtail aave_withdraw_rest', step: aaveWithdraw('remaining') },
+        { deltaId: 'Δtail rising_cover_owner_usdc (redeem-gap)', step: risingTailCoverOwnerUsdcForRedeemGap },
+        { deltaId: 'Δtail dex_swap_11b', step: dexSwapFromUsdc(lockedNAV) },
       ];
       break;
     default: {
@@ -880,6 +884,34 @@ function redeemAssetGap(ctx: OpsContext): bigint {
   return ctx.totalRedeemAsset > ctx.contractAsset ? ctx.totalRedeemAsset - ctx.contractAsset : 0n;
 }
 
+/** USDC (6 dec) needed to buy `assetGap` at Chainlink `ctx.price`. */
+function usdcNeededForAssetGap(ctx: OpsContext, assetGap: bigint): bigint {
+  if (assetGap === 0n || ctx.price === 0n) return 0n;
+  return (assetGap * ctx.price) / (10n ** ctx.assetDecimals) / (10n ** 12n);
+}
+
+/**
+ * Release owner USDC reserve into ops float for strategy Aave debt shortfall.
+ * Returns true when `coverUsdcShortfall` ran (caller should refresh ctx).
+ */
+async function executeCoverOwnerUsdcShortfall(ctx: OpsContext, reason: string): Promise<boolean> {
+  const sf = usdcShortfallVsContract(ctx);
+  if (sf === 0n) return false;
+  let reserve = 0n;
+  try {
+    reserve = BigInt((await ctx.kashYield.ownerUsdcReserve()).toString());
+  } catch {
+    return false;
+  }
+  const amount = sf < reserve ? sf : reserve;
+  if (amount === 0n) return false;
+  console.log(
+    `         coverUsdcShortfall ${fmtUsdc(amount)} (${reason}, shortfall ${fmtUsdc(sf)}, ownerUsdcReserve ${fmtUsdc(reserve)})`,
+  );
+  await execTx(`coverUsdcShortfall(${reason})`, () => ctx.kashYield.coverUsdcShortfall(amount));
+  return true;
+}
+
 /** Conservative max LTV (bps) when sizing Aave withdraws in rising 11a loop. Default 7200 = 72%. */
 function getRisingAaveWithdrawMaxLtvBps(): bigint {
   const raw = process.env.RISING_AAVE_WITHDRAW_MAX_LTV_BPS || '7200';
@@ -1087,11 +1119,26 @@ async function executeRisingWithdrawSwapRepayLoop(ctx: OpsContext): Promise<void
       continue;
     }
 
-    if (await shouldSkipRising11aSwap(fresh, sf)) {
+    if (await executeCoverOwnerUsdcShortfall(fresh, `rising-loop#${round}`)) {
+      fresh = await refreshOpsCtx(fresh);
+      const sfAfterCover = usdcShortfallVsContract(fresh);
+      if (sfAfterCover === 0n) {
+        await executeAaveRepay(fresh);
+        fresh = await refreshOpsCtx(fresh);
+        if (strategyAaveDebtToRepay(fresh) === 0n) {
+          console.log('         ↪ rising withdraw-swap-repay loop complete (owner reserve cover + repay)');
+          return;
+        }
+        continue;
+      }
+    }
+
+    const sfAfterOwner = usdcShortfallVsContract(fresh);
+    if (await shouldSkipRising11aSwap(fresh, sfAfterOwner)) {
       return;
     }
 
-    const swapNeed = usdc6ToAssetAmount(fresh, sf);
+    const swapNeed = usdc6ToAssetAmount(fresh, sfAfterOwner);
     const maxSafe = maxSafeAaveWithdrawAsset(fresh);
     const maxSafeBuffered = (maxSafe * safeBps) / 10000n;
     let withdraw = swapNeed < maxSafeBuffered ? swapNeed : maxSafeBuffered;
@@ -1100,14 +1147,14 @@ async function executeRisingWithdrawSwapRepayLoop(ctx: OpsContext): Promise<void
     if (withdraw === 0n) {
       throw new Error(
         `Rising tail: Aave withdraw blocked by health factor (supplied ${fmtAsset(fresh.aaveSupplied, fresh)}, ` +
-          `strategy debt ${fmtUsdc(debt)}, USDC shortfall ${fmtUsdc(sf)}). ` +
+          `strategy debt ${fmtUsdc(debt)}, USDC shortfall ${fmtUsdc(sfAfterOwner)}). ` +
           `At ~${(Number(fresh.strategyRedeemFraction) / 1e16).toFixed(2)}% strategy redeem, use lower LTV or manual deleverage.`,
       );
     }
 
     console.log(
       `         loop #${round}: withdraw ${fmtAsset(withdraw, fresh)} ` +
-        `(maxSafe×${Number(safeBps) / 100}%=${fmtAsset(maxSafeBuffered, fresh)}, swap ${fmtAsset(swapNeed, fresh)} for ${fmtUsdc(sf)} debt)`,
+        `(maxSafe×${Number(safeBps) / 100}%=${fmtAsset(maxSafeBuffered, fresh)}, swap ${fmtAsset(swapNeed, fresh)} for ${fmtUsdc(sfAfterOwner)} debt)`,
     );
     await execTx(`withdrawFromAave(partial#${round})`, () =>
       fresh.kashYield.withdrawFromAave(withdraw, aaveTxOverrides()),
@@ -1926,15 +1973,53 @@ const risingTailCoverOwnerUsdc: OpStep = {
     return reserve === 0n;
   },
   execute: async (ctx) => {
-    const sf = usdcShortfallVsContract(ctx);
-    if (sf === 0n) return;
-    const reserve = BigInt((await ctx.kashYield.ownerUsdcReserve()).toString());
-    const amount = sf < reserve ? sf : reserve;
+    await executeCoverOwnerUsdcShortfall(ctx, 'rising-tail');
+  },
+};
+
+/**
+ * After Aave unwind: release owner USDC so 11b can close the redeem wBTC gap (ops float only).
+ */
+const risingTailCoverOwnerUsdcForRedeemGap: OpStep = {
+  id: 'rising_tail_cover_owner_usdc_redeem_gap',
+  substep: 'aave',
+  refreshCtx: true,
+  describe: (ctx) => {
+    const gap = redeemAssetGap(ctx);
+    const usdcNeeded = usdcNeededForAssetGap(ctx, gap);
+    return `release owner USDC for redeem gap 11b (need ~${fmtUsdc(usdcNeeded)} USDC, gap ${fmtAsset(gap, ctx)})`;
+  },
+  canSkip: async (ctx) => {
+    const gap = redeemAssetGap(ctx);
+    if (gap === 0n) return true;
+    const usdcNeeded = usdcNeededForAssetGap(ctx, gap);
+    if (ctx.contractUsdc >= usdcNeeded) return true;
+    let reserve = 0n;
+    try {
+      reserve = BigInt((await ctx.kashYield.ownerUsdcReserve()).toString());
+    } catch {
+      return true;
+    }
+    return reserve === 0n;
+  },
+  execute: async (ctx) => {
+    const gap = redeemAssetGap(ctx);
+    if (gap === 0n) return;
+    const usdcNeeded = usdcNeededForAssetGap(ctx, gap);
+    const opsShort = usdcNeeded > ctx.contractUsdc ? usdcNeeded - ctx.contractUsdc : 0n;
+    if (opsShort === 0n) return;
+    let reserve = 0n;
+    try {
+      reserve = BigInt((await ctx.kashYield.ownerUsdcReserve()).toString());
+    } catch {
+      return;
+    }
+    const amount = opsShort < reserve ? opsShort : reserve;
     if (amount === 0n) return;
     console.log(
-      `         coverUsdcShortfall ${fmtUsdc(amount)} (shortfall ${fmtUsdc(sf)}, ownerUsdcReserve ${fmtUsdc(reserve)})`,
+      `         coverUsdcShortfall ${fmtUsdc(amount)} (redeem-gap 11b, need ${fmtUsdc(usdcNeeded)}, ops float ${fmtUsdc(ctx.contractUsdc)})`,
     );
-    await execTx('coverUsdcShortfall', () => ctx.kashYield.coverUsdcShortfall(amount));
+    await execTx('coverUsdcShortfall(redeem-gap)', () => ctx.kashYield.coverUsdcShortfall(amount));
   },
 };
 
@@ -2981,8 +3066,10 @@ export function buildRedeemTailOpStepsFalling(lockedNAV: bigint | undefined): Op
   ];
 }
 
-export function buildRedeemTailOpStepsRising(): OpStep[] {
+export function buildRedeemTailOpStepsRising(lockedNAV: bigint | undefined): OpStep[] {
   return [
+    tailCoverHlFeeShortfall,
+    risingTailCoverOwnerUsdc,
     aaveRepayContractFirst,
     aaveWithdrawPartial,
     dexSwapForUsdc,
@@ -2990,6 +3077,8 @@ export function buildRedeemTailOpStepsRising(): OpStep[] {
     aaveRepayRisingFinal,
     aaveRepayResidualDebtFromOwnerReserve,
     aaveWithdraw('remaining'),
+    risingTailCoverOwnerUsdcForRedeemGap,
+    dexSwapFromUsdc(lockedNAV),
   ];
 }
 
