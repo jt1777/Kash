@@ -71,24 +71,6 @@ async function main() {
   console.log("✅ KashTokenEth:", kashTokenEthAddress);
   console.log("   Aave pool:  ", await kashYieldEth.aavePoolAddress(), "(hardcoded mainnet)");
 
-  // Optional: register HyperliquidAdapter (first-time bypass is immediate; later registrations timelock).
-  const hyperliquidAddress = process.env.HL_ADAPTER_ADDRESS_ETH || "";
-  if (hyperliquidAddress && hre.ethers.isAddress(hyperliquidAddress)) {
-    const tx = await kashYieldEth.setHyperliquid(hyperliquidAddress);
-    await tx.wait();
-    const readyAt = await kashYieldEth.adapterReadyAt("HL");
-    const registered = await kashYieldEth.perpExchanges("HL");
-    if (registered !== hre.ethers.ZeroAddress && BigInt(readyAt.toString()) === 0n) {
-      console.log("✅ HyperliquidAdapter registered immediately (first-time bypass):", registered);
-      console.log("   Wire ExchangeFacade via kash-ops (see docs/DEPLOYMENT.md).");
-    } else {
-      console.log("✅ HyperliquidAdapter proposed. Timelock expires:", new Date(Number(readyAt) * 1000).toISOString());
-      console.log("   After timelock, confirm and wire via kash-ops docs/DEPLOYMENT.md.");
-    }
-  } else if (hyperliquidAddress) {
-    console.warn("⚠️  HL_ADAPTER_ADDRESS_ETH env set but invalid; skipping.");
-  }
-
   const fundAmount = process.env.FUND_KASHYIELD_ETH || "0";
   if (fundAmount !== "0") {
     const wei = hre.ethers.parseEther(fundAmount);
@@ -112,6 +94,7 @@ async function main() {
   console.log("Add to .env, frontend/.env.local, and private kash-ops repo .env:");
   console.log(`  KASH_YIELD_ETH_ADDRESS=${kashYieldEthAddress}`);
   console.log(`  KASH_TOKEN_ETH=${kashTokenEthAddress}`);
+  console.log("\nNext: deploy HyperliquidAdapter + ExchangeFacade, then wire via kash-ops scripts/wire-exchange-facade.js");
 
   const deploymentsDir = path.join(__dirname, "..", "deployments");
   if (!fs.existsSync(deploymentsDir)) {
@@ -132,9 +115,6 @@ async function main() {
       weth: await kashYieldEth.wethAddress(),
       usdc: await kashYieldEth.usdcAddress(),
     },
-    ...(hyperliquidAddress && hre.ethers.isAddress(hyperliquidAddress)
-      ? { hyperliquidAddress }
-      : {}),
   };
 
   const filename = `deployment-${network}-${Date.now()}.json`;
