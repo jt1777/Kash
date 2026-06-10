@@ -117,11 +117,8 @@ async function main() {
   console.log("\nNext steps:");
   console.log("  1. Add to .env:");
   console.log(`       ${envVarName}=${adapterAddress}`);
-  console.log("  2. Register the adapter on KashYield (first-time: immediate; subsequent: starts 24h timelock):");
-  console.log(`       ${kashYieldEnvVar}=<contract> HYPERLIQUID_ADDRESS=${adapterAddress} npx hardhat run scripts/setHyperliquid.js --network ${network}`);
-  console.log("  3. Activate HL as the live exchange (always immediate):");
-  console.log(`       ${kashYieldEnvVar}=<contract> EXCHANGE_NAME=HL npx hardhat run scripts/setActivePerpExchange.js --network ${network}`);
-  console.log("  (For 2nd+ adapter registrations, run confirmPerpExchange.js after the timelock before step 3)\n");
+  console.log("  2. Deploy ExchangeFacade, then wire via kash-ops scripts/wire-exchange-facade.js");
+  console.log("     (see kash-ops docs/DEPLOYMENT.md)\n");
 
   // Save to deployments/
   const deploymentsDir = path.join(__dirname, "..", "deployments");

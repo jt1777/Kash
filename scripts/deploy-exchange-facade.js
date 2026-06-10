@@ -26,7 +26,7 @@ async function main() {
 
   const facadeAddr = await facade.getAddress();
   console.log("ExchangeFacade:", facadeAddr);
-  console.log("Next:");
+  console.log("Next (kash-ops repo):");
   console.log("  npx hardhat run scripts/wire-exchange-facade.js --network <network>");
   console.log("  (set EXCHANGE_FACADE_* / HL_ADAPTER_ADDRESS_* + vault address + PRODUCT)");
 }

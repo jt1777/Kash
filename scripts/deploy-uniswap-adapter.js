@@ -16,7 +16,7 @@
 //   npx hardhat run scripts/deploy-uniswap-adapter.js --network arbitrumOne
 //
 // Usage (testnet — uses defaults automatically):
-//   npx hardhat run scripts/deploy-uniswap-adapter.js --network arbitrumSepolia
+//   npx hardhat run scripts/deploy-uniswap-adapter.js --network arbitrumOne
 //
 // Optional env var overrides:
 //   UNISWAP_ROUTER_ADDRESS   — override SwapRouter02 address
@@ -145,9 +145,7 @@ async function main() {
   console.log("====================================");
   console.log("\nAdd to .env and private kash-ops repo .env:");
   console.log(`  UNISWAP_ADAPTER_ADDRESS=${adapterAddress}`);
-  console.log("\nIf not auto-registered above, set manually:");
-  console.log(`  KASH_YIELD_ETH_ADDRESS=<addr> SPOT_DEX_ADDRESS=${adapterAddress} \\`);
-  console.log(`    npx hardhat run scripts/setSpotDex.js --network ${network}`);
+  console.log("\nIf not auto-registered above, set spot DEX via kash-ops scripts/setSpotDex.js");
   console.log("\nTo override fee tier for a specific pair after deploy:");
   console.log("  Call adapter.setFeeTierOverride(tokenIn, tokenOut, 3000) for 0.3% pool");
 

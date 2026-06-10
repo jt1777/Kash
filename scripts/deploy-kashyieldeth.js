@@ -1,17 +1,14 @@
-// scripts/deploy-arbitrum-sepolia.js
-// Deploys KashYieldETH (constructor: botAddress, weth, usdc). Aave pool is immutable (Arbitrum One mainnet pool).
+// scripts/deploy-kashyieldeth.js
+// Deploys KashYieldETH and KashTokenEth (constructor: botAddress, weth, usdc).
+// Aave pool is immutable (Arbitrum One mainnet pool in contract bytecode).
 //
-// Networks:
-//   - Arbitrum One: use --network arbitrumOne; built-in mainnet WETH/USDC (or WETH_ADDRESS / USDC_ADDRESS).
-//   - Arbitrum Sepolia: built-in testnet WETH/USDC defaults (or override via .env).
+// Usage:
+//   npx hardhat run scripts/deploy-kashyieldeth.js --network arbitrumOne
 //
 // Prerequisites:
 //   - Root .env: PRIVATE_KEY; RPC via hardhat.config (ARBITRUM_ONE_RPC_URL / ARBITRUM_SEPOLIA_RPC_URL).
 //   - Funded deployer on the target chain.
-//
-// Usage:
-//   npx hardhat run scripts/deploy-arbitrum-sepolia.js --network arbitrumOne
-//   npx hardhat run scripts/deploy-arbitrum-sepolia.js --network arbitrumSepolia
+//   - WETH_ADDRESS / USDC_ADDRESS optional — per-network defaults when unset.
 
 const hre = require("hardhat");
 const fs = require("fs");
@@ -30,7 +27,7 @@ async function main() {
   if (!deployer) {
     throw new Error(
       "No deployer account. Set PRIVATE_KEY in the project root .env file (not in scripts/). " +
-      "Run this from repo root: npx hardhat run scripts/deploy-arbitrum-sepolia.js --network arbitrumOne"
+      "Run this from repo root: npx hardhat run scripts/deploy-kashyieldeth.js --network arbitrumOne"
     );
   }
   console.log("Deploying to", network);
@@ -83,11 +80,10 @@ async function main() {
     const registered = await kashYieldEth.perpExchanges("HL");
     if (registered !== hre.ethers.ZeroAddress && BigInt(readyAt.toString()) === 0n) {
       console.log("✅ HyperliquidAdapter registered immediately (first-time bypass):", registered);
-      console.log("   Run scripts/setActivePerpExchange.js (EXCHANGE_NAME=HL) to activate.");
+      console.log("   Wire ExchangeFacade via kash-ops (see docs/DEPLOYMENT.md).");
     } else {
       console.log("✅ HyperliquidAdapter proposed. Timelock expires:", new Date(Number(readyAt) * 1000).toISOString());
-      console.log("   Step 2: Run scripts/confirmPerpExchange.js (EXCHANGE_NAME=HL) after 48 hours.");
-      console.log("   Step 3: Run scripts/setActivePerpExchange.js (EXCHANGE_NAME=HL) to activate.");
+      console.log("   After timelock, confirm and wire via kash-ops docs/DEPLOYMENT.md.");
     }
   } else if (hyperliquidAddress) {
     console.warn("⚠️  HL_ADAPTER_ADDRESS_ETH env set but invalid; skipping.");
