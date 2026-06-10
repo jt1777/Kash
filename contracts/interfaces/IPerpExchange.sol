@@ -3,7 +3,7 @@ pragma solidity ^0.8.28;
 
 /**
  * @title IPerpExchange
- * @notice Shared interface for all perpetual exchange adapters (Hyperliquid, GMX, Aster, ...).
+ * @notice Shared interface for perpetual exchange adapters (e.g. HyperliquidAdapter).
  *
  * Each adapter is a standalone contract that translates these standardised calls into the
  * underlying exchange's native API.  The main KashYield contracts hold an exchange registry

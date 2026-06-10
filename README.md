@@ -9,7 +9,7 @@ A capital-efficient yield strategy protocol. Users deposit ETH or wBTC and recei
 - **Configurable batch cycle**: Default 24-hour cycle. Owner can adjust duration for testing or production.
 - **ExchangeFacade**: Perp exchange registry and Hyperliquid write ops live in a separate `ExchangeFacade` contract (bytecode headroom). The vault holds `exchangeFacade` and forwards HL view calls.
 - **Merkle pull claims (redeems)**: Users call `claimRedeem(batchCycle, amount, proof)` to receive ETH/wBTC after settlement. Mint payouts remain push-based.
-- **Multi-exchange adapter pattern**: Perpetual adapters (`HyperliquidAdapter`, GMX, Aster) implement `IPerpExchange` and are registered on **ExchangeFacade**.
+- **Perp adapter pattern**: `HyperliquidAdapter` implements `IPerpExchange` and is registered on **ExchangeFacade** (additional adapters can be added via the facade registry).
 - **Spot DEX integration**: An `ISpotDex` adapter (e.g. UniswapV3Adapter) enables on-chain asset ↔ USDC swaps with configurable slippage caps.
 - **24-hour timelock on adapter registration**: On **ExchangeFacade**, the first adapter is immediate; subsequent registrations use proposal + confirmation after the facade timelock.
 - **Batch user caps**: `MAX_MINT_USERS` / `MAX_REDEEM_USERS` (500) enforced via active per-cycle counters.
@@ -29,8 +29,6 @@ A capital-efficient yield strategy protocol. Users deposit ETH or wBTC and recei
 | `interfaces/IPerpExchange.sol` | Common interface for all perp exchange adapters |
 | `interfaces/ISpotDex.sol` | Common interface for spot DEX adapters |
 | `adapters/HyperliquidAdapter.sol` | `IPerpExchange` + ERC-1271 for HL REST when adapter is HL master |
-| `adapters/GMXAdapter.sol` | `IPerpExchange` implementation for GMX V2 (Arbitrum) |
-| `adapters/AsterAdapter.sol` | `IPerpExchange` implementation for Aster DEX |
 | `adapters/UniswapV3Adapter.sol` | `ISpotDex` implementation for Uniswap V3 spot swaps |
 
 | Aspect | Behaviour |
