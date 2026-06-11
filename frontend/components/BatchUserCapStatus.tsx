@@ -29,8 +29,11 @@ export function BatchUserCapStatus({
 
   if (batchProcessed) {
     return (
-      <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
-        <p className="text-sm text-gray-700">
+      <div
+        className="rounded-lg border p-3"
+        style={{ backgroundColor: 'rgba(255, 255, 255, 0.08)', borderColor: 'rgba(255, 255, 255, 0.18)' }}
+      >
+        <p className="text-sm text-white/80">
           {batchCapSummary(kind, usersCount, cap)} — today&apos;s batch has finished processing. New
           requests join the next cycle.
         </p>
@@ -40,18 +43,24 @@ export function BatchUserCapStatus({
 
   if (blocked) {
     return (
-      <div className="rounded-lg border border-amber-300 bg-amber-50 p-3">
-        <p className="text-sm font-semibold text-amber-900">{batchCapSummary(kind, usersCount, cap)}</p>
-        <p className="text-sm text-amber-800 mt-1">{batchCapNotice(kind, usersCount, cap)}</p>
+      <div
+        className="rounded-lg border p-3"
+        style={{ backgroundColor: 'rgba(245, 158, 11, 0.16)', borderColor: 'rgba(245, 158, 11, 0.35)' }}
+      >
+        <p className="text-sm font-semibold text-amber-100">{batchCapSummary(kind, usersCount, cap)}</p>
+        <p className="text-sm text-amber-100/90 mt-1">{batchCapNotice(kind, usersCount, cap)}</p>
       </div>
     );
   }
 
   if (atCap && userAlreadyInBatch) {
     return (
-      <div className="rounded-lg border border-blue-200 bg-blue-50 p-3">
-        <p className="text-sm font-medium text-blue-900">{batchCapSummary(kind, usersCount, cap)}</p>
-        <p className="text-sm text-blue-800 mt-1">
+      <div
+        className="rounded-lg border p-3"
+        style={{ backgroundColor: 'rgba(59, 130, 246, 0.16)', borderColor: 'rgba(59, 130, 246, 0.35)' }}
+      >
+        <p className="text-sm font-medium text-blue-100">{batchCapSummary(kind, usersCount, cap)}</p>
+        <p className="text-sm text-blue-100/90 mt-1">
           The wallet limit is reached for new participants, but you already have a request this cycle
           and can add to it.
         </p>
@@ -59,15 +68,29 @@ export function BatchUserCapStatus({
     );
   }
 
-  const borderClass = nearCap ? 'border-amber-200 bg-amber-50/70' : 'border-gray-200 bg-gray-50';
-  const textClass = nearCap ? 'text-amber-900' : 'text-gray-700';
+  if (nearCap) {
+    return (
+      <div
+        className="rounded-lg border p-3"
+        style={{ backgroundColor: 'rgba(245, 158, 11, 0.16)', borderColor: 'rgba(245, 158, 11, 0.35)' }}
+      >
+        <p className="text-sm text-amber-100">
+          {batchCapSummary(kind, usersCount, cap)}. Each batch accepts up to {cap} unique wallets for{' '}
+          {kind === 'mint' ? 'deposits' : 'redemptions'}. Slots are almost gone — submit soon or wait
+          for the next cycle.
+        </p>
+      </div>
+    );
+  }
 
   return (
-    <div className={`rounded-lg border p-3 ${borderClass}`}>
-      <p className={`text-sm ${textClass}`}>
+    <div
+      className="rounded-lg border p-3"
+      style={{ backgroundColor: 'rgba(0, 255, 255, 0.08)', borderColor: 'rgba(0, 255, 255, 0.22)' }}
+    >
+      <p className="text-sm text-cyan-50">
         {batchCapSummary(kind, usersCount, cap)}. Each batch accepts up to {cap} unique wallets for{' '}
         {kind === 'mint' ? 'deposits' : 'redemptions'}.
-        {nearCap ? ' Slots are almost gone — submit soon or wait for the next cycle.' : ''}
       </p>
     </div>
   );

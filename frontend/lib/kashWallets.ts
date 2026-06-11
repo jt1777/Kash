@@ -35,9 +35,9 @@ function hasRainbowInjected(): boolean {
   );
 }
 
-/** Rabby mobile universal link (WalletConnect). */
+/** Rabby mobile native deep link (WalletConnect). */
 function rabbyMobileUri(uri: string): string {
-  return `https://rabby.io/wc?uri=${encodeURIComponent(uri)}`;
+  return `rabby://wc?uri=${encodeURIComponent(uri)}`;
 }
 
 /** Rainbow mobile universal link — avoids iOS blocking `rainbow://` custom schemes. */
