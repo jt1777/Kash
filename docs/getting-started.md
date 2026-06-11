@@ -1,38 +1,38 @@
 # Getting Started
 
-This guide walks you through everything you need before making your first deposit.
+This guide covers the prerequisites for making a first deposit.
 
 ---
 
-## What you need
+## Requirements
 
-- **A wallet** — Rabby, Coinbase Wallet, or Rainbow wallet.  Metamask wallet is not recommended as it indiscrimmately blocks legitmate contracts.
-- **Arbitrum One** added to your wallet (chain ID **42161**)
+- **A wallet** — Rabby, Coinbase Wallet, or Rainbow wallet. Metamask wallet is not recommended as it indiscriminately blocks legitimate contracts.
+- **Arbitrum One** added to the wallet (chain ID **42161**)
 - **ETH** on Arbitrum One for gas, and **ETH** (for KASH-ETH) or **wBTC** (for KASH-BTC) to deposit
 
-> KASH runs on **Arbitrum One**. You are using **real assets** — only deposit what you can afford to lose, and read [Risks](risks.md) first.
+> KASH runs on **Arbitrum One**. The protocol uses **real assets** — only amounts that can be affordably lost should be deposited, and [Risks](risks.md) should be reviewed first.
 
 ---
 
-## Step 1 — Add Arbitrum One to your wallet
+## Step 1 — Add Arbitrum One to the wallet
 
-If your wallet does not already have Arbitrum One, add it manually:
+If Arbitrum One is not already configured, add it manually:
 
 | Setting | Value |
 |---------|-------|
 | Network name | Arbitrum One |
-| RPC URL | `https://arb1.arbitrum.io/rpc` (or your provider, e.g. Alchemy) |
+| RPC URL | `https://arb1.arbitrum.io/rpc` (or a preferred provider, e.g. Alchemy) |
 | Chain ID | `42161` |
 | Currency symbol | `ETH` |
 | Block explorer | `https://arbiscan.io` |
 
-Most wallets also let you add it from [Chainlist](https://chainlist.org/chain/42161).
+Most wallets also support adding the network from [Chainlist](https://chainlist.org/chain/42161).
 
 ---
 
 ## Step 2 — Get ETH and wBTC on Arbitrum One
 
-You need **ETH on Arbitrum** to pay gas and to use KASH-ETH.
+**ETH on Arbitrum** is required to pay gas and to use KASH-ETH.
 
 **Common options:**
 
@@ -40,30 +40,30 @@ You need **ETH on Arbitrum** to pay gas and to use KASH-ETH.
 - Withdraw from a centralized exchange directly to Arbitrum One
 - Use another L2 bridge or on-ramp that supports Arbitrum
 
-For **KASH-BTC**, hold **wBTC** on Arbitrum One (`0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f`). Acquire wBTC via a DEX or bridge, then use the app on the BTC tab.
+For **KASH-BTC**, **wBTC** must be held on Arbitrum One (`0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f`). wBTC can be acquired via a DEX or bridge, then the app can be used on the BTC tab.
 
 ---
 
-## Step 3 — Connect your wallet to the app
+## Step 3 — Connect the wallet to the app
 
 1. On the homepage, click **Launch App**
 2. Click **Connect Wallet** in the top-right corner
-3. Select your wallet and approve the connection
-4. Make sure your wallet is on **Arbitrum One** — the app will show **Wrong network** if you are on another chain
+3. Select the wallet and approve the connection
+4. Ensure the wallet is on **Arbitrum One** — the app will show **Wrong network** if another chain is selected
 
 ---
 
-## Step 4 — Choose your product
+## Step 4 — Choose a product
 
-Once connected, you will see two tabs:
+Once connected, two tabs are available:
 
 - **KASH-ETH** — deposit ETH, earn yield
 - **KASH-BTC** — deposit wBTC, earn yield
 
-Select the one you want to use.
+Select the desired product.
 
 ---
 
-## You are ready
+## Ready to deposit
 
-You can now [make a deposit](depositing.md).
+Deposits can proceed via [Depositing](depositing.md).

@@ -4,17 +4,16 @@ import { useState, useMemo, useEffect } from 'react';
 import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadContract, useBalance, useEstimateFeesPerGas } from 'wagmi';
 import { CONTRACTS, ARBITRUM_ONE_BLOCK_EXPLORER, HARDHAT_CHAIN_ID } from '@/lib/contracts/addresses';
 import { ContractVerifiedBadge } from '@/components/ContractVerifiedBadge';
+import { BatchUserCapStatus } from '@/components/BatchUserCapStatus';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 import { kashTokenABI } from '@/lib/contracts/kashTokenABI';
 import { usePendingBatchRequest } from '@/lib/usePendingBatchRequest';
+import { useBatchUserCap } from '@/lib/useBatchUserCap';
 import {
   BATCH_USER_CAP,
-  type BatchInfoRow,
   batchCapNotice,
-  isBatchProcessed,
+  batchCapSubmitLabel,
   isMintCapReachedError,
-  isNewUserBlockedByBatchCap,
-  mintUsersCountFromBatchInfo,
 } from '@/lib/batchUserCap';
 import { chainlinkAggregatorABI } from '@/lib/contracts/chainlinkAggregatorABI';
 import { parseEther, parseUnits, formatEther, formatUnits, zeroAddress } from 'viem';
@@ -151,13 +150,12 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
     functionName: 'getCurrentBatchCycle',
   });
 
-  const { data: batchInfo } = useReadContract({
-    address: kashYield,
-    abi: kashYieldABI,
-    functionName: 'getBatchInfo',
-    args: currentBatchCycle !== undefined ? [currentBatchCycle] : undefined,
-    query: { refetchInterval: 15000 },
-  });
+  const {
+    batchProcessed,
+    mintUsersCount,
+    maxMintUsers,
+    mintBlocked,
+  } = useBatchUserCap(kashYield);
 
   const { cancellable: cancellableMint, stuck: stuckMint, refetch: refetchPendingLookback } =
     usePendingBatchRequest({
@@ -213,11 +211,8 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
     query: { refetchInterval: 15000 },
   });
 
-  const batchInfoRow = batchInfo as BatchInfoRow | undefined;
-  const batchProcessed = isBatchProcessed(batchInfoRow);
-  const mintUsersCount = mintUsersCountFromBatchInfo(batchInfoRow);
   const userInCurrentMintBatch = (currentCycleMintRequest?.amountIn ?? 0n) > 0n;
-  const mintBatchCapBlocked = isNewUserBlockedByBatchCap(mintUsersCount, userInCurrentMintBatch) && !batchProcessed;
+  const mintBatchCapBlocked = mintBlocked(userInCurrentMintBatch);
   const canCancelMint = Boolean(cancellableMint && cancellableMint.amount > 0n);
   const hasStuckMint = Boolean(stuckMint && stuckMint.amount > 0n);
 
@@ -486,6 +481,13 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
           </div>
         </div>
       )}
+      <BatchUserCapStatus
+        kind="mint"
+        usersCount={mintUsersCount}
+        cap={maxMintUsers}
+        batchProcessed={batchProcessed}
+        userAlreadyInBatch={userInCurrentMintBatch}
+      />
       {/* Token (single option per product) */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-sm font-medium text-gray-700">
@@ -616,13 +618,6 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
         </div>
       )}
 
-      {mintBatchCapBlocked && mintUsersCount !== null && (
-        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
-          <p className="text-sm font-medium text-amber-900">Mint batch full</p>
-          <p className="text-sm text-amber-800 mt-1">{batchCapNotice('mint', mintUsersCount)}</p>
-        </div>
-      )}
-
       {/* Action Buttons */}
       <div className="space-y-2">
         {needsApproval && (
@@ -652,7 +647,9 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
           }
           className="w-full px-6 py-3 bg-linear-to-r from-indigo-600 to-purple-600 text-white rounded-lg font-medium hover:from-indigo-700 hover:to-purple-700 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed cursor-pointer transition-all shadow-lg"
         >
-          {isMintPending || isMintConfirming ? 'Processing...' : 'Submit Mint Request'}
+          {isMintPending || isMintConfirming
+            ? 'Processing...'
+            : batchCapSubmitLabel('mint', mintBatchCapBlocked, maxMintUsers)}
         </button>
       </div>
 
@@ -670,7 +667,9 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
             <>
               <p className="text-sm font-medium text-red-800">Mint batch full</p>
               <p className="text-xs text-red-600 mt-1.5 leading-relaxed">
-                {mintUsersCount !== null ? batchCapNotice('mint', mintUsersCount) : batchCapNotice('mint', BATCH_USER_CAP)}
+                {mintUsersCount !== null
+                  ? batchCapNotice('mint', mintUsersCount, maxMintUsers)
+                  : batchCapNotice('mint', BATCH_USER_CAP, maxMintUsers)}
               </p>
             </>
           ) : (

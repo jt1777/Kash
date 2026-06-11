@@ -1,8 +1,8 @@
 # Risks & Safeguards
 
-KASH is a Decentralized Finance protocol on **Arbitrum One** mainnet. Using it means depositing real assets; you should understand the risks involved.
+KASH is a Decentralized Finance protocol on **Arbitrum One** mainnet. Participation involves depositing real assets; the risks involved should be understood before use.
 
-> **Important:** Treat KASH as high risk until you are satisfied with contract review and operational security. Only deposit what you can afford to lose.
+> **Important:** KASH should be treated as high risk until contract review and operational security are satisfactory. Only amounts that can be affordably lost should be deposited.
 
 ---
 
@@ -14,11 +14,11 @@ The protocol is governed entirely by smart contracts. If there is a bug in the c
 - New exchanges that KASH may interact with require a **24-hour waiting period** before they can be activated (preventing a compromised key from instantly routing funds to a malicious contract)
 - An emergency pause function exists that can halt all user activity
 
-**What you can do:** Click the Contract Address link in the app footer. This takes you straight to the verified contract page on Arbiscan.  
+**Verification steps:** The Contract Address link in the app footer leads to the verified contract page on Arbiscan.
 
-Our contracts are fully source-code verified on Arbiscan, so you can review the complete Solidity source code under the Contract tab. Arbiscan has already confirmed that this code compiles byte-for-byte into the exact bytecode deployed on Arbitrum.  
+Contracts are fully source-code verified on Arbiscan, so the complete Solidity source code can be reviewed under the Contract tab. Arbiscan has confirmed that this code compiles byte-for-byte into the exact bytecode deployed on Arbitrum.
 
-For maximum transparency, we also publish the full source code in our public GitHub repository — you can cross-check it against the verified code on Arbiscan to confirm it matches the official version the team intended to deploy.
+For maximum transparency, the full source code is also published in the public GitHub repository — it can be cross-checked against the verified code on Arbiscan to confirm it matches the official version the team intended to deploy.
 
 
 ---
@@ -61,13 +61,13 @@ Protocol operations — batch processing, capital deployment, and NAV updates �
 
 ## Oracle risk
 
-The value of your deposit at batch time is calculated using on-chain price feeds. If a price feed provides incorrect or stale data, you could receive fewer KASH tokens than expected when depositing, or fewer assets when redeeming. Industry-standard oracle providers are used, but no price feed is entirely risk-free.
+The value of a deposit at batch time is calculated using on-chain price feeds. If a price feed provides incorrect or stale data, fewer KASH tokens than expected may be received on deposit, or fewer assets on redemption. Industry-standard oracle providers are used, but no price feed is entirely risk-free.
 
 ---
 
 ## No insurance
 
-Funds deposited in KASH are not insured. There is no protocol-level insurance fund at this stage. Do not deposit more than you are willing to lose.
+Funds deposited in KASH are not insured. There is no protocol-level insurance fund at this stage. Deposits should not exceed amounts participants are willing to lose.
 
 ---
 
@@ -97,11 +97,11 @@ KASH is designed with layered protections against **external exploits** (hacks, 
 
 ### Protections against owner misuse
 
-**Pending user funds are ring-fenced.** When you submit a deposit, your ETH or wBTC is tracked in an on-chain **reserved** balance. Owner withdrawal functions can only take assets **above** what is reserved for pending mints and estimated redeems across recent unprocessed batches. Any attempt to withdraw reserved funds **reverts automatically**.
+**Pending user funds are ring-fenced.** When a deposit is submitted, ETH or wBTC is tracked in an on-chain **reserved** balance. Owner withdrawal functions can only take assets **above** what is reserved for pending mints and estimated redeems across recent unprocessed batches. Any attempt to withdraw reserved funds **reverts automatically**.
 
-**Users can cancel before the batch runs.** While the user window is open and the batch has not entered processing, you can **cancel** a pending mint or redeem and receive your assets or KASH back — without owner involvement.
+**Users can cancel before the batch runs.** While the user window is open and the batch has not entered processing, a pending mint or redeem may be **cancelled** and assets or KASH returned — without owner involvement.
 
-**Users can self-rescue if the contract is paused.** If the contract is paused, dedicated emergency withdrawal paths let you reclaim a **still-pending** request directly from the contract. These paths do not go through the owner. They require interacting with the contract directly (e.g. Arbiscan “Write Contract”) rather than the app UI.
+**Users can self-rescue if the contract is paused.** If the contract is paused, dedicated emergency withdrawal paths allow reclamation of a **still-pending** request directly from the contract. These paths do not go through the owner. They require interacting with the contract directly (e.g. Arbiscan “Write Contract”) rather than the app UI.
 
 **Rescue function cannot take deposit collateral.** Token rescue is blocked for the vault’s primary deposit asset (ETH/wBTC), so the owner cannot use “token rescue” as a back door to sweep user collateral.
 

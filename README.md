@@ -1,6 +1,6 @@
-# KashYield - Enhanced Yield Strategy Protocol
+# Kash - Enhanced Yield Strategy Protocol
 
-A capital-efficient yield strategy protocol. Users deposit ETH or wBTC and receive KASH tokens representing their share of the portfolio. NAV-based pricing, configurable batch settlement cycles, multi-exchange perpetual hedging via an adapter pattern, and Aave lending integration.
+Kash is an AI-managed, leveraged yield protocol. ETH and Bitcoin deposits are posted as collateral on Aave to fund a perpetual futures position on Hyperliquid. The strategy is market-neutral — it earns funding rate premiums without taking directional risk. An AI agent runs the entire operational stack: batch settlement, rebalancing, and NAV pricing, autonomously and continuously. Deposits are segregated by smart contract, and all positions are independently auditable on-chain in real time.
 
 ## Key Features
 

@@ -4,18 +4,17 @@ import { useState, useMemo, useEffect } from 'react';
 import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadContract, useReadContracts, useEstimateFeesPerGas, usePublicClient } from 'wagmi';
 import { CONTRACTS, ARBITRUM_ONE_BLOCK_EXPLORER, HARDHAT_CHAIN_ID } from '@/lib/contracts/addresses';
 import { ContractVerifiedBadge } from '@/components/ContractVerifiedBadge';
+import { BatchUserCapStatus } from '@/components/BatchUserCapStatus';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 import { kashTokenABI } from '@/lib/contracts/kashTokenABI';
 import { usePendingBatchRequest, type PendingBatchRequest } from '@/lib/usePendingBatchRequest';
 import { resolveClaimProof, formatClaimPayoutAmount } from '@/lib/redeemProofs';
+import { useBatchUserCap } from '@/lib/useBatchUserCap';
 import {
   BATCH_USER_CAP,
-  type BatchInfoRow,
   batchCapNotice,
-  isBatchProcessed,
-  isNewUserBlockedByBatchCap,
+  batchCapSubmitLabel,
   isRedeemCapReachedError,
-  redeemUsersCountFromBatchInfo,
 } from '@/lib/batchUserCap';
 import { parseEther, formatEther } from 'viem';
 import { useChainId } from 'wagmi';
@@ -104,13 +103,12 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
     functionName: 'getCurrentBatchCycle',
   });
 
-  const { data: batchInfo } = useReadContract({
-    address: kashYield,
-    abi: kashYieldABI,
-    functionName: 'getBatchInfo',
-    args: currentBatchCycle !== undefined ? [currentBatchCycle] : undefined,
-    query: { refetchInterval: 15_000 },
-  });
+  const {
+    batchProcessed,
+    redeemUsersCount,
+    maxRedeemUsers,
+    redeemBlocked,
+  } = useBatchUserCap(kashYield);
 
   const { data: currentNav, isFetched: navFetched } = useReadContract({
     address: kashYield,
@@ -227,12 +225,8 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
     query: { refetchInterval: 15000 },
   });
 
-  const batchInfoRow = batchInfo as BatchInfoRow | undefined;
-  const batchProcessed = isBatchProcessed(batchInfoRow);
-  const redeemUsersCount = redeemUsersCountFromBatchInfo(batchInfoRow);
   const userInCurrentRedeemBatch = (currentCycleRedeemRequest?.kashAmount ?? 0n) > 0n;
-  const redeemBatchCapBlocked =
-    isNewUserBlockedByBatchCap(redeemUsersCount, userInCurrentRedeemBatch) && !batchProcessed;
+  const redeemBatchCapBlocked = redeemBlocked(userInCurrentRedeemBatch);
 
   const canCancelRedeem = Boolean(cancellableRedeem && cancellableRedeem.amount > 0n);
   const hasStuckRedeem = Boolean(stuckRedeem && stuckRedeem.amount > 0n);
@@ -502,6 +496,13 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
           </div>
         </div>
       )}
+      <BatchUserCapStatus
+        kind="redeem"
+        usersCount={redeemUsersCount}
+        cap={maxRedeemUsers}
+        batchProcessed={batchProcessed}
+        userAlreadyInBatch={userInCurrentRedeemBatch}
+      />
       {/* Token (single option per product) */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-sm font-medium text-gray-700">
@@ -623,13 +624,6 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
         </div>
       )}
 
-      {redeemBatchCapBlocked && redeemUsersCount !== null && (
-        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
-          <p className="text-sm font-medium text-amber-900">Redeem batch full</p>
-          <p className="text-sm text-amber-800 mt-1">{batchCapNotice('redeem', redeemUsersCount)}</p>
-        </div>
-      )}
-
       {/* Action Buttons */}
       <div className="space-y-2">
         {needsApproval && (
@@ -656,7 +650,9 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
           }
           className="w-full px-6 py-3 bg-linear-to-r from-purple-600 to-pink-600 text-white rounded-lg font-medium hover:from-purple-700 hover:to-pink-700 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed cursor-pointer transition-all shadow-lg"
         >
-          {isRedeemPending || isRedeemConfirming ? 'Processing...' : 'Submit Redeem Request'}
+          {isRedeemPending || isRedeemConfirming
+            ? 'Processing...'
+            : batchCapSubmitLabel('redeem', redeemBatchCapBlocked, maxRedeemUsers)}
         </button>
       </div>
 
@@ -674,8 +670,8 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
               <p className="text-sm font-medium text-red-800">Redeem batch full</p>
               <p className="text-xs text-red-600 mt-1.5 leading-relaxed">
                 {redeemUsersCount !== null
-                  ? batchCapNotice('redeem', redeemUsersCount)
-                  : batchCapNotice('redeem', BATCH_USER_CAP)}
+                  ? batchCapNotice('redeem', redeemUsersCount, maxRedeemUsers)
+                  : batchCapNotice('redeem', BATCH_USER_CAP, maxRedeemUsers)}
               </p>
             </>
           ) : (

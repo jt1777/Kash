@@ -465,7 +465,7 @@ function AppContent() {
               </div>
               <h3 className="font-semibold text-gray-900 mb-2">Low Fees</h3>
               <p className="text-sm text-gray-600">
-                Only 0.05% (5 bps) fee on all transactions. No hidden costs.
+                Only 0.05% (5 bps) protocol fee.  Related DeFi costs applicable.
               </p>
             </div>            
           </div>

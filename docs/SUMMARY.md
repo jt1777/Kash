@@ -13,6 +13,7 @@
 ## How It Works
 
 * [How Yield Works](how-yield-works.md)
+* [Fees](fees.md)
 * [Risks & Safeguards](risks.md)
 
 ## Roadmap
