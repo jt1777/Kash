@@ -16,6 +16,35 @@ There is no separate claim step — ETH or wBTC arrives in the wallet after the 
 
 ---
 
+## Batch wallet limit
+
+Each batch cycle accepts at most **500 unique wallet addresses** for redemptions. This is a hard on-chain limit (`MAX_REDEEM_USERS`).
+
+- When the limit is reached, **new wallets** cannot submit a redemption request for that cycle.
+- A wallet that **already has a pending redemption** in the current cycle may add to its existing request.
+- If a participant **cancels** before batch processing, that slot becomes available for another wallet.
+
+The app shows how many redeem slots are used in the current cycle (for example, `142/500 wallets`).
+
+Mint and redeem limits are tracked **separately** — a full mint batch does not block redemptions, and vice versa.
+
+---
+
+## Batch timing and capacity
+
+Batch **cycle length** and **processing windows** are configurable on-chain to accommodate demand. The operator can adjust parameters such as `cycleDurationSeconds` and the user vs processing windows.
+
+At launch, the typical schedule is:
+
+| Phase | Typical time (UTC) |
+|-------|-------------------|
+| User window | Submissions accepted throughout the cycle (e.g. until ~23:45) |
+| Processing window | Batch runs (~23:45–23:59) |
+
+If demand grows, cycles may be shortened or scheduling updated so more batches run per day. Confirm the live schedule in the app before submitting a request.
+
+---
+
 ## Yield on exit
 
 On redemption, assets are returned based on the **current NAV** at the time of the batch. Because NAV increases as the protocol earns yield, the redemption value typically exceeds the original deposit value.

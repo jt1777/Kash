@@ -1,5 +1,4 @@
 import {
-  getWalletConnectConnector,
   type RainbowKitWalletConnectParameters,
   type Wallet,
 } from '@rainbow-me/rainbowkit';
@@ -35,11 +34,6 @@ function hasRainbowInjected(): boolean {
   );
 }
 
-/** Rabby mobile native deep link (WalletConnect). */
-function rabbyMobileUri(uri: string): string {
-  return `rabby://wc?uri=${encodeURIComponent(uri)}`;
-}
-
 /** Rainbow mobile universal link — avoids iOS blocking `rainbow://` custom schemes. */
 function rainbowMobileUri(uri: string): string {
   return `https://rnbwapp.com/wc?uri=${encodeURIComponent(uri)}&connector=rainbowkit`;
@@ -47,15 +41,13 @@ function rainbowMobileUri(uri: string): string {
 
 /**
  * Desktop: injected Rabby extension.
- * Mobile browser: WalletConnect + Rabby app deep link (stock rabbyWallet is extension-only).
+ * Rabby Mobile: only show direct Rabby inside Rabby's in-app browser, where it injects a provider.
+ * External mobile browsers do not reliably hand WalletConnect URIs to Rabby Mobile.
  */
-export function kashRabbyWallet({
-  projectId,
-  walletConnectParameters,
-}: KashWalletOptions): Wallet {
+export function kashRabbyWallet(_options: KashWalletOptions): Wallet {
   const extensionWallet = rabbyWallet();
   const isInjected = hasRabbyInjected();
-  const useWalletConnect = isMobileBrowser() && !isInjected;
+  const isMobile = isMobileBrowser();
 
   const downloadUrls = {
     ...extensionWallet.downloadUrls,
@@ -64,47 +56,11 @@ export function kashRabbyWallet({
     mobile: 'https://rabby.io/',
   };
 
-  if (!useWalletConnect) {
-    return {
-      ...extensionWallet,
-      downloadUrls,
-      installed: isInjected || (isMobileBrowser() ? undefined : extensionWallet.installed),
-    };
-  }
-
   return {
     ...extensionWallet,
-    installed: undefined,
     downloadUrls,
-    mobile: { getUri: rabbyMobileUri },
-    qrCode: {
-      getUri: rabbyMobileUri,
-      instructions: {
-        learnMoreUrl: 'https://rabby.io/',
-        steps: [
-          {
-            step: 'install',
-            title: 'Install Rabby Mobile',
-            description: 'Get Rabby from the App Store or Google Play.',
-          },
-          {
-            step: 'create',
-            title: 'Open Rabby',
-            description: 'Return here and tap Rabby again to approve the connection.',
-          },
-          {
-            step: 'refresh',
-            title: 'Stay in the browser',
-            description:
-              'If Rabby does not open automatically, open the app manually and approve the pending WalletConnect request.',
-          },
-        ],
-      },
-    },
-    createConnector: getWalletConnectConnector({
-      projectId,
-      walletConnectParameters,
-    }),
+    installed: isInjected || (isMobile ? undefined : extensionWallet.installed),
+    hidden: () => isMobileBrowser() && !hasRabbyInjected(),
   };
 }
 

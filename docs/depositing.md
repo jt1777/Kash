@@ -25,6 +25,33 @@ This means there is a **waiting period** between request submission and KASH tok
 
 ---
 
+## Batch wallet limit
+
+Each batch cycle accepts at most **500 unique wallet addresses** for deposits. This is a hard on-chain limit (`MAX_MINT_USERS`).
+
+- When the limit is reached, **new wallets** cannot submit a mint request for that cycle.
+- A wallet that **already has a pending deposit** in the current cycle may add to its existing request.
+- If a participant **cancels** before batch processing, that slot becomes available for another wallet.
+
+The app shows how many mint slots are used in the current cycle (for example, `142/500 wallets`).
+
+---
+
+## Batch timing and capacity
+
+Batch **cycle length** and **processing windows** are configurable on-chain to accommodate demand. The operator can adjust parameters such as `cycleDurationSeconds` and the user vs processing windows.
+
+At launch, the typical schedule is:
+
+| Phase | Typical time (UTC) |
+|-------|-------------------|
+| User window | Submissions accepted throughout the cycle (e.g. until ~23:45) |
+| Processing window | Batch runs (~23:45–23:59) |
+
+If demand grows, cycles may be shortened or scheduling updated so more batches run per day. Confirm the live schedule in the app before submitting a request.
+
+---
+
 ## Step-by-step: deposit ETH
 
 1. Open the app and ensure the **ETH** tab is selected
