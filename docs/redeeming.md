@@ -10,9 +10,9 @@ Like deposits, redemptions go through the **daily batch**:
 
 1. A redemption request is submitted, specifying how many KASH tokens to redeem
 2. KASH tokens are locked in the contract until the batch runs
-3. At the next batch (around **23:59 UTC**), KASH is burned and underlying assets are returned to the redeemer's wallet automatically
+3. At the next batch (around **23:59 UTC**), KASH is burned and the redeem amount becomes claimable
 
-There is no separate claim step — ETH or wBTC arrives in the wallet after the batch completes.
+After settlement, use the app's **Claim** button to receive ETH or wBTC. The claim uses a Merkle proof published for the processed batch.
 
 ---
 
@@ -64,7 +64,7 @@ Yield is the difference in NAV between entry and exit.
 3. If prompted, **Approve** the contract to spend KASH tokens
 4. Click **Redeem** and confirm the transaction
 5. Wait for the daily batch (by 23:59 UTC)
-6. ETH or wBTC will arrive in the wallet automatically
+6. Click **Claim** after settlement to receive ETH or wBTC
 
 ---
 

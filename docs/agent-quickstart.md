@@ -16,7 +16,7 @@ KASH is not a guaranteed-yield product. Before allocating capital, verify the co
 | Product | KashYield vault | KASH token | Deposit asset |
 |---------|-----------------|------------|---------------|
 | KASH-ETH | `0x92c5833Deaac65a7aCB47867Cf009cAC1bF1dD5a` | `0x8642483DcCE55270692aD559dCac7cf7eA0F9Bd9` | Native ETH or WETH |
-| KASH-BTC | `0x1e7cFC456df4f38e5F1715C585145280aB89bE46` | `0x184E5A30311018Fc0F03140C63515cA6391788D5` | wBTC (`0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f`) |
+| KASH-BTC | `0x26a2610F360049787F3E34912AAA27CA397d4a99` | `0x8EaEf1D89B363c4DFF1d7D69843faC7744198660` | wBTC (`0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f`) |
 
 Source of truth in the app:
 
@@ -35,7 +35,7 @@ Before sending a transaction, read from the vault contract (via the KashYield AB
 - Whether the contract is **paused**
 - Whether the **user window** is open (deposits/redemptions allowed)
 - Whether the **processing window** is active (batch running)
-- Current **NAV**
+- Current **NAV** (`currentNAV()`; `getNAV()` is also available)
 - Protocol **fee** in basis points
 - Current **batch cycle** and **batch info** for that cycle
 
@@ -125,8 +125,9 @@ Useful reads (method names in KashYield ABI):
 - Batch info for a cycle
 - KASH token balance for the user
 - Current NAV
+- Redeem claim info and claimed status, when monitoring settled redeems
 
-Do not assume immediate KASH receipt after a deposit request. Wait for batch processing and confirm the KASH token balance.
+Do not assume immediate KASH receipt after a deposit request. Wait for batch processing and confirm the KASH token balance. For redeems, wait for settlement, load the hosted claim proof for the batch, then call `claimRedeem`.
 
 ---
 
@@ -171,6 +172,17 @@ await wallet.writeContract({
 ```
 
 Watch for **RedeemRequested**, then batch settlement.
+
+After settlement, claim the underlying asset with the Merkle proof published for the batch:
+
+```ts
+await wallet.writeContract({
+  address: kashYieldBtc,
+  abi: kashYieldAbi,
+  functionName: 'claimRedeem',
+  args: [batchCycle, claimAmount, proof],
+});
+```
 
 ---
 

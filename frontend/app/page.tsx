@@ -51,16 +51,18 @@ export default function Home() {
       },
     },
     scheduleHint:
-      'Mint/redeem requests accepted until batch cutoff (~23:45 UTC); settles during processing — confirm timing in docs / contract.',
+      'Mint/redeem requests accepted until batch cutoff (~23:45 UTC); mints settle automatically, redeems become claimable after processing.',
     reads: [
       'isUserWindow()',
       'isProcessingWindow()',
-      'getNAV()',
+      'currentNAV() / getNAV()',
       'feeBps()',
       'getCurrentBatchCycle()',
       'getPendingMintRequest(user, batchCycle)',
       'getPendingRedeemRequest(user, batchCycle)',
       'getBatchInfo(batchCycle)',
+      'batchClaimInfo(batchCycle)',
+      'redeemClaimed(batchCycle, user)',
     ],
     eventsToWatch: [
       'MintRequested',
@@ -68,6 +70,8 @@ export default function Home() {
       'BatchProcessed',
       'TokensClaimed',
     ],
+    redeemClaimProofs:
+      process.env.NEXT_PUBLIC_REDEEM_PROOF_BASE_URL || '/redeem-proofs',
     quickstartDocs: GITBOOK_AGENT_QUICKSTART,
     riskDocs: GITBOOK_RISKS,
     mechanicsDocs: GITBOOK_HOW_YIELD_WORKS,
@@ -607,7 +611,7 @@ export default function Home() {
               <div className="proof-card">
                 <h3>NAV</h3>
                 <p>
-                  Call <code style={{ color: '#00FFFF' }}>getNAV()</code> on KashYield (ETH vault{' '}
+                  Call <code style={{ color: '#00FFFF' }}>currentNAV()</code> / <code style={{ color: '#00FFFF' }}>getNAV()</code> on KashYield (ETH vault{' '}
                   <a href={ethVaultHref} target="_blank" rel="noopener noreferrer">{CONTRACTS.kashYieldEth}</a>
                   , BTC vault{' '}
                   <a href={btcVaultHref} target="_blank" rel="noopener noreferrer">{CONTRACTS.kashYieldBtc}</a>
@@ -685,7 +689,7 @@ export default function Home() {
                 <h3>2. Preflight reads</h3>
                 <p>
                   Before signing, read <code style={{ color: '#00FFFF' }}>paused()</code>, <code style={{ color: '#00FFFF' }}>isUserWindow()</code>,{' '}
-                  <code style={{ color: '#00FFFF' }}>getNAV()</code>, <code style={{ color: '#00FFFF' }}>feeBps()</code>, and <code style={{ color: '#00FFFF' }}>getCurrentBatchCycle()</code>.
+                  <code style={{ color: '#00FFFF' }}>currentNAV()</code>, <code style={{ color: '#00FFFF' }}>feeBps()</code>, and <code style={{ color: '#00FFFF' }}>getCurrentBatchCycle()</code>.
                 </p>
               </div>
               <div className="proof-card">
@@ -698,13 +702,13 @@ export default function Home() {
               <div className="proof-card">
                 <h3>4. Monitor</h3>
                 <p>
-                  Watch <code style={{ color: '#00FFFF' }}>MintRequested</code>, <code style={{ color: '#00FFFF' }}>BatchProcessed</code>, and your KASH token balance after settlement.
+                  Watch <code style={{ color: '#00FFFF' }}>MintRequested</code>, <code style={{ color: '#00FFFF' }}>RedeemRequested</code>, <code style={{ color: '#00FFFF' }}>BatchProcessed</code>, and your KASH token balance or redeem claim status after settlement.
                 </p>
               </div>
               <div className="proof-card">
                 <h3>5. Redeem</h3>
                 <p>
-                  Approve the relevant KASH token to its KashYield vault, then call <code style={{ color: '#00FFFF' }}>requestRedeem(kashAmount)</code> before the batch cutoff.
+                  Approve the relevant KASH token to its KashYield vault, call <code style={{ color: '#00FFFF' }}>requestRedeem(kashAmount)</code> before the batch cutoff, then call <code style={{ color: '#00FFFF' }}>claimRedeem(batchCycle, amount, proof)</code> after settlement.
                 </p>
               </div>
               <div className="proof-card">
@@ -746,7 +750,8 @@ const hash = await wallet.writeContract({
 
 // After batch: read NAV, watch BatchProcessed; to exit:
 // await wallet.writeContract({ address: kashTokenEth, abi: erc20Abi, functionName: 'approve', args: [vaultEth, kashWei] });
-// await wallet.writeContract({ address: vaultEth, abi, functionName: 'requestRedeem', args: [kashWei] });`}
+// await wallet.writeContract({ address: vaultEth, abi, functionName: 'requestRedeem', args: [kashWei] });
+// After redeem settlement: claimRedeem(batchCycle, amount, proof) using hosted proof JSON.`}
               </pre>
             </div>
             <h2 className="section-title" style={{ marginTop: 60 }}>Python (Web3.py) — no pip SDK yet</h2>
