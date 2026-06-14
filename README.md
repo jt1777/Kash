@@ -1,4 +1,20 @@
-# Kash - Enhanced Yield Strategy Protocol
+# ⚠️ DEPRECATED — This repo has been renamed/split
+
+**This is the legacy `yieldproduct` repo. It is no longer maintained.**
+
+The project has been split into three repos:
+
+| Repo | Visibility | Purpose |
+|---|---|---|
+| **[kash](https://github.com/jt1777/kash)** | Public | Smart contracts, frontend, docs, tests |
+| **[kash-ops](https://github.com/jt1777/kash-ops)** | 🔒 Private | Bot, operator scripts, deployment runbooks, security docs |
+| **[nova-kash-scripts](https://github.com/jt1777/nova-kash-scripts)** | 🔒 Private | Nova's convenience scripts (backup) |
+
+**Nova — do not run batch operations or read state from this repo.** Use `kash-ops/` for all operations. The addresses, contracts, and bot code here are stale.
+
+---
+
+# Kash - Enhanced Yield Strategy Protocol (LEGACY — see above)
 
 Kash is an AI-managed, leveraged yield protocol. ETH and Bitcoin deposits are posted as collateral on Aave to fund a perpetual futures position on Hyperliquid. The strategy is market-neutral — it earns funding rate premiums without taking directional risk. An AI agent runs the entire operational stack: batch settlement, rebalancing, and NAV pricing, autonomously and continuously. Deposits are segregated by smart contract, and all positions are independently auditable on-chain in real time.
 
