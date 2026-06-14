@@ -11,7 +11,6 @@ import { usePendingBatchRequest, type PendingBatchRequest } from '@/lib/usePendi
 import { resolveClaimProof, formatClaimPayoutAmount } from '@/lib/redeemProofs';
 import { useBatchUserCap } from '@/lib/useBatchUserCap';
 import {
-  BATCH_USER_CAP,
   batchCapNotice,
   batchCapSubmitLabel,
   isRedeemCapReachedError,
@@ -652,7 +651,7 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
         >
           {isRedeemPending || isRedeemConfirming
             ? 'Processing...'
-            : batchCapSubmitLabel('redeem', redeemBatchCapBlocked, maxRedeemUsers)}
+            : batchCapSubmitLabel('redeem', redeemBatchCapBlocked)}
         </button>
       </div>
 
@@ -669,9 +668,7 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
             <>
               <p className="text-sm font-medium text-red-800">Redeem batch full</p>
               <p className="text-xs text-red-600 mt-1.5 leading-relaxed">
-                {redeemUsersCount !== null
-                  ? batchCapNotice('redeem', redeemUsersCount, maxRedeemUsers)
-                  : batchCapNotice('redeem', BATCH_USER_CAP, maxRedeemUsers)}
+                {batchCapNotice('redeem')}
               </p>
             </>
           ) : (

@@ -6,7 +6,8 @@
     "test": "npx hardhat test test/batch-process-math.unit.test.js test/strategy-redeem-fraction.unit.test.js test/redeem-merkle.unit.test.js test/mainnet-fork.e2e.test.js test/mainnet-fork-advanced.e2e.test.js",
     "test:math": "npx hardhat test test/batch-process-math.unit.test.js test/strategy-redeem-fraction.unit.test.js test/redeem-merkle.unit.test.js",
     "test:fork": "npx hardhat test test/mainnet-fork.e2e.test.js",
-    "test:advanced": "npx hardhat test test/mainnet-fork-advanced.e2e.test.js"
+    "test:advanced": "npx hardhat test test/mainnet-fork-advanced.e2e.test.js",
+    "test:gas-batch": "npx hardhat test test/batch-gas-benchmark.fork.test.js"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "6.0.0",

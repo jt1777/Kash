@@ -34,39 +34,55 @@ export function batchCapLabel(kind: 'mint' | 'redeem'): string {
   return kind === 'mint' ? 'Mint' : 'Redeem';
 }
 
+export type BatchCapStatusLevel = 'available' | 'mostly-full' | 'almost-full' | 'full';
+
+/** Status bands for the batch wallet cap (500 max on-chain). */
+export function getBatchCapStatusLevel(
+  usersCount: number,
+  cap: number = BATCH_USER_CAP,
+): BatchCapStatusLevel {
+  if (usersCount >= cap) return 'full';
+  if (usersCount >= 476) return 'almost-full';
+  if (usersCount >= 401) return 'mostly-full';
+  return 'available';
+}
+
+export function batchCapStatusLabel(level: BatchCapStatusLevel): string {
+  switch (level) {
+    case 'available':
+      return 'Available';
+    case 'mostly-full':
+      return 'Mostly full';
+    case 'almost-full':
+      return 'Almost full';
+    case 'full':
+      return 'Full';
+  }
+}
+
 export function batchCapSummary(
   kind: 'mint' | 'redeem',
   usersCount: number,
   cap: number = BATCH_USER_CAP,
 ): string {
   const label = batchCapLabel(kind);
-  const slotsLeft = Math.max(0, cap - usersCount);
-  if (usersCount >= cap) {
-    return `${label} batch full (${usersCount}/${cap} wallets)`;
-  }
-  return `${label} batch: ${usersCount}/${cap} wallets (${slotsLeft} slot${slotsLeft === 1 ? '' : 's'} left)`;
+  const level = getBatchCapStatusLevel(usersCount, cap);
+  return `${label} batch: ${batchCapStatusLabel(level)}`;
 }
 
-export function batchCapNotice(
-  kind: 'mint' | 'redeem',
-  usersCount: number,
-  cap: number = BATCH_USER_CAP,
-): string {
+export function batchCapNotice(kind: 'mint' | 'redeem'): string {
   const action = kind === 'mint' ? 'mint' : 'redeem';
-  return `This batch cycle already has ${usersCount} wallets with ${action} requests (limit ${cap}). New wallets cannot join until the next cycle or someone cancels. If you already submitted this cycle, you can add to your existing request.`;
+  return `This batch cycle is full for new ${action} requests. New wallets cannot join until the next cycle or someone cancels. If you already submitted this cycle, you can add to your existing request.`;
 }
 
 export function batchCapSubmitLabel(
   kind: 'mint' | 'redeem',
   blocked: boolean,
-  cap: number = BATCH_USER_CAP,
 ): string {
   if (!blocked) {
     return kind === 'mint' ? 'Submit Mint Request' : 'Submit Redeem Request';
   }
-  return kind === 'mint'
-    ? `Mint batch full (${cap} wallets)`
-    : `Redeem batch full (${cap} wallets)`;
+  return kind === 'mint' ? 'Mint batch full' : 'Redeem batch full';
 }
 
 function errorPayloadIncludes(error: unknown, needle: string, depth = 0): boolean {

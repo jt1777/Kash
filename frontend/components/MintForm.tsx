@@ -10,7 +10,6 @@ import { kashTokenABI } from '@/lib/contracts/kashTokenABI';
 import { usePendingBatchRequest } from '@/lib/usePendingBatchRequest';
 import { useBatchUserCap } from '@/lib/useBatchUserCap';
 import {
-  BATCH_USER_CAP,
   batchCapNotice,
   batchCapSubmitLabel,
   isMintCapReachedError,
@@ -649,7 +648,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
         >
           {isMintPending || isMintConfirming
             ? 'Processing...'
-            : batchCapSubmitLabel('mint', mintBatchCapBlocked, maxMintUsers)}
+            : batchCapSubmitLabel('mint', mintBatchCapBlocked)}
         </button>
       </div>
 
@@ -667,9 +666,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
             <>
               <p className="text-sm font-medium text-red-800">Mint batch full</p>
               <p className="text-xs text-red-600 mt-1.5 leading-relaxed">
-                {mintUsersCount !== null
-                  ? batchCapNotice('mint', mintUsersCount, maxMintUsers)
-                  : batchCapNotice('mint', BATCH_USER_CAP, maxMintUsers)}
+                {batchCapNotice('mint')}
               </p>
             </>
           ) : (

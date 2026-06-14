@@ -1,12 +1,44 @@
 'use client';
 
+import type { CSSProperties } from 'react';
 import {
-  batchCapNotice,
-  batchCapSummary,
   BATCH_USER_CAP,
+  batchCapLabel,
+  batchCapNotice,
+  batchCapStatusLabel,
+  getBatchCapStatusLevel,
+  type BatchCapStatusLevel,
 } from '@/lib/batchUserCap';
 
 type BatchKind = 'mint' | 'redeem';
+
+function statusStyles(level: BatchCapStatusLevel): {
+  container: CSSProperties;
+  dot: CSSProperties;
+  label: CSSProperties;
+} {
+  switch (level) {
+    case 'available':
+      return {
+        container: { backgroundColor: 'rgba(34, 197, 94, 0.12)', borderColor: 'rgba(34, 197, 94, 0.35)' },
+        dot: { backgroundColor: '#22c55e', boxShadow: '0 0 8px rgba(34, 197, 94, 0.6)' },
+        label: { color: '#bbf7d0' },
+      };
+    case 'mostly-full':
+      return {
+        container: { backgroundColor: 'rgba(245, 158, 11, 0.16)', borderColor: 'rgba(245, 158, 11, 0.35)' },
+        dot: { backgroundColor: '#f59e0b', boxShadow: '0 0 8px rgba(245, 158, 11, 0.5)' },
+        label: { color: '#fde68a' },
+      };
+    case 'almost-full':
+    case 'full':
+      return {
+        container: { backgroundColor: 'rgba(239, 68, 68, 0.14)', borderColor: 'rgba(239, 68, 68, 0.35)' },
+        dot: { backgroundColor: '#ef4444', boxShadow: '0 0 8px rgba(239, 68, 68, 0.5)' },
+        label: { color: '#fecaca' },
+      };
+  }
+}
 
 export function BatchUserCapStatus({
   kind,
@@ -23,9 +55,10 @@ export function BatchUserCapStatus({
 }) {
   if (usersCount === null) return null;
 
-  const atCap = usersCount >= cap;
-  const nearCap = !atCap && usersCount >= Math.floor(cap * 0.9);
+  const level = getBatchCapStatusLevel(usersCount, cap);
+  const atCap = level === 'full';
   const blocked = atCap && !userAlreadyInBatch && !batchProcessed;
+  const styles = statusStyles(level);
 
   if (batchProcessed) {
     return (
@@ -33,65 +66,60 @@ export function BatchUserCapStatus({
         className="rounded-lg border p-3"
         style={{ backgroundColor: 'rgba(255, 255, 255, 0.08)', borderColor: 'rgba(255, 255, 255, 0.18)' }}
       >
-        <p className="text-sm text-white/80">
-          {batchCapSummary(kind, usersCount, cap)} — today&apos;s batch has finished processing. New
-          requests join the next cycle.
-        </p>
-      </div>
-    );
-  }
-
-  if (blocked) {
-    return (
-      <div
-        className="rounded-lg border p-3"
-        style={{ backgroundColor: 'rgba(245, 158, 11, 0.16)', borderColor: 'rgba(245, 158, 11, 0.35)' }}
-      >
-        <p className="text-sm font-semibold text-amber-100">{batchCapSummary(kind, usersCount, cap)}</p>
-        <p className="text-sm text-amber-100/90 mt-1">{batchCapNotice(kind, usersCount, cap)}</p>
-      </div>
-    );
-  }
-
-  if (atCap && userAlreadyInBatch) {
-    return (
-      <div
-        className="rounded-lg border p-3"
-        style={{ backgroundColor: 'rgba(59, 130, 246, 0.16)', borderColor: 'rgba(59, 130, 246, 0.35)' }}
-      >
-        <p className="text-sm font-medium text-blue-100">{batchCapSummary(kind, usersCount, cap)}</p>
-        <p className="text-sm text-blue-100/90 mt-1">
-          The wallet limit is reached for new participants, but you already have a request this cycle
-          and can add to it.
-        </p>
-      </div>
-    );
-  }
-
-  if (nearCap) {
-    return (
-      <div
-        className="rounded-lg border p-3"
-        style={{ backgroundColor: 'rgba(245, 158, 11, 0.16)', borderColor: 'rgba(245, 158, 11, 0.35)' }}
-      >
-        <p className="text-sm text-amber-100">
-          {batchCapSummary(kind, usersCount, cap)}. Each batch accepts up to {cap} unique wallets for{' '}
-          {kind === 'mint' ? 'deposits' : 'redemptions'}. Slots are almost gone — submit soon or wait
-          for the next cycle.
+        <div className="flex items-center gap-2">
+          <span
+            className="inline-block h-2.5 w-2.5 rounded-full shrink-0"
+            style={{ backgroundColor: 'rgba(255, 255, 255, 0.45)' }}
+            aria-hidden
+          />
+          <span className="text-sm font-medium text-white/90">{batchCapLabel(kind)} batch:</span>
+          <span className="text-sm text-white/70">Closed</span>
+        </div>
+        <p className="text-sm text-white/70 mt-2">
+          Today&apos;s batch has finished processing. New requests join the next cycle.
         </p>
       </div>
     );
   }
 
   return (
-    <div
-      className="rounded-lg border p-3"
-      style={{ backgroundColor: 'rgba(0, 255, 255, 0.08)', borderColor: 'rgba(0, 255, 255, 0.22)' }}
-    >
-      <p className="text-sm text-cyan-50">
-        {batchCapSummary(kind, usersCount, cap)}. Each batch accepts up to {cap} unique wallets for{' '}
-        {kind === 'mint' ? 'deposits' : 'redemptions'}.
-      </p>
+    <div className="rounded-lg border p-3" style={styles.container}>
+      <div className="flex items-center gap-2">
+        <span
+          className="inline-block h-2.5 w-2.5 rounded-full shrink-0"
+          style={styles.dot}
+          aria-hidden
+        />
+        <span className="text-sm font-medium text-white/90">{batchCapLabel(kind)} batch:</span>
+        <span className="text-sm font-semibold" style={styles.label}>
+          {batchCapStatusLabel(level)}
+        </span>
+      </div>
+
+      {blocked && (
+        <p className="text-sm mt-2" style={{ color: 'rgba(254, 202, 202, 0.95)' }}>
+          {batchCapNotice(kind)}
+        </p>
+      )}
+
+      {atCap && userAlreadyInBatch && (
+        <p className="text-sm mt-2 text-blue-100/90">
+          The wallet limit is reached for new participants, but you already have a request this cycle
+          and can add to it.
+        </p>
+      )}
+
+      {level === 'mostly-full' && (
+        <p className="text-sm mt-2" style={{ color: 'rgba(253, 230, 138, 0.95)' }}>
+          Slots are filling up — submit soon or wait for the next cycle.
+        </p>
+      )}
+
+      {level === 'almost-full' && !blocked && (
+        <p className="text-sm mt-2" style={{ color: 'rgba(254, 202, 202, 0.95)' }}>
+          Almost no slots left — submit soon or wait for the next cycle.
+        </p>
+      )}
     </div>
   );
 }
