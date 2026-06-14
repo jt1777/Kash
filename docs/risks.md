@@ -59,6 +59,18 @@ Protocol operations — batch processing, capital deployment, and NAV updates �
 
 ---
 
+## Hyperliquid custody risk (bootstrap phase)
+
+During the protocol bootstrap phase, the bot interacts with Hyperliquid in **direct deposit mode**. This means the bot's hot wallet is the master account on Hyperliquid — protocol funds held on HL are secured by a single private key rather than by the on-chain adapter contract's permissioned guards.
+
+In **non-direct deposit mode** (the planned production configuration), the adapter *contract* would be the HL account master and the bot would act as a limited agent. Funds could only leave HL through the adapter → vault path, enforced by on-chain logic. This separation of custody from operations is the same pattern used by institutional custodians.
+
+The upgrade to non-direct deposit mode is blocked by the inability to call `approveAgent` for a smart-contract HL account (the adapter contract cannot sign EIP-712 messages). This is expected to be resolved by deploying an EIP-1271-capable adapter, or by integrating **Aster** (an Arbitrum-native perp DEX) as an alternative exchange. Because Aster runs natively on Arbitrum, its adapter contract can directly control positions without any cross-chain custody or agent-approval step — eliminating this risk class entirely.
+
+**Mitigations in the interim:** The bot wallet is secured with standard operational practices — restricted access, no manual signing, continuous monitoring, and a dedicated key separate from the contract owner.
+
+---
+
 ## Oracle risk
 
 The value of a deposit at batch time is calculated using on-chain price feeds. If a price feed provides incorrect or stale data, fewer KASH tokens than expected may be received on deposit, or fewer assets on redemption. Industry-standard oracle providers are used, but no price feed is entirely risk-free.
