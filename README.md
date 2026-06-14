@@ -1,19 +1,3 @@
-# ⚠️ DEPRECATED — This repo has been renamed/split
-
-**This is the legacy `yieldproduct` repo. It is no longer maintained.**
-
-The project has been split into three repos:
-
-| Repo | Visibility | Purpose |
-|---|---|---|
-| **[kash](https://github.com/jt1777/kash)** | Public | Smart contracts, frontend, docs, tests |
-| **[kash-ops](https://github.com/jt1777/kash-ops)** | 🔒 Private | Bot, operator scripts, deployment runbooks, security docs |
-| **[nova-kash-scripts](https://github.com/jt1777/nova-kash-scripts)** | 🔒 Private | Nova's convenience scripts (backup) |
-
-**Nova — do not run batch operations or read state from this repo.** Use `kash-ops/` for all operations. The addresses, contracts, and bot code here are stale.
-
----
-
 # Kash - Enhanced Yield Strategy Protocol (LEGACY — see above)
 
 Kash is an AI-managed, leveraged yield protocol. ETH and Bitcoin deposits are posted as collateral on Aave to fund a perpetual futures position on Hyperliquid. The strategy is market-neutral — it earns funding rate premiums without taking directional risk. An AI agent runs the entire operational stack: batch settlement, rebalancing, and NAV pricing, autonomously and continuously. Deposits are segregated by smart contract, and all positions are independently auditable on-chain in real time.
@@ -184,7 +168,14 @@ npx hardhat node   # local chain
 
 ## License
 
-UNLICENSED
+This repository is licensed under the [Business Source License 1.1](LICENSE) (BSL 1.1), similar to the delayed open-source model used by Uniswap v3.
+
+- **Before the Change Date (2030-06-14):** the code may be copied, modified, and redistributed for **non-production** use (e.g. review, testing, local development). Production use requires compliance with the Additional Use Grant in [LICENSE](LICENSE) or a commercial license from the Licensor.
+- **On or after the Change Date:** the licensed work converts to [GNU General Public License v3.0](https://www.gnu.org/licenses/gpl-3.0.html).
+
+Each release version may specify its own Change Date and Additional Use Grant. See [LICENSE](LICENSE) for the current parameters and full terms.
+
+**Current release:** [v1.0.0](https://github.com/jt1777/Kash/releases/tag/v1.0.0) — on-chain protocol version `1.0.0` (`KashYieldETH.VERSION` / `KashYieldBtc.VERSION`).
 
 ## Disclaimer
 
