@@ -76,17 +76,18 @@ async function swapEthForWbtc(signer, ethAmount) {
   return wbtc.balanceOf(await signer.getAddress());
 }
 
-async function submitMintRequests({ kashYieldBtc, wbtc, wallets, mintAmountEach, chunkSize = 10 }) {
+async function submitMintRequests({ kashYieldBtc, wbtc, wallets, mintAmountEach, chunkSize = 3 }) {
   const vault = await kashYieldBtc.getAddress();
   for (let i = 0; i < wallets.length; i += chunkSize) {
     const chunk = wallets.slice(i, i + chunkSize);
-    await Promise.all(
-      chunk.map(async (wallet) => {
-        const wbtcUser = wbtc.connect(wallet);
-        await (await wbtcUser.approve(vault, mintAmountEach)).wait();
-        await (await kashYieldBtc.connect(wallet).requestMint(mintAmountEach)).wait();
-      }),
-    );
+    for (const wallet of chunk) {
+      const wbtcUser = wbtc.connect(wallet);
+      await (await wbtcUser.approve(vault, mintAmountEach)).wait();
+      await (await kashYieldBtc.connect(wallet).requestMint(mintAmountEach)).wait();
+    }
+    if ((i + chunkSize) % 30 === 0 || i + chunkSize >= wallets.length) {
+      console.log(`       … ${Math.min(i + chunkSize, wallets.length)}/${wallets.length} mint requests submitted`);
+    }
   }
 }
 
@@ -95,7 +96,13 @@ async function currentBatchCycle() {
   return BigInt(block.timestamp) / CYCLE_SECS;
 }
 
+function extrapolatePhase2Gas(phase2Gas, mintCount) {
+  if (mintCount <= 0) return null;
+  return (phase2Gas * 500n) / BigInt(mintCount);
+}
+
 function formatGasReport({ mintCount, phase1Gas, phase2Gas, phase2Estimate, phase2Failed }) {
+  const extrapolated = phase2Gas != null ? extrapolatePhase2Gas(phase2Gas, mintCount) : null;
   const lines = [
     "",
     "══════════════════════════════════════════════════════════════",
@@ -106,6 +113,14 @@ function formatGasReport({ mintCount, phase1Gas, phase2Gas, phase2Estimate, phas
   ];
   if (phase2Estimate != null) {
     lines.push(`  Phase 2 eth_estimateGas                  : ${phase2Estimate.toLocaleString()} gas`);
+  }
+  if (extrapolated != null && mintCount !== 500) {
+    lines.push(`  Phase 2 extrapolated @ 500 minters       : ~${extrapolated.toLocaleString()} gas`);
+    lines.push(
+      extrapolated <= ARBITRUM_BLOCK_GAS_LIMIT
+        ? "  Extrapolated 500-minter fit (one block)    : YES"
+        : "  Extrapolated 500-minter fit (one block)    : NO — likely OOG on mainnet",
+    );
   }
   lines.push(`  Arbitrum block gas limit (reference)       : ${ARBITRUM_BLOCK_GAS_LIMIT.toLocaleString()} gas`);
   if (phase2Gas != null) {
@@ -136,5 +151,6 @@ module.exports = {
   swapEthForWbtc,
   submitMintRequests,
   currentBatchCycle,
+  extrapolatePhase2Gas,
   formatGasReport,
 };

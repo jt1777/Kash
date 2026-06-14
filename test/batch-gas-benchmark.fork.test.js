@@ -78,6 +78,9 @@ describe(`Batch gas benchmark — ${MINT_COUNT} mint wallets`, function () {
 
     for (let i = 0; i < wallets.length; i++) {
       await (await wbtc.connect(owner).transfer(wallets[i].address, MINT_WBTC_EACH)).wait();
+      if ((i + 1) % 50 === 0 || i + 1 === wallets.length) {
+        console.log(`       … funded ${i + 1}/${wallets.length} wallets with wBTC`);
+      }
     }
 
     await submitMintRequests({
@@ -85,7 +88,6 @@ describe(`Batch gas benchmark — ${MINT_COUNT} mint wallets`, function () {
       wbtc,
       wallets,
       mintAmountEach: MINT_WBTC_EACH,
-      chunkSize: 10,
     });
 
     const batchCycle = await currentBatchCycle();
