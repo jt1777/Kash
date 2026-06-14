@@ -2,7 +2,7 @@
 
 import { ReactNode, useEffect, useState } from 'react';
 
-const STORAGE_KEY = 'kash-disclaimer-accepted-v1';
+const STORAGE_KEY = 'kash-disclaimer-accepted-v2';
 
 type DisclaimerGateProps = {
   children: ReactNode;
@@ -48,12 +48,13 @@ export function DisclaimerGate({ children, riskDocsUrl }: DisclaimerGateProps) {
         >
           <div className="disclaimer-panel">
             <h2 id="disclaimer-title" className="disclaimer-title">
-              Disclaimer — Under Development
+              Risk disclosure
             </h2>
             <div id="disclaimer-body" className="disclaimer-body">
               <p>
-                KASH is experimental software on <strong>Arbitrum One</strong>. This website and
-                protocol are <strong>under active development</strong> and may change without notice.
+                KASH is deployed on <strong>Arbitrum One</strong>. Contract source is verified on
+                Arbiscan. Review the risks below and confirm addresses and NAV on-chain before
+                depositing.
               </p>
               <ul>
                 <li>

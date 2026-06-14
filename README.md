@@ -1,4 +1,4 @@
-# Kash - Enhanced Yield Strategy Protocol (LEGACY — see above)
+# Kash - Enhanced Yield Strategy Protocol
 
 Kash is an AI-managed, leveraged yield protocol. ETH and Bitcoin deposits are posted as collateral on Aave to fund a perpetual futures position on Hyperliquid. The strategy is market-neutral — it earns funding rate premiums without taking directional risk. An AI agent runs the entire operational stack: batch settlement, rebalancing, and NAV pricing, autonomously and continuously. Deposits are segregated by smart contract, and all positions are independently auditable on-chain in real time.
 
@@ -179,4 +179,6 @@ Each release version may specify its own Change Date and Additional Use Grant. S
 
 ## Disclaimer
 
-This protocol is in development and has not been audited. Do not use with real funds until proper audits are completed.
+KASH is live on **Arbitrum One**. Smart contract source is verified on Arbiscan and published in this repository ([v1.0.0](https://github.com/jt1777/Kash/releases/tag/v1.0.0)).
+
+DeFi protocols carry inherent risk — smart contract bugs, oracle failures, counterparty risk, and operator dependency can lead to partial or total loss of funds. Review [docs/risks.md](docs/risks.md) and verify contract addresses and NAV on-chain before depositing. Nothing here is financial advice. Only use funds you can afford to lose.
