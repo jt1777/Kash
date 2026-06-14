@@ -67,7 +67,7 @@ In the planned production configuration, the adapter *contract* would be the HL 
 
 The upgrade to non-direct deposit mode is blocked by the inability to call `approveAgent` for a smart-contract HL account (the adapter contract cannot sign EIP-712 messages). This is expected to be resolved by deploying an EIP-1271-capable adapter, or by integrating **Aster** (an Arbitrum-native perp DEX) as an alternative exchange. Because Aster runs natively on Arbitrum, its adapter contract can directly control positions without any cross-chain custody or agent-approval step — eliminating this risk class entirely.
 
-**Mitigations in the interim:** The bot wallet is secured with standard operational practices — restricted access, no manual signing, continuous monitoring, and a dedicated key separate from the contract owner.
+**Mitigations in the interim:** The bot address is distinct from the contract owner address on-chain, limiting what a single-key compromise can do. Continuous monitoring and automated batch operations reduce the need for manual intervention.
 
 ---
 
