@@ -85,7 +85,7 @@ npx hardhat run scripts/deploy-hyperliquid-adapter.js --network arbitrumOne
 
 Record `HL_ADAPTER_ADDRESS_BTC`. Saved under `deployments/hl-adapter-btc-arbitrumOne-*.json`.
 
-**ETH product** (when deployed): same script with `IS_ETH_ASSET=true` and `KASH_YIELD_ETH_ADDRESS`.
+**ETH product** (when deployed): same script with `IS_ETH_ASSET=true` and `KASH_YIELD_ETH_ADDRESS` and remove `WBTC_ADDRESS`.
 
 ### Step 3 — Deploy ExchangeFacade (one per vault)
 
