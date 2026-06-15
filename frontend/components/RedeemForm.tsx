@@ -105,7 +105,7 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
   const {
     batchProcessed,
     redeemUsersCount,
-    maxRedeemUsers,
+    batchUserCap,
     redeemBlocked,
   } = useBatchUserCap(kashYield);
 
@@ -498,7 +498,7 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
       <BatchUserCapStatus
         kind="redeem"
         usersCount={redeemUsersCount}
-        cap={maxRedeemUsers}
+        cap={batchUserCap}
         batchProcessed={batchProcessed}
         userAlreadyInBatch={userInCurrentRedeemBatch}
       />

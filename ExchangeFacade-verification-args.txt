@@ -1,0 +1,35 @@
+ExchangeFacade — Arbiscan manual verification
+Contract: 0xfFAb10568B777fD4B11FC717516BC9FE1eA4FD76
+
+Upload file (repo root):
+  ExchangeFacade-standard-input.json
+
+Compiler type:
+  Solidity (Standard-Json-Input)
+
+Compiler version:
+  v0.8.28+commit.7893614a
+
+Contract name:
+  contracts/ExchangeFacade.sol:ExchangeFacade
+
+License:
+  Business Source License 1.1 (BUSL-1.1)
+
+Constructor arguments (ABI-encoded, single line — paste without line breaks):
+
+000000000000000000000000bc5247120e67e9841f15745cf5586c852c7ce3530000000000000000000000001545e727962c2b822fbaff39190a579787019750000000000000000000000000af88d065e77c8cc2239327c5edb3a432268e58310000000000000000000000002f2a2543b76a4166549f7aab2e75bef0aefc5b0f00000000000000000000000026a2610f360049787f3e34912aaa27ca397d4a99
+
+Human-readable (same order as constructor):
+
+  _owner         0xBc5247120e67E9841f15745cF5586C852C7Ce353
+  _bot           0x1545E727962c2B822FBAff39190A579787019750
+  _usdc          0xaf88d065e77c8cC2239327C5EDb3A432268e5831
+  _primaryAsset  0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f  (wBTC)
+  _kashYield     0x26a2610F360049787F3E34912AAA27CA397d4a99  (KashYieldBtc)
+
+Read from chain on 2026-06-11. If verification fails on constructor args only,
+owner or bot may have changed after deploy — use the deploy transaction input
+from Arbiscan (Contract Creation tx) instead.
+
+Do NOT set Optimization Off / Runs 200 — settings are inside the JSON file.

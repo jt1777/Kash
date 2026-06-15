@@ -152,7 +152,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
   const {
     batchProcessed,
     mintUsersCount,
-    maxMintUsers,
+    batchUserCap,
     mintBlocked,
   } = useBatchUserCap(kashYield);
 
@@ -483,7 +483,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
       <BatchUserCapStatus
         kind="mint"
         usersCount={mintUsersCount}
-        cap={maxMintUsers}
+        cap={batchUserCap}
         batchProcessed={batchProcessed}
         userAlreadyInBatch={userInCurrentMintBatch}
       />

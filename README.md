@@ -12,7 +12,7 @@ Kash is an AI-managed, leveraged yield protocol. ETH and Bitcoin deposits are po
 - **Perp adapter pattern**: `HyperliquidAdapter` implements `IPerpExchange` and is registered on **ExchangeFacade** (additional adapters can be added via the facade registry).
 - **Spot DEX integration**: An `ISpotDex` adapter (e.g. UniswapV3Adapter) enables on-chain asset ↔ USDC swaps with configurable slippage caps.
 - **24-hour timelock on adapter registration**: On **ExchangeFacade**, the first adapter is immediate; subsequent registrations use proposal + confirmation after the facade timelock.
-- **Batch user caps**: `MAX_MINT_USERS` / `MAX_REDEEM_USERS` (500) enforced via active per-cycle counters.
+- **Batch user caps**: Up to **400** unique wallets per batch cycle for mints and redeems (separate counters), enforced in the app. On-chain `MAX_MINT_USERS` / `MAX_REDEEM_USERS` remain 500.
 - **Security**: `ReentrancyGuard` on user-facing functions, two-step ownership transfer, and custom Solidity errors.
 - **Aave**: Lending/borrowing for capital deployment.
 

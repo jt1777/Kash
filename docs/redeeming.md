@@ -18,13 +18,13 @@ After settlement, use the app's **Claim** button to receive ETH or wBTC. The cla
 
 ## Batch wallet limit
 
-Each batch cycle accepts at most **500 unique wallet addresses** for redemptions. This is a hard on-chain limit (`MAX_REDEEM_USERS`).
+Each batch cycle accepts at most **400 unique wallet addresses** for redemptions through the app. This limit keeps batch processing within safe block gas bounds. The on-chain contract allows up to 500 (`MAX_REDEEM_USERS`); direct contract calls may still use slots above the app limit until a contract upgrade.
 
-- When the limit is reached, **new wallets** cannot submit a redemption request for that cycle.
+- When the limit is reached, **new wallets** cannot submit a redemption request for that cycle in the app.
 - A wallet that **already has a pending redemption** in the current cycle may add to its existing request.
 - If a participant **cancels** before batch processing, that slot becomes available for another wallet.
 
-The app shows how many redeem slots are used in the current cycle (for example, `142/500 wallets`).
+The app shows batch capacity for the current cycle as a status indicator: **Available**, **Mostly full**, **Almost full**, or **Full**.
 
 Mint and redeem limits are tracked **separately** — a full mint batch does not block redemptions, and vice versa.
 

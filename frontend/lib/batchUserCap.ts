@@ -1,5 +1,12 @@
-/** Matches on-chain MAX_MINT_USERS / MAX_REDEEM_USERS in KashYield* contracts. */
-export const BATCH_USER_CAP = 500;
+/**
+ * Frontend batch wallet cap (mint and redeem). On-chain MAX_*_USERS remains 500;
+ * the app stops accepting new wallets at this lower limit to stay clear of block gas limits.
+ */
+export const BATCH_USER_CAP = 400;
+
+/** Status band thresholds (relative to BATCH_USER_CAP). */
+export const BATCH_CAP_MOSTLY_FULL_AT = 301;
+export const BATCH_CAP_ALMOST_FULL_AT = 376;
 
 export const MINT_CAP_REACHED_SELECTOR = '0x5fb1eed1';
 export const REDEEM_CAP_REACHED_SELECTOR = '0x94f90443';
@@ -36,14 +43,14 @@ export function batchCapLabel(kind: 'mint' | 'redeem'): string {
 
 export type BatchCapStatusLevel = 'available' | 'mostly-full' | 'almost-full' | 'full';
 
-/** Status bands for the batch wallet cap (500 max on-chain). */
+/** Status bands: green 0–300, yellow 301–375, red 376–399, full at cap (400). */
 export function getBatchCapStatusLevel(
   usersCount: number,
   cap: number = BATCH_USER_CAP,
 ): BatchCapStatusLevel {
   if (usersCount >= cap) return 'full';
-  if (usersCount >= 476) return 'almost-full';
-  if (usersCount >= 401) return 'mostly-full';
+  if (usersCount >= BATCH_CAP_ALMOST_FULL_AT) return 'almost-full';
+  if (usersCount >= BATCH_CAP_MOSTLY_FULL_AT) return 'mostly-full';
   return 'available';
 }
 

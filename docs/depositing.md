@@ -27,13 +27,13 @@ This means there is a **waiting period** between request submission and KASH tok
 
 ## Batch wallet limit
 
-Each batch cycle accepts at most **500 unique wallet addresses** for deposits. This is a hard on-chain limit (`MAX_MINT_USERS`).
+Each batch cycle accepts at most **400 unique wallet addresses** for deposits through the app. This limit keeps batch processing within safe block gas bounds. The on-chain contract allows up to 500 (`MAX_MINT_USERS`); direct contract calls may still use slots above the app limit until a contract upgrade.
 
-- When the limit is reached, **new wallets** cannot submit a mint request for that cycle.
+- When the limit is reached, **new wallets** cannot submit a mint request for that cycle in the app.
 - A wallet that **already has a pending deposit** in the current cycle may add to its existing request.
 - If a participant **cancels** before batch processing, that slot becomes available for another wallet.
 
-The app shows how many mint slots are used in the current cycle (for example, `142/500 wallets`).
+The app shows batch capacity for the current cycle as a status indicator: **Available**, **Mostly full**, **Almost full**, or **Full**.
 
 ---
 

@@ -33,8 +33,6 @@ export function useBatchUserCap(kashYield: `0x${string}` | undefined) {
             { address: kashYield, abi: kashYieldABI, functionName: 'getBatchInfo', args: batchCycleArg },
             { address: kashYield, abi: kashYieldABI, functionName: 'activeMintUsers', args: batchCycleArg },
             { address: kashYield, abi: kashYieldABI, functionName: 'activeRedeemUsers', args: batchCycleArg },
-            { address: kashYield, abi: kashYieldABI, functionName: 'MAX_MINT_USERS' },
-            { address: kashYield, abi: kashYieldABI, functionName: 'MAX_REDEEM_USERS' },
           ]
         : [],
     query: { enabled: Boolean(kashYield && batchCycleArg), refetchInterval: 15_000 },
@@ -46,21 +44,17 @@ export function useBatchUserCap(kashYield: `0x${string}` | undefined) {
     reads?.[1]?.status === 'success' ? readUint(reads[1].result) : null;
   const activeRedeemUsers =
     reads?.[2]?.status === 'success' ? readUint(reads[2].result) : null;
-  const maxMintUsers =
-    reads?.[3]?.status === 'success' ? readUint(reads[3].result) ?? BATCH_USER_CAP : BATCH_USER_CAP;
-  const maxRedeemUsers =
-    reads?.[4]?.status === 'success' ? readUint(reads[4].result) ?? BATCH_USER_CAP : BATCH_USER_CAP;
 
   const batchProcessed = isBatchProcessed(batchInfo);
   const mintUsersCount = activeMintUsers ?? mintUsersCountFromBatchInfo(batchInfo);
   const redeemUsersCount = activeRedeemUsers ?? redeemUsersCountFromBatchInfo(batchInfo);
 
   function mintBlocked(userAlreadyInBatch: boolean): boolean {
-    return isNewUserBlockedByBatchCap(mintUsersCount, userAlreadyInBatch, maxMintUsers) && !batchProcessed;
+    return isNewUserBlockedByBatchCap(mintUsersCount, userAlreadyInBatch, BATCH_USER_CAP) && !batchProcessed;
   }
 
   function redeemBlocked(userAlreadyInBatch: boolean): boolean {
-    return isNewUserBlockedByBatchCap(redeemUsersCount, userAlreadyInBatch, maxRedeemUsers) && !batchProcessed;
+    return isNewUserBlockedByBatchCap(redeemUsersCount, userAlreadyInBatch, BATCH_USER_CAP) && !batchProcessed;
   }
 
   return {
@@ -68,8 +62,7 @@ export function useBatchUserCap(kashYield: `0x${string}` | undefined) {
     batchProcessed,
     mintUsersCount,
     redeemUsersCount,
-    maxMintUsers,
-    maxRedeemUsers,
+    batchUserCap: BATCH_USER_CAP,
     mintBlocked,
     redeemBlocked,
   };
