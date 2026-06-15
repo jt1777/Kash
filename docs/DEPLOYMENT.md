@@ -167,13 +167,29 @@ After a full BTC deploy, `.env` should include:
 | `EXCHANGE_FACADE_BTC_ADDRESS` | ExchangeFacade |
 | `UNISWAP_ADAPTER_ADDRESS` | UniswapV3Adapter (if used) |
 
-Update **`frontend/.env.local`** (`NEXT_PUBLIC_KASH_YIELD_BTC_ADDRESS`, `NEXT_PUBLIC_KASH_TOKEN_BTC`) and **`frontend/lib/contracts/addresses.ts`** if not using env-only config.
+Update **`frontend/.env.local`** with `NEXT_PUBLIC_*` addresses for each live product (see `frontend/.env.example`). Mark verified vaults/tokens in **`frontend/lib/contracts/addresses.ts`** (`ARBISCAN_VERIFIED_*` sets) after Arbiscan verification.
 
 ---
 
 ## Verify on Arbiscan
 
-Hardhat verify may not work on all toolchain versions. Manual verification uses **Solidity (Standard-Json-Input)** with the same compiler settings as `hardhat.config.js` (optimizer on, runs 1, viaIR, bytecodeHash none).
+Set **`ETHERSCAN_API_KEY`** in `.env` (unified key from [etherscan.io/myapikey](https://etherscan.io/myapikey); `ARBISCAN_API_KEY` still works as a legacy alias). Hardhat uses Etherscan API v2 with `chainid=42161` for `arbitrumOne`.
+
+```bash
+npx hardhat verify --network arbitrumOne CONTRACT_ADDRESS CONSTRUCTOR_ARG1 ...
+```
+
+Example (KashYieldETH):
+
+```bash
+npx hardhat verify --network arbitrumOne 0x... 0xBot 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1 0xaf88d065e77c8cC2239327C5EDb3A432268e5831
+```
+
+Success means no “deprecated V1 endpoint” warning. Bytecode or constructor mismatches are a separate issue — use manual verification below.
+
+### Manual verification (Standard-Json-Input)
+
+If Hardhat verify fails on bytecode/constructor args, upload compiled JSON on Arbiscan with the same compiler settings as `hardhat.config.js` (optimizer on, runs 1, viaIR, bytecodeHash none).
 
 ### Generate upload file
 
@@ -225,7 +241,7 @@ Copy `.env.example` to `.env` and fill in:
 - `PRIVATE_KEY` — deployer wallet
 - `BOT_ADDRESS` — address with `onlyBotOrKeeper` permissions
 - `ARBITRUM_ONE_RPC_URL`
-- `ARBISCAN_API_KEY` — for verification (Hardhat or API)
+- `ETHERSCAN_API_KEY` — Hardhat verify (Etherscan API v2; one key for Arbiscan + other explorers). `ARBISCAN_API_KEY` accepted as legacy alias.
 - Deployed addresses — fill in after each step (see checklist above)
 
 ## Post-deploy

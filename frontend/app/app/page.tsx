@@ -11,7 +11,7 @@ import { StatsCard } from '@/components/StatsCard';
 import { StatusIndicator } from '@/components/StatusIndicator';
 import { ClientOnly } from '@/components/ClientOnly';
 import { SiteFooter } from '@/components/SiteFooter';
-import { CONTRACTS, isConfiguredAddress } from '@/lib/contracts/addresses';
+import { CONTRACTS, isConfiguredAddress, hasBtcProduct, hasEthProduct } from '@/lib/contracts/addresses';
 import { useState } from 'react';
 import { useAccount } from 'wagmi';
 import Link from 'next/link';
@@ -142,9 +142,9 @@ function AppContent() {
   const showMintRedeem = isConnected;
   const isWalletSettling = status === 'connecting' || status === 'reconnecting';
   const [product, setProduct] = useState<'eth' | 'btc'>(() =>
-    isConfiguredAddress(CONTRACTS.kashYieldBtc) ? 'btc' : 'eth'
+    hasBtcProduct() ? 'btc' : 'eth'
   );
-  const showBtcTab = isConfiguredAddress(CONTRACTS.kashYieldBtc);
+  const showProductTabs = hasBtcProduct() && hasEthProduct();
 
   return (
     <>
@@ -338,7 +338,7 @@ function AppContent() {
             </Link>
           </header>
 
-          {showBtcTab && (
+          {showProductTabs && (
             <div className="flex gap-2 mb-6">
               <button
                 type="button"
@@ -474,7 +474,7 @@ function AppContent() {
         <SiteFooter
           className="mt-16"
           contractAddress={
-            product === 'btc' && showBtcTab
+            product === 'btc' && hasBtcProduct()
               ? CONTRACTS.kashYieldBtc
               : CONTRACTS.kashYieldEth
           }

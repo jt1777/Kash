@@ -6,7 +6,10 @@ import {
   ARBITRUM_ONE_CHAIN_ID,
   CONTRACTS,
   arbiscanAddressUrl,
+  hasBtcProduct,
+  hasEthProduct,
   isArbiscanVerifiedKashYield,
+  isConfiguredAddress,
 } from '@/lib/contracts/addresses';
 
 export const metadata = {
@@ -77,11 +80,12 @@ export default function Home() {
     mechanicsDocs: GITBOOK_HOW_YIELD_WORKS,
   };
 
-  const ethVaultHref = arbiscanAddressUrl(CONTRACTS.kashYieldEth);
-  const btcVaultHref = arbiscanAddressUrl(CONTRACTS.kashYieldBtc, {
-    code: isArbiscanVerifiedKashYield(CONTRACTS.kashYieldBtc),
-  });
+  const ethVaultVerified = isArbiscanVerifiedKashYield(CONTRACTS.kashYieldEth);
   const btcVaultVerified = isArbiscanVerifiedKashYield(CONTRACTS.kashYieldBtc);
+  const ethVaultHref = arbiscanAddressUrl(CONTRACTS.kashYieldEth, { code: ethVaultVerified });
+  const btcVaultHref = arbiscanAddressUrl(CONTRACTS.kashYieldBtc, { code: btcVaultVerified });
+  const ethTokenHref = arbiscanAddressUrl(CONTRACTS.kashTokenEth);
+  const btcTokenHref = arbiscanAddressUrl(CONTRACTS.kashTokenBtc);
 
   return (
     <DisclaimerGate riskDocsUrl={GITBOOK_RISKS}>
@@ -640,20 +644,52 @@ export default function Home() {
               <div className="proof-card">
                 <h3>Verified source code</h3>
                 <p>
-                  {btcVaultVerified ? (
+                  {hasEthProduct() && ethVaultVerified && (
                     <>
-                      KashYield BTC vault contract is verified on Arbiscan:{' '}
+                      KashYield ETH vault:{' '}
+                      <a href={ethVaultHref} target="_blank" rel="noopener noreferrer">
+                        View verified code ↗
+                      </a>
+                      {' '}({shortenAddress(CONTRACTS.kashYieldEth)}). KASH-ETH token:{' '}
+                      <a href={ethTokenHref} target="_blank" rel="noopener noreferrer">
+                        {shortenAddress(CONTRACTS.kashTokenEth)} ↗
+                      </a>
+                      .
+                      {hasBtcProduct() && btcVaultVerified ? ' ' : ''}
+                    </>
+                  )}
+                  {hasEthProduct() && !ethVaultVerified && isConfiguredAddress(CONTRACTS.kashYieldEth) && (
+                    <>
+                      KashYield ETH vault:{' '}
+                      <a href={ethVaultHref} target="_blank" rel="noopener noreferrer">
+                        {shortenAddress(CONTRACTS.kashYieldEth)} on Arbiscan
+                      </a>
+                      .
+                      {hasBtcProduct() ? ' ' : ''}
+                    </>
+                  )}
+                  {hasBtcProduct() && btcVaultVerified && (
+                    <>
+                      KashYield BTC vault:{' '}
                       <a href={btcVaultHref} target="_blank" rel="noopener noreferrer">
                         View verified code ↗
                       </a>
-                      {' '}({shortenAddress(CONTRACTS.kashYieldBtc)}).
+                      {' '}({shortenAddress(CONTRACTS.kashYieldBtc)}). KASH-BTC token:{' '}
+                      <a href={btcTokenHref} target="_blank" rel="noopener noreferrer">
+                        {shortenAddress(CONTRACTS.kashTokenBtc)} ↗
+                      </a>
+                      .
                     </>
-                  ) : (
+                  )}
+                  {hasBtcProduct() && !btcVaultVerified && (
                     <>
-                      Review vault bytecode and source on{' '}
+                      Review the BTC vault on{' '}
                       <a href={btcVaultHref} target="_blank" rel="noopener noreferrer">Arbiscan</a>
                       {' '}before allocating.
                     </>
+                  )}
+                  {!hasEthProduct() && !hasBtcProduct() && (
+                    <>Confirm vault addresses in the app environment before allocating.</>
                   )}
                 </p>
               </div>

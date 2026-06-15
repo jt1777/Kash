@@ -56,11 +56,13 @@ export const HARDHAT_CHAIN_ID = 31337;
 
 /** KashYield vaults with verified source on Arbiscan (#code tab). */
 export const ARBISCAN_VERIFIED_KASH_YIELD = new Set<string>([
+  CONTRACTS.kashYieldEth.toLowerCase(),
   CONTRACTS.kashYieldBtc.toLowerCase(),
 ]);
 
 /** KASH ERC-20 tokens with verified source on Arbiscan (#code tab). */
 export const ARBISCAN_VERIFIED_KASH_TOKEN = new Set<string>([
+  CONTRACTS.kashTokenEth.toLowerCase(),
   CONTRACTS.kashTokenBtc.toLowerCase(),
 ]);
 
@@ -86,3 +88,6 @@ export function isConfiguredAddress(address: `0x${string}`): boolean {
 
 export const hasBtcProduct = (): boolean =>
   isConfiguredAddress(CONTRACTS.kashYieldBtc) && isConfiguredAddress(CONTRACTS.kashTokenBtc);
+
+export const hasEthProduct = (): boolean =>
+  isConfiguredAddress(CONTRACTS.kashYieldEth) && isConfiguredAddress(CONTRACTS.kashTokenEth);

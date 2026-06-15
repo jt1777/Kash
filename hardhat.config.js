@@ -1,7 +1,7 @@
 require("@nomicfoundation/hardhat-toolbox");
 const path = require("path");
 
-// Load .env from project root so verify/scripts see ARBISCAN_API_KEY etc.
+// Load .env from project root so verify/scripts see ETHERSCAN_API_KEY etc.
 const rootEnv = path.join(__dirname, ".env");
 require("dotenv").config({ path: rootEnv });
 
@@ -53,32 +53,11 @@ module.exports = {
     }
   },
   
-  // Etherscan verification
-  // Note: Arbiscan V1 URLs used here; hardhat-verify 2.x does not send chainid required by Etherscan V2 API.
-  // If you see deprecation errors, verify manually at https://sepolia.arbiscan.io/verifyContract or upgrade to Hardhat 3 + hardhat-verify 3.x.
+  // Etherscan verification (API v2)
+  // Use a single key from https://etherscan.io/myapikey (works for Arbiscan + all Etherscan explorers).
+  // Per-network apiKey maps + customChains api.arbiscan.io URLs force deprecated API v1.
   etherscan: {
-    apiKey: {
-      arbitrumSepolia: process.env.ARBISCAN_API_KEY || process.env.ETHERSCAN_API_KEY || "",
-      arbitrumOne: process.env.ARBISCAN_API_KEY || process.env.ETHERSCAN_API_KEY || ""
-    },
-    customChains: [
-      {
-        network: "arbitrumSepolia",
-        chainId: 421614,
-        urls: {
-          apiURL: "https://api-sepolia.arbiscan.io/api",
-          browserURL: "https://sepolia.arbiscan.io"
-        }
-      },
-      {
-        network: "arbitrumOne",
-        chainId: 42161,
-        urls: {
-          apiURL: "https://api.arbiscan.io/api",
-          browserURL: "https://arbiscan.io"
-        }
-      }
-    ]
+    apiKey: process.env.ETHERSCAN_API_KEY || process.env.ARBISCAN_API_KEY || "",
   },
   
   // Gas reporter
