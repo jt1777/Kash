@@ -108,8 +108,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
   const [showMintConfirm, setShowMintConfirm] = useState(false);
   const [submittedMint, setSubmittedMint] = useState<{ hash: `0x${string}`; amount: string } | null>(null);
   const [lastActivityRefreshHash, setLastActivityRefreshHash] = useState<`0x${string}` | null>(null);
-  const [hideSettled, setHideSettled] = useState(false);
-  const [hadPendingBeforeBatch, setHadPendingBeforeBatch] = useState(false);
+  const [dismissedSettledCycles, setDismissedSettledCycles] = useState<Set<string>>(() => new Set());
 
   const { data: balance } = useBalance({ address });
   const nativeBalance = balance?.value ?? 0n;
@@ -156,13 +155,19 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
     mintBlocked,
   } = useBatchUserCap(kashYield);
 
-  const { cancellable: cancellableMint, stuck: stuckMint, refetch: refetchPendingLookback } =
-    usePendingBatchRequest({
-      kashYield,
-      userAddress: address,
-      currentBatchCycle,
-      kind: 'mint',
-    });
+  const {
+    requests: mintRequests,
+    cancellable: cancellableMint,
+    stuck: stuckMint,
+    refetch: refetchPendingLookback,
+  } = usePendingBatchRequest({
+    kashYield,
+    userAddress: address,
+    currentBatchCycle,
+    kind: 'mint',
+  });
+
+  const kashSymbol = isBtc ? 'KASH-BTC' : 'KASH-ETH';
 
   const spotOracleAddress = isBtc ? CONTRACTS.oracles.btcUsd : CONTRACTS.oracles.ethUsd;
 
@@ -192,16 +197,6 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
   const cycleDuration = cycleDurationSecondsRaw !== undefined ? Number(cycleDurationSecondsRaw) : 86400;
   const isShortCycle = cycleDuration < 86400;
 
-  const pendingMintCycle = cancellableMint?.batchCycle ?? stuckMint?.batchCycle ?? currentBatchCycle;
-
-  const { data: pendingMintRequest, refetch: refetchPendingMint } = useReadContract({
-    address: kashYield,
-    abi: kashYieldABI,
-    functionName: 'getPendingMintRequest',
-    args: address && pendingMintCycle !== undefined ? [address, pendingMintCycle] : undefined,
-    query: { refetchInterval: 15000 },
-  });
-
   const { data: currentCycleMintRequest } = useReadContract({
     address: kashYield,
     abi: kashYieldABI,
@@ -215,30 +210,45 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
   const canCancelMint = Boolean(cancellableMint && cancellableMint.amount > 0n);
   const hasStuckMint = Boolean(stuckMint && stuckMint.amount > 0n);
 
-  // localStorage key scoped to wallet + cycle + product so it persists across page refreshes
-  const pendingStorageKey = useMemo(
-    () => address && pendingMintCycle !== undefined
-      ? `kash-mint-pending-${address}-${pendingMintCycle}-${product}`
-      : null,
-    [address, pendingMintCycle, product]
+  const processedMintRequests = useMemo(
+    () => mintRequests.filter((r) => r.processed && r.amount > 0n),
+    [mintRequests],
   );
 
-  // Load persisted flag on mount / when cycle changes
-  useEffect(() => {
-    if (!pendingStorageKey) return;
-    setHadPendingBeforeBatch(localStorage.getItem(pendingStorageKey) === '1');
-  }, [pendingStorageKey]);
+  const settledDismissStorageKey = (cycle: bigint) =>
+    address ? `kash-mint-settled-dismiss-${address}-${cycle.toString()}-${product}` : null;
 
-  // Record that a pre-batch request exists the moment the cancel button becomes available
   useEffect(() => {
-    if (canCancelMint && pendingStorageKey) {
-      localStorage.setItem(pendingStorageKey, '1');
-      setHadPendingBeforeBatch(true);
+    if (!address) {
+      setDismissedSettledCycles(new Set());
+      return;
     }
-  }, [canCancelMint, pendingStorageKey]);
+    const dismissed = new Set<string>();
+    for (const req of processedMintRequests) {
+      const key = settledDismissStorageKey(req.batchCycle);
+      if (key && localStorage.getItem(key) === '1') {
+        dismissed.add(req.batchCycle.toString());
+      }
+    }
+    setDismissedSettledCycles(dismissed);
+  }, [address, product, processedMintRequests]);
 
-  // "settled" = batch ran AND we have proof the request was submitted before the batch ran
-  const mintSettled = batchProcessed && hadPendingBeforeBatch && Boolean(pendingMintRequest?.amountIn && pendingMintRequest.amountIn > 0n);
+  const visibleSettledMints = useMemo(
+    () =>
+      processedMintRequests
+        .filter((r) => !dismissedSettledCycles.has(r.batchCycle.toString()))
+        .sort((a, b) => (a.batchCycle > b.batchCycle ? -1 : 1)),
+    [processedMintRequests, dismissedSettledCycles],
+  );
+
+  const hasSettledMintNotice = visibleSettledMints.length > 0;
+
+  const dismissSettledMint = (batchCycle: bigint) => {
+    const cycleKey = batchCycle.toString();
+    const key = settledDismissStorageKey(batchCycle);
+    if (key) localStorage.setItem(key, '1');
+    setDismissedSettledCycles((prev) => new Set(prev).add(cycleKey));
+  };
 
   const { writeContract: approve, data: approveHash, isPending: isApprovePending, error: approveError } = useWriteContract();
   const mintWriteResult = useWriteContract();
@@ -260,10 +270,9 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
   // Refetch pending request after mint confirms so cancel button and status update immediately
   useEffect(() => {
     if (isMintSuccess) {
-      refetchPendingMint();
       refetchPendingLookback();
     }
-  }, [isMintSuccess, refetchPendingMint, refetchPendingLookback]);
+  }, [isMintSuccess, refetchPendingLookback]);
 
   useEffect(() => {
     if (isMintSuccess && mintHash && amount && lastActivityRefreshHash !== mintHash) {
@@ -366,7 +375,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
     });
   };
 
-  if (submittedMint) {
+  if (submittedMint && !hasSettledMintNotice) {
     const txUrl = chainId === HARDHAT_CHAIN_ID ? '#' : `${ARBITRUM_ONE_BLOCK_EXPLORER}/tx/${submittedMint.hash}`;
     return (
       <div className="text-center py-8">
@@ -570,24 +579,45 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
       )}
 
 
-      {/* Settled mint: success message */}
-      {mintSettled && !hideSettled && (
-        <div className="rounded-lg border border-green-200 bg-green-50 p-3 flex items-start justify-between gap-2">
-          <p className="text-sm text-green-800 font-medium">Your mint request for this batch has been settled! KASH tokens have been minted to your wallet.</p>
-          <button
-            type="button"
-            onClick={() => {
-              setHideSettled(true);
-              if (pendingStorageKey) localStorage.removeItem(pendingStorageKey);
-              setHadPendingBeforeBatch(false);
-            }}
-            className="text-green-600 hover:text-green-800 transition shrink-0 cursor-pointer"
-            aria-label="Dismiss"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+      {/*
+        Mints currently push KASH to the user's wallet when the batch settles.
+        TODO(contract): When mint settlement moves to a user pull-claim flow (like redeems),
+        replace this notice with claim actions and copy similar to RedeemForm.
+      */}
+      {hasSettledMintNotice && (
+        <div className="rounded-lg border border-green-200 bg-green-50 p-3 space-y-3">
+          <p className="text-sm text-green-800 font-medium">
+            {visibleSettledMints.length === 1
+              ? `Your mint for batch cycle ${visibleSettledMints[0].batchCycle.toString()} is complete.`
+              : `You have ${visibleSettledMints.length} completed mints.`}
+          </p>
+          <ul className="space-y-2">
+            {visibleSettledMints.map((req) => {
+              const cycleKey = req.batchCycle.toString();
+              return (
+                <li
+                  key={cycleKey}
+                  className="kash-notice-nested rounded-md border border-green-200 p-3 flex items-start justify-between gap-2"
+                >
+                  <p className="text-sm text-gray-700">
+                    <span className="font-medium text-green-800">Batch {cycleKey}</span>
+                    {' · '}
+                    Mint settled — your {kashSymbol} tokens were sent to your wallet.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => dismissSettledMint(req.batchCycle)}
+                    className="text-green-600 hover:text-green-800 transition shrink-0 cursor-pointer"
+                    aria-label="Dismiss"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
         </div>
       )}
 

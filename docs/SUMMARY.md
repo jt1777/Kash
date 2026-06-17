@@ -19,6 +19,7 @@
 ## Roadmap
 
 * [Roadmap](roadmap.md)
+* [Referral Program Plan](referrals-plan.md)
 
 ## Agent integration
 
