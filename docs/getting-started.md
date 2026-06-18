@@ -7,7 +7,7 @@ This guide covers the prerequisites for making a first deposit.
 ## Requirements
 
 - **A wallet** — Rabby, Coinbase Wallet, or Rainbow wallet. Metamask wallet is not recommended as it indiscriminately blocks legitimate contracts.
-- **Arbitrum One** added to the wallet (chain ID **42161**)
+- **Arbitrum One** added to the wallet (chain ID **42161**). See below for more details.
 - **ETH** on Arbitrum One for gas, and **ETH** (for KASH-ETH) or **wBTC** (for KASH-BTC) to deposit
 
 > KASH runs on **Arbitrum One**. The protocol uses **real assets** — only amounts that can be affordably lost should be deposited, and [Risks](risks.md) should be reviewed first.
@@ -15,6 +15,10 @@ This guide covers the prerequisites for making a first deposit.
 ---
 
 ## Step 1 — Add Arbitrum One to the wallet
+
+**Arbitrum One** is a Layer 2 (L2) network built on top of Ethereum. Instead of running every transaction on Ethereum mainnet (often called “L1”), Arbitrum processes them on a separate chain and periodically posts the results back to Ethereum for security. That design keeps fees much lower and confirmations faster, while still inheriting Ethereum’s security model.
+
+KASH is deployed on Arbitrum One — not on Ethereum mainnet. Wallets default to Ethereum L1, so **Arbitrum One must be added as a network** before connecting to the app or sending a deposit. On Arbitrum One, **ETH** is still used to pay gas (the same asset as on mainnet, but on a different chain).
 
 If Arbitrum One is not already configured, add it manually:
 
@@ -32,7 +36,7 @@ Most wallets also support adding the network from [Chainlist](https://chainlist.
 
 ## Step 2 — Get ETH and wBTC on Arbitrum One
 
-**ETH on Arbitrum** is required to pay gas and to use KASH-ETH.
+**ETH on Arbitrum** is required to pay gas and to use as a deposit asset for KASH-ETH.  Note both ETH and wETH can be used as a deposit for the KASH-ETH contract.
 
 **Common options:**
 
