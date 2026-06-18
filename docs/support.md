@@ -8,7 +8,7 @@ For questions not covered in this documentation, the KASH community and team are
 
 ## FAQs
 
-Browse the **#faqs** channel for answers to common questions about deposits, redemptions, batch timing, fees, and wallet setup. Check there first — many issues are already addressed.
+Browse the **#frequently-asked-questions** channel for answers to common questions about deposits, redemptions, batch timing, fees, and wallet setup. Check there first — many issues are already addressed.
 
 ---
 

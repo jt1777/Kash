@@ -9,8 +9,8 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "KashYield - DeFi Yield Protocol",
-  description: "Earn yield on your crypto assets with KashYield",
+  title: "KASH - DeFi Yield Protocol",
+  description: "Verifiable on-chain, autonomously managed, market-neutral strategies.",
 };
 
 export default function RootLayout({
