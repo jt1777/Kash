@@ -106,7 +106,12 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
   const depositToken = isBtc ? MINT_TOKEN_BTC : MINT_TOKEN_ETH;
   const [amount, setAmount] = useState('');
   const [showMintConfirm, setShowMintConfirm] = useState(false);
-  const [submittedMint, setSubmittedMint] = useState<{ hash: `0x${string}`; amount: string } | null>(null);
+  const [submittedMint, setSubmittedMint] = useState<{
+    hash: `0x${string}`;
+    amount: string;
+    product: Product;
+    symbol: string;
+  } | null>(null);
   const [lastActivityRefreshHash, setLastActivityRefreshHash] = useState<`0x${string}` | null>(null);
   const [dismissedSettledCycles, setDismissedSettledCycles] = useState<Set<string>>(() => new Set());
 
@@ -276,11 +281,11 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
 
   useEffect(() => {
     if (isMintSuccess && mintHash && amount && lastActivityRefreshHash !== mintHash) {
-      setSubmittedMint({ hash: mintHash, amount });
+      setSubmittedMint({ hash: mintHash, amount, product, symbol: depositToken.symbol });
       setLastActivityRefreshHash(mintHash);
       dispatchActivityRefresh();
     }
-  }, [isMintSuccess, mintHash, amount, lastActivityRefreshHash]);
+  }, [isMintSuccess, mintHash, amount, lastActivityRefreshHash, product, depositToken.symbol]);
 
   const parsedAmount = amount ?
     (depositToken.symbol === 'ETH' ? parseEther(amount) : parseUnits(amount, depositToken.decimals))
@@ -375,7 +380,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
     });
   };
 
-  if (submittedMint && !hasSettledMintNotice) {
+  if (submittedMint && submittedMint.product === product && !hasSettledMintNotice) {
     const txUrl = chainId === HARDHAT_CHAIN_ID ? '#' : `${ARBITRUM_ONE_BLOCK_EXPLORER}/tx/${submittedMint.hash}`;
     return (
       <div className="text-center py-8">
@@ -392,7 +397,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
         <div className="rounded-xl p-4 mb-6 border border-gray-200 bg-indigo-50 shadow-md text-left space-y-2">
           <p className="text-sm font-medium text-gray-700">Deposit summary</p>
           <p className="text-sm text-gray-600">
-            You deposited <span className="font-semibold text-indigo-600">{submittedMint.amount} {depositToken.symbol}</span>
+            You deposited <span className="font-semibold text-indigo-600">{submittedMint.amount} {submittedMint.symbol}</span>
           </p>
           <p className="text-sm text-gray-600">
             Transaction:{' '}

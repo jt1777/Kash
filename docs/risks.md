@@ -6,6 +6,27 @@ KASH is a Decentralized Finance protocol on **Arbitrum One** mainnet. Participat
 
 ---
 
+## Do not send tokens directly to the contract
+
+> **Critical:** Never transfer ETH, wETH, wBTC, or any other token **directly** to a KASH vault contract address (for example from a wallet’s “Send” screen or a raw ERC-20 transfer). Deposits **must** go through the app’s **Mint KASH** flow, which calls `requestMint` on the correct vault. Tokens sent any other way are **not** credited as a deposit and, in most cases, **cannot be returned to you**.
+
+The vault contracts only recognize deposits submitted via **`requestMint`** during the open user window. A plain transfer to the contract address does **not** create a mint request, does **not** mint KASH, and is **not** refundable through the app.
+
+| Vault | Accepted asset | Correct method | What goes wrong if you transfer directly |
+|-------|----------------|----------------|----------------------------------------|
+| **KASH-ETH** (`KashYieldETH`) | ETH or wETH | Use **Mint KASH** on the ETH tab (calls `requestMint`) | **Native ETH** sent to the contract is accepted by `receive()` but is **not** tied to your wallet — you receive no KASH and have **no way to reclaim it**. **wETH** sent without calling `requestMint` is likewise not credited to you. |
+| **KASH-BTC** (`KashYieldBtc`) | wBTC only | Use **Mint KASH** on the BTC tab (calls `requestMint`) | **wBTC** sent via a direct ERC-20 transfer is **not** credited and **cannot be recovered** — `rescueERC20` explicitly blocks the vault’s wBTC address, so even the protocol owner cannot pull it back out. |
+
+**Use the right vault for the right asset:**
+
+- Do **not** send **ETH** or **wETH** to the **KASH-BTC** contract (it has no `receive()` hook; the transaction should revert, but never attempt it).
+- Do **not** send **wBTC** to the **KASH-ETH** contract — it is the wrong product and will not mint KASH-BTC.
+- Do **not** send **wBTC** to the **KASH-BTC** contract except through **Mint KASH** — a direct transfer is the most common way to permanently lose funds.
+
+The only supported deposit path is the frontend **Mint KASH** section (or an equivalent wallet interaction that explicitly calls `requestMint` on the correct contract). See [Depositing](depositing.md) for the step-by-step flow.
+
+---
+
 ## Smart contract risk
 
 The protocol is governed entirely by smart contracts. If there is a bug in the code, funds could be lost or locked. Mitigations in place:

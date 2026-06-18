@@ -62,7 +62,12 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
   const redeemSymbol = isBtc ? 'KASH-BTC' : 'KASH-ETH';
   const [amount, setAmount] = useState('');
   const [showRedeemConfirm, setShowRedeemConfirm] = useState(false);
-  const [submittedRedeem, setSubmittedRedeem] = useState<{ hash: `0x${string}`; amount: string } | null>(null);
+  const [submittedRedeem, setSubmittedRedeem] = useState<{
+    hash: `0x${string}`;
+    amount: string;
+    product: Product;
+    symbol: string;
+  } | null>(null);
   const [lastActivityRefreshHash, setLastActivityRefreshHash] = useState<`0x${string}` | null>(null);
   const [claimingCycle, setClaimingCycle] = useState<string | null>(null);
   const [pendingClaimCycle, setPendingClaimCycle] = useState<bigint | null>(null);
@@ -325,11 +330,11 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
 
   useEffect(() => {
     if (isRedeemSuccess && redeemHash && amount && lastActivityRefreshHash !== redeemHash) {
-      setSubmittedRedeem({ hash: redeemHash, amount });
+      setSubmittedRedeem({ hash: redeemHash, amount, product, symbol: redeemSymbol });
       setLastActivityRefreshHash(redeemHash);
       dispatchActivityRefresh();
     }
-  }, [isRedeemSuccess, redeemHash, amount, lastActivityRefreshHash]);
+  }, [isRedeemSuccess, redeemHash, amount, lastActivityRefreshHash, product, redeemSymbol]);
 
   useEffect(() => {
     if (!showRedeemConfirm) return;
@@ -382,7 +387,7 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
     }
   };
 
-  if (submittedRedeem && !needsClaim) {
+  if (submittedRedeem && submittedRedeem.product === product && !needsClaim) {
     const txUrl = `${ARBITRUM_ONE_BLOCK_EXPLORER}/tx/${submittedRedeem.hash}`;
     return (
       <div className="text-center py-8">
@@ -399,7 +404,7 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
         <div className="rounded-xl p-4 mb-6 border border-gray-200 bg-purple-50 shadow-md text-left space-y-2">
           <p className="text-sm font-medium text-gray-700">Request summary</p>
           <p className="text-sm text-gray-600">
-            You requested to redeem <span className="font-semibold text-purple-600">{submittedRedeem.amount} {redeemSymbol}</span>
+            You requested to redeem <span className="font-semibold text-purple-600">{submittedRedeem.amount} {submittedRedeem.symbol}</span>
           </p>
           <p className="text-sm text-gray-600">
             Transaction:{' '}

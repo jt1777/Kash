@@ -24,6 +24,9 @@ export function SiteFooter({ className, contractAddress }: SiteFooterProps) {
             GitHub
           </a>
           <a href="https://kash-2.gitbook.io/kash-enhanced-yield-protocol" target="_blank" rel="noopener noreferrer">Documentation</a>
+          <a href="https://discord.gg/FxtyWx6Zw5" target="_blank" rel="noopener noreferrer">
+            Discord
+          </a>
           {contractAddress && (
             <a
               href={arbiscanAddressUrl(contractAddress, { code: verified })}
