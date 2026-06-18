@@ -24,3 +24,7 @@
 ## Agent integration
 
 * [Agent Quickstart](agent-quickstart.md)
+
+## Help
+
+* [FAQs & Technical Support](support.md)
