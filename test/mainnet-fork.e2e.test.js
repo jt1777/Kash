@@ -31,6 +31,7 @@ const {
   settleMintPhase2,
   settleRedeemPhase2,
   claimRedeemForUser,
+  claimMintForUser,
   deployAndWireExchangeFacade,
   closeShortViaFacade,
   withdrawFromHyperliquidViaFacade,
@@ -213,6 +214,8 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
       // ── Settlement NAV + mark done + Phase 2 ───────────────────────────────
       await settleMintPhase2({ kashYield: kashYieldEth, bot, batchCycle, nav: NAV_1 });
       expect(await kashYieldEth.batchProcessed(batchCycle)).to.be.true;
+
+      await claimMintForUser(kashYieldEth, user1, batchCycle, NAV_1);
 
       // ── Verify KashToken minted ───────────────────────────────────────────
       const kashBalance = await kashTokenEth.balanceOf(user1.address);
@@ -456,6 +459,8 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
 
       await settleMintPhase2({ kashYield: kashYieldBtc, bot, batchCycle, nav: NAV_1 });
       expect(await kashYieldBtc.batchProcessed(batchCycle)).to.be.true;
+
+      await claimMintForUser(kashYieldBtc, user1, batchCycle, NAV_1);
 
       const kashBalance = await kashTokenBtc.balanceOf(user1.address);
       // Expected = deposited_wbtc_satoshis * price_per_BTC / 1e8 decimals * (1 - fee)

@@ -19,6 +19,9 @@ const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const hre = require("hardhat");
 const {
+  buildMintMerkleRoot,
+} = require("./helpers/forkBatchOps");
+const {
   WBTC_ADDRESS,
   ARBITRUM_BLOCK_GAS_LIMIT,
   NAV_1,
@@ -47,8 +50,8 @@ describe(`Batch gas benchmark — ${MINT_COUNT} mint wallets`, function () {
       console.log("    ⏭  ARBITRUM_MAINNET_RPC_URL not set — skipping gas benchmark.");
       this.skip();
     }
-    if (MINT_COUNT < 1 || MINT_COUNT > 500) {
-      throw new Error("MINT_USER_COUNT must be between 1 and 500");
+    if (MINT_COUNT < 1 || MINT_COUNT > 10000) {
+      throw new Error("MINT_USER_COUNT must be between 1 and 10000");
     }
   });
 
@@ -106,7 +109,11 @@ describe(`Batch gas benchmark — ${MINT_COUNT} mint wallets`, function () {
     await kashYieldBtc.connect(bot).updateNAV(NAV_1, 0n, 0n, 0n);
     await kashYieldBtc.connect(bot).markBatchOpsDone(batchCycle, 0);
 
-    const phase2Calldata = kashYieldBtc.interface.encodeFunctionData("performUpkeep", ["0x"]);
+    const mintRoot = await buildMintMerkleRoot(kashYieldBtc, batchCycle, NAV_1);
+    const phase2Calldata = kashYieldBtc.interface.encodeFunctionData(
+      "processBatchPhase2ForCycle",
+      [batchCycle, `0x${"0".repeat(64)}`, mintRoot],
+    );
     let phase2Estimate;
     try {
       phase2Estimate = await ethers.provider.estimateGas({
@@ -122,7 +129,11 @@ describe(`Batch gas benchmark — ${MINT_COUNT} mint wallets`, function () {
     let phase2Gas;
     let phase2Failed;
     try {
-      const phase2Tx = await kashYieldBtc.connect(bot).performUpkeep("0x");
+      const phase2Tx = await kashYieldBtc.connect(bot).processBatchPhase2ForCycle(
+        batchCycle,
+        `0x${"0".repeat(64)}`,
+        mintRoot,
+      );
       const phase2Receipt = await phase2Tx.wait();
       phase2Gas = phase2Receipt.gasUsed;
       expect(await kashYieldBtc.batchProcessed(batchCycle)).to.equal(true);
@@ -142,13 +153,9 @@ describe(`Batch gas benchmark — ${MINT_COUNT} mint wallets`, function () {
 
     if (phase2Gas != null) {
       expect(phase2Gas).to.be.gt(0n);
-      if (MINT_COUNT === 500) {
-        // Informational — test passes either way so CI captures the number.
-        if (phase2Gas > ARBITRUM_BLOCK_GAS_LIMIT) {
-          console.log(
-            "    ⚠  500-minter Phase 2 exceeds the Arbitrum block gas limit — push mint payout may fail on mainnet.",
-          );
-        }
+      expect(phase2Gas).to.be.lt(3_000_000n);
+      if (phase1Gas != null) {
+        expect(phase1Gas).to.be.lt(600_000n);
       }
     } else {
       throw new Error(`Phase 2 reverted: ${phase2Failed}`);

@@ -152,6 +152,27 @@ async function computeBatchGrossRedeemAsset(kashYield, batchCycle, nav) {
   return total;
 }
 
+async function buildMintMerkleRoot(kashYield, batchCycle, nav) {
+  const { allocMintKashAmounts, buildMintMerkleTree } = require("./mintMerkle");
+  const totalMintUSD = BigInt((await kashYield.batchTotalMintValueUSD(batchCycle)).toString());
+  if (totalMintUSD === 0n) return `0x${"0".repeat(64)}`;
+  const feeBps = BigInt((await kashYield.feeBps()).toString());
+  const amountAfterFeeTotal = (totalMintUSD * (10000n - feeBps)) / 10000n;
+  const totalMintKash = (amountAfterFeeTotal * nav) / (10n ** 18n);
+  const info = await kashYield.getBatchInfo(batchCycle);
+  const mintCount = Number(info[3]);
+  const minters = [];
+  const amountInUSD = [];
+  for (let i = 0; i < mintCount; i++) {
+    const addr = await kashYield.batchMintUsers(batchCycle, i);
+    const req = await kashYield.getPendingMintRequest(addr, batchCycle);
+    minters.push(addr);
+    amountInUSD.push(BigInt(req.amountInUSD.toString()));
+  }
+  const entries = allocMintKashAmounts(minters, amountInUSD, totalMintUSD, totalMintKash);
+  return buildMintMerkleTree(batchCycle, entries).root;
+}
+
 async function buildRedeemMerkleRoot(kashYield, batchCycle) {
   const { allocRedeemNetAmounts, buildRedeemMerkleTree } = require("./redeemMerkle");
   const redeemKash = BigInt((await kashYield.batchTotalRedeemKash(batchCycle)).toString());
@@ -175,14 +196,46 @@ async function buildRedeemMerkleRoot(kashYield, batchCycle) {
 async function settleMintPhase2({ kashYield, bot, batchCycle, nav }) {
   await kashYield.connect(bot).updateNAV(nav, 0n, 0n, 0n);
   await kashYield.connect(bot).markBatchOpsDone(batchCycle, 0);
-  await kashYield.connect(bot).performUpkeep("0x");
+  const mintRoot = await buildMintMerkleRoot(kashYield, batchCycle, nav);
+  await kashYield.connect(bot).processBatchPhase2ForCycle(
+    batchCycle,
+    `0x${"0".repeat(64)}`,
+    mintRoot,
+  );
 }
 
 async function settleRedeemPhase2({ kashYield, bot, batchCycle, nav, grossG }) {
   await kashYield.connect(bot).updateNAV(nav, 0n, 0n, 0n);
   await kashYield.connect(bot).markBatchOpsDone(batchCycle, grossG);
-  const root = await buildRedeemMerkleRoot(kashYield, batchCycle);
-  await kashYield.connect(bot).processBatchPhase2ForCycle(batchCycle, root);
+  const redeemRoot = await buildRedeemMerkleRoot(kashYield, batchCycle);
+  const mintRoot = await buildMintMerkleRoot(kashYield, batchCycle, nav);
+  await kashYield.connect(bot).processBatchPhase2ForCycle(batchCycle, redeemRoot, mintRoot);
+}
+
+async function claimMintForUser(kashYield, user, batchCycle, nav) {
+  const { allocMintKashAmounts, buildMintMerkleTree } = require("./mintMerkle");
+  const totalMintUSD = BigInt((await kashYield.batchTotalMintValueUSD(batchCycle)).toString());
+  const feeBps = BigInt((await kashYield.feeBps()).toString());
+  const amountAfterFeeTotal = (totalMintUSD * (10000n - feeBps)) / 10000n;
+  const totalMintKash = (amountAfterFeeTotal * nav) / (10n ** 18n);
+  const info = await kashYield.getBatchInfo(batchCycle);
+  const mintCount = Number(info[3]);
+  const minters = [];
+  const amountInUSD = [];
+  for (let i = 0; i < mintCount; i++) {
+    const addr = await kashYield.batchMintUsers(batchCycle, i);
+    const req = await kashYield.getPendingMintRequest(addr, batchCycle);
+    minters.push(addr);
+    amountInUSD.push(BigInt(req.amountInUSD.toString()));
+  }
+  const entries = allocMintKashAmounts(minters, amountInUSD, totalMintUSD, totalMintKash);
+  const { proofs } = buildMintMerkleTree(batchCycle, entries);
+  const userAddr = await user.getAddress();
+  const leaf = entries.find((e) => e.user.toLowerCase() === userAddr.toLowerCase());
+  if (!leaf || leaf.amount === 0n) throw new Error("no mint claim leaf for user");
+  const proof = proofs.get(userAddr.toLowerCase());
+  await kashYield.connect(user).claimMint(batchCycle, leaf.amount, proof);
+  return leaf.amount;
 }
 
 async function claimRedeemForUser(kashYield, user, batchCycle) {
@@ -241,5 +294,7 @@ module.exports = {
   settleMintPhase2,
   settleRedeemPhase2,
   buildRedeemMerkleRoot,
+  buildMintMerkleRoot,
   claimRedeemForUser,
+  claimMintForUser,
 };

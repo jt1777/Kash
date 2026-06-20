@@ -3,8 +3,10 @@
   "version": "1.0.0",
   "license": "BUSL-1.1",
   "scripts": {
-    "test": "npx hardhat test test/batch-process-math.unit.test.js test/strategy-redeem-fraction.unit.test.js test/redeem-merkle.unit.test.js test/mainnet-fork.e2e.test.js test/mainnet-fork-advanced.e2e.test.js",
-    "test:math": "npx hardhat test test/batch-process-math.unit.test.js test/strategy-redeem-fraction.unit.test.js test/redeem-merkle.unit.test.js",
+    "compile": "npx hardhat compile",
+    "test:contract-size": "node scripts/check-contract-size.js",
+    "test": "npm run compile && npm run test:contract-size && npx hardhat test test/batch-process-math.unit.test.js test/strategy-redeem-fraction.unit.test.js test/redeem-merkle.unit.test.js test/mint-merkle.unit.test.js test/mainnet-fork.e2e.test.js test/mainnet-fork-advanced.e2e.test.js",
+    "test:math": "npm run compile && npm run test:contract-size && npx hardhat test test/batch-process-math.unit.test.js test/strategy-redeem-fraction.unit.test.js test/redeem-merkle.unit.test.js test/mint-merkle.unit.test.js",
     "test:fork": "npx hardhat test test/mainnet-fork.e2e.test.js",
     "test:advanced": "npx hardhat test test/mainnet-fork-advanced.e2e.test.js",
     "test:gas-batch": "npx hardhat test test/batch-gas-benchmark.fork.test.js",

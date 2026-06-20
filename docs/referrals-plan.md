@@ -5,7 +5,7 @@
 - Every connected wallet gets a **deterministic, shareable referral code** (short hex derived from address — not a custom vanity string).
 - New users **enter a code on their first mint**; that binds them to a referrer **permanently** for that wallet.
 - On every subsequent **mint and redeem** by that wallet, the referrer earns a **configurable share** of the protocol fee (5 bps user-facing rate today; on-chain default is 3 bps via [`feeBps`](../contracts/KashYieldETH.sol)).
-- Ship **Phase A off-chain** quickly; migrate to **Phase B on-chain enforcement** in the same contract upgrade that introduces **mint Merkle pull-claims** (mirroring today’s redeem flow).
+- Ship **Phase A off-chain** quickly; migrate to **Phase B on-chain enforcement** in a future upgrade if needed. **Mint Merkle + O(1) Phase 1 ships first** without on-chain referral hooks.
 
 ---
 

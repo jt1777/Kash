@@ -37,14 +37,14 @@ export const kashYieldABI = [
   },
   {
     inputs: [],
-    name: "MAX_MINT_USERS",
+    name: "maxMintUsers",
     outputs: [{ name: "", type: "uint256" }],
     stateMutability: "view",
     type: "function",
   },
   {
     inputs: [],
-    name: "MAX_REDEEM_USERS",
+    name: "maxRedeemUsers",
     outputs: [{ name: "", type: "uint256" }],
     stateMutability: "view",
     type: "function",
@@ -108,6 +108,16 @@ export const kashYieldABI = [
         type: "tuple",
       },
     ],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [
+      { name: "batchCycle", type: "uint256" },
+      { name: "index", type: "uint256" },
+    ],
+    name: "batchMintUsers",
+    outputs: [{ name: "", type: "address" }],
     stateMutability: "view",
     type: "function",
   },
@@ -227,12 +237,30 @@ export const kashYieldABI = [
   {
     inputs: [
       { name: "batchCycle", type: "uint256" },
+      { name: "kashAmount", type: "uint256" },
+      { name: "proof", type: "bytes32[]" },
+    ],
+    name: "claimMint",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [
+      { name: "batchCycle", type: "uint256" },
       { name: "amount", type: "uint256" },
       { name: "proof", type: "bytes32[]" },
     ],
     name: "claimRedeem",
     outputs: [],
     stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [{ name: "batchCycle", type: "uint256" }, { name: "user", type: "address" }],
+    name: "mintClaimed",
+    outputs: [{ name: "", type: "bool" }],
+    stateMutability: "view",
     type: "function",
   },
   {
@@ -247,9 +275,12 @@ export const kashYieldABI = [
     name: "batchClaimInfo",
     outputs: [
       { name: "redeemMerkleRoot", type: "bytes32" },
+      { name: "mintMerkleRoot", type: "bytes32" },
       { name: "totalNetClaimable", type: "uint256" },
+      { name: "totalMintClaimable", type: "uint256" },
       { name: "claimDeadline", type: "uint256" },
       { name: "claimedAmount", type: "uint256" },
+      { name: "mintClaimedAmount", type: "uint256" },
     ],
     stateMutability: "view",
     type: "function",

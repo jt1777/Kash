@@ -78,7 +78,12 @@ event ProtocolInteraction(uint8 indexed action, address indexed asset, uint256 a
 event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
 event RedeemMerkleRootCommitted(uint256 indexed batchCycle, bytes32 root, uint256 totalNetClaimable, uint256 claimDeadline);
 event RedeemMerkleRootOverridden(uint256 indexed batchCycle, bytes32 oldRoot, bytes32 newRoot);
+event MintMerkleRootCommitted(uint256 indexed batchCycle, bytes32 root, uint256 totalMintClaimable, uint256 claimDeadline);
+event MintMerkleRootOverridden(uint256 indexed batchCycle, bytes32 oldRoot, bytes32 newRoot);
 event ExpiredClaimsSwept(uint256 indexed batchCycle, uint256 amountSwept);
+event ExpiredMintClaimsSwept(uint256 indexed batchCycle, uint256 amountSwept);
+event MaxMintUsersUpdated(uint256 newMax);
+event MaxRedeemUsersUpdated(uint256 newMax);
 event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 event FeeUpdated(uint256 newFeeBps);
 event OracleUpdated(address indexed newOracle);
@@ -97,7 +102,7 @@ contract KashYieldETH is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     uint256 public constant ETH_DECIMALS = 18;
-    string public constant VERSION = "1.0.0";
+    string public constant VERSION = "2.0.0";
 
     // ── Core state ────────────────────────────────────────────────────────
     address payable public owner;
@@ -120,8 +125,10 @@ contract KashYieldETH is ReentrancyGuard {
     uint8   public ethDecimals = 18;
 
     uint256 private constant REDEEM_PAYOUT_TOLERANCE = 1e13; // wei — rounding vs locked G
-    uint256 public constant MAX_MINT_USERS = 500;
-    uint256 public constant MAX_REDEEM_USERS = 500;
+    uint256 public constant MAX_MINT_USERS_CEILING = 100_000;
+    uint256 public constant MAX_REDEEM_USERS_CEILING = 100_000;
+    uint256 public maxMintUsers = 10_000;
+    uint256 public maxRedeemUsers = 10_000;
     uint256 public constant CLAIM_EXPIRY_SECONDS = 30 days;
 
     // ── Fee config ────────────────────────────────────────────────────────
@@ -137,15 +144,20 @@ contract KashYieldETH is ReentrancyGuard {
     /// @notice Current owner ETH reserve that came from protocol mint/redeem fees.
     uint256 public protocolFeeEthReserve;
     uint256 public lockedClaimEth;
+    uint256 public lockedClaimKash;
 
     struct BatchClaimInfo {
         bytes32 redeemMerkleRoot;
+        bytes32 mintMerkleRoot;
         uint256 totalNetClaimable;
+        uint256 totalMintClaimable;
         uint256 claimDeadline;
         uint256 claimedAmount;
+        uint256 mintClaimedAmount;
     }
     mapping(uint256 => BatchClaimInfo) public batchClaimInfo;
     mapping(uint256 => mapping(address => bool)) public redeemClaimed;
+    mapping(uint256 => mapping(address => bool)) public mintClaimed;
     mapping(uint256 => uint256) public activeMintUsers;
     mapping(uint256 => uint256) public activeRedeemUsers;
 
@@ -163,6 +175,7 @@ contract KashYieldETH is ReentrancyGuard {
     struct RedeemRequest {
         address user;
         uint256 kashAmount;
+        uint256 redeemValueUSD;
         uint256 batchCycle;
     }
 
@@ -310,6 +323,16 @@ contract KashYieldETH is ReentrancyGuard {
         feeBps = newFee;
         emit FeeUpdated(newFee);
     }
+    function setMaxMintUsers(uint256 newMax) external onlyOwner {
+        if (newMax == 0 || newMax > MAX_MINT_USERS_CEILING) revert InvalidRequest();
+        maxMintUsers = newMax;
+        emit MaxMintUsersUpdated(newMax);
+    }
+    function setMaxRedeemUsers(uint256 newMax) external onlyOwner {
+        if (newMax == 0 || newMax > MAX_REDEEM_USERS_CEILING) revert InvalidRequest();
+        maxRedeemUsers = newMax;
+        emit MaxRedeemUsersUpdated(newMax);
+    }
     function pause()   external onlyOwner { paused = true; }
     function unpause() external onlyOwner { paused = false; }
 
@@ -335,9 +358,13 @@ contract KashYieldETH is ReentrancyGuard {
         req.user = msg.sender;
         req.amountIn += actualAmount;
         req.batchCycle = batchCycle;
+        uint256 ethPrice = getEthPrice();
+        uint256 usdIncrement = (actualAmount * ethPrice) / (10 ** ETH_DECIMALS);
+        req.amountInUSD += usdIncrement;
+        batchTotalMintValueUSD[batchCycle] += usdIncrement;
         batchTotalMintEth[batchCycle] += actualAmount;
         if (!wasActive) {
-            if (activeMintUsers[batchCycle] >= MAX_MINT_USERS) revert MintCapReached();
+            if (activeMintUsers[batchCycle] >= maxMintUsers) revert MintCapReached();
             unchecked { activeMintUsers[batchCycle]++; }
         }
         if (!isInBatchMint[batchCycle][msg.sender]) {
@@ -361,9 +388,12 @@ contract KashYieldETH is ReentrancyGuard {
         req.user = msg.sender;
         req.kashAmount += kashAmount;
         req.batchCycle = batchCycle;
+        uint256 usdIncrement = (kashAmount * currentNAV) / 1e18;
+        req.redeemValueUSD += usdIncrement;
+        batchTotalRedeemValueUSD[batchCycle] += usdIncrement;
         batchTotalRedeemKash[batchCycle] += kashAmount;
         if (!wasActive) {
-            if (activeRedeemUsers[batchCycle] >= MAX_REDEEM_USERS) revert RedeemCapReached();
+            if (activeRedeemUsers[batchCycle] >= maxRedeemUsers) revert RedeemCapReached();
             unchecked { activeRedeemUsers[batchCycle]++; }
         }
         if (!isInBatchRedeem[batchCycle][msg.sender]) {
@@ -379,7 +409,9 @@ contract KashYieldETH is ReentrancyGuard {
         MintRequest storage req = userMintRequests[msg.sender][batchCycle];
         if (req.amountIn == 0) revert NoRequest();
         uint256 amount = req.amountIn;
+        uint256 usdAmount = req.amountInUSD;
         batchTotalMintEth[batchCycle] -= amount;
+        batchTotalMintValueUSD[batchCycle] -= usdAmount;
         unchecked { activeMintUsers[batchCycle]--; }
         delete userMintRequests[msg.sender][batchCycle];
         payable(msg.sender).transfer(amount);
@@ -392,7 +424,9 @@ contract KashYieldETH is ReentrancyGuard {
         RedeemRequest storage req = userRedeemRequests[msg.sender][batchCycle];
         if (req.kashAmount == 0) revert NoRequest();
         uint256 kashAmount = req.kashAmount;
+        uint256 usdAmount = req.redeemValueUSD;
         batchTotalRedeemKash[batchCycle] -= kashAmount;
+        batchTotalRedeemValueUSD[batchCycle] -= usdAmount;
         unchecked { activeRedeemUsers[batchCycle]--; }
         delete userRedeemRequests[msg.sender][batchCycle];
         kashTokenEth.transfer(msg.sender, kashAmount);
@@ -413,7 +447,7 @@ contract KashYieldETH is ReentrancyGuard {
         uint8 phase = batchPhase[batchCycle];
         if (phase == 0) processBatchPhase1();
         else if (phase == 2) {
-            if (batchTotalRedeemKash[batchCycle] > 0) revert UseBotPhase2();
+            if (batchTotalRedeemKash[batchCycle] > 0 || batchTotalMintValueUSD[batchCycle] > 0) revert UseBotPhase2();
             processBatchPhase2();
         }
     }
@@ -424,32 +458,9 @@ contract KashYieldETH is ReentrancyGuard {
         uint256 batchCycle = block.timestamp / cycleDurationSeconds;
         if (batchPhase[batchCycle] != 0) revert PhaseAlreadyStarted();
 
-        uint256 ethPrice = getEthPrice();
         uint256 indicativeNAV = currentNAV;
-        uint256 totalMintUSD = 0;
-
-        address[] memory minters = batchMintUsers[batchCycle];
-        for (uint256 i = 0; i < minters.length; i++) {
-            MintRequest storage req = userMintRequests[minters[i]][batchCycle];
-            if (req.amountIn > 0) {
-                req.amountInUSD = (req.amountIn * ethPrice) / (10 ** ETH_DECIMALS);
-                totalMintUSD += req.amountInUSD;
-            }
-        }
-        batchTotalMintValueUSD[batchCycle] = totalMintUSD;
-
-        uint256 totalRedeemUSD = 0;
-        uint256 totalRedeemKash = 0;
-        address[] memory redeemers = batchRedeemUsers[batchCycle];
-        for (uint256 i = 0; i < redeemers.length; i++) {
-            RedeemRequest memory req = userRedeemRequests[redeemers[i]][batchCycle];
-            if (req.kashAmount > 0) {
-                totalRedeemUSD += (req.kashAmount * indicativeNAV) / 1e18;
-                totalRedeemKash += req.kashAmount;
-            }
-        }
-        batchTotalRedeemValueUSD[batchCycle] = totalRedeemUSD;
-        batchTotalRedeemKash[batchCycle] = totalRedeemKash;
+        uint256 totalMintUSD = batchTotalMintValueUSD[batchCycle];
+        uint256 totalRedeemUSD = batchTotalRedeemValueUSD[batchCycle];
         batchIndicativeNAV[batchCycle] = indicativeNAV;
 
         int256 netPositionUSD = int256(totalMintUSD) - int256(totalRedeemUSD);
@@ -475,13 +486,18 @@ contract KashYieldETH is ReentrancyGuard {
     function processBatchPhase2() internal onlyProcessingWindow {
         uint256 batchCycle = block.timestamp / cycleDurationSeconds;
         if (batchPhase[batchCycle] != 2) revert OpsNotDone();
-        _processBatchPhase2(batchCycle, bytes32(0));
+        _processBatchPhase2(batchCycle, bytes32(0), bytes32(0));
     }
 
-    function processBatchPhase2ForCycle(uint256 batchCycle, bytes32 redeemMerkleRoot) external onlyBotOrKeeper nonReentrant {
+    function processBatchPhase2ForCycle(
+        uint256 batchCycle,
+        bytes32 redeemMerkleRoot,
+        bytes32 mintMerkleRoot
+    ) external onlyBotOrKeeper nonReentrant {
         if (batchPhase[batchCycle] != 2) revert OpsNotDone();
         if (batchTotalRedeemKash[batchCycle] > 0 && redeemMerkleRoot == bytes32(0)) revert InvalidMerkleRoot();
-        _processBatchPhase2(batchCycle, redeemMerkleRoot);
+        if (batchTotalMintValueUSD[batchCycle] > 0 && mintMerkleRoot == bytes32(0)) revert InvalidMerkleRoot();
+        _processBatchPhase2(batchCycle, redeemMerkleRoot, mintMerkleRoot);
     }
 
     function _allocRedeemEth(
@@ -508,22 +524,18 @@ contract KashYieldETH is ReentrancyGuard {
         }
     }
 
-    function _processBatchPhase2(uint256 batchCycle, bytes32 redeemMerkleRoot) internal {
+    function _processBatchPhase2(uint256 batchCycle, bytes32 redeemMerkleRoot, bytes32 mintMerkleRoot) internal {
         uint256 exactNAV = currentNAV;
 
-        address[] memory minters  = batchMintUsers[batchCycle];
         address[] memory redeemers = batchRedeemUsers[batchCycle];
 
+        uint256 totalMintUSD = batchTotalMintValueUSD[batchCycle];
         uint256 totalMintKash = 0;
-        uint256 totalMintFeeEth = 0;
-        for (uint256 i = 0; i < minters.length; i++) {
-            MintRequest memory req = userMintRequests[minters[i]][batchCycle];
-            if (req.amountInUSD > 0) {
-                totalMintFeeEth += req.amountIn * feeBps / 10000;
-                uint256 amountAfterFee = req.amountInUSD * (10000 - feeBps) / 10000;
-                totalMintKash += (amountAfterFee * 1e18) / exactNAV;
-            }
+        if (totalMintUSD > 0) {
+            uint256 amountAfterFeeTotal = totalMintUSD * (10000 - feeBps) / 10000;
+            totalMintKash = (amountAfterFeeTotal * 1e18) / exactNAV;
         }
+        uint256 totalMintFeeEth = batchTotalMintEth[batchCycle] * feeBps / 10000;
 
         uint256 totalRedeemKash = batchTotalRedeemKash[batchCycle];
         (, uint256 totalRedeemEthNeeded, uint256 totalRedeemFeeEth) =
@@ -533,15 +545,23 @@ contract KashYieldETH is ReentrancyGuard {
         ownerEthReserve += totalProtocolFeeEth;
         protocolFeeEthReserve += totalProtocolFeeEth;
 
+        BatchClaimInfo storage info = batchClaimInfo[batchCycle];
+        uint256 claimDeadline = block.timestamp + CLAIM_EXPIRY_SECONDS;
+
         if (totalRedeemKash > 0) {
             lockedClaimEth += totalRedeemEthNeeded;
-            batchClaimInfo[batchCycle] = BatchClaimInfo({
-                redeemMerkleRoot: redeemMerkleRoot,
-                totalNetClaimable: totalRedeemEthNeeded,
-                claimDeadline: block.timestamp + CLAIM_EXPIRY_SECONDS,
-                claimedAmount: 0
-            });
-            emit RedeemMerkleRootCommitted(batchCycle, redeemMerkleRoot, totalRedeemEthNeeded, block.timestamp + CLAIM_EXPIRY_SECONDS);
+            info.redeemMerkleRoot = redeemMerkleRoot;
+            info.totalNetClaimable = totalRedeemEthNeeded;
+            info.claimDeadline = claimDeadline;
+            emit RedeemMerkleRootCommitted(batchCycle, redeemMerkleRoot, totalRedeemEthNeeded, claimDeadline);
+        }
+
+        if (totalMintKash > 0) {
+            lockedClaimKash += totalMintKash;
+            info.mintMerkleRoot = mintMerkleRoot;
+            info.totalMintClaimable = totalMintKash;
+            info.claimDeadline = claimDeadline;
+            emit MintMerkleRootCommitted(batchCycle, mintMerkleRoot, totalMintKash, claimDeadline);
         }
 
         batchProcessed[batchCycle] = true;
@@ -551,18 +571,27 @@ contract KashYieldETH is ReentrancyGuard {
         int256 netKash = int256(totalMintKash) - int256(totalRedeemKash);
         if (netKash > 0) kashTokenEth.mint(address(this), uint256(netKash));
         else if (netKash < 0) kashTokenEth.burn(address(this), uint256(-netKash));
+    }
 
-        uint256 totalDistributableKash = totalMintKash;
-        for (uint256 i = 0; i < minters.length; i++) {
-            address user = minters[i];
-            MintRequest memory req = userMintRequests[user][batchCycle];
-            if (req.amountInUSD > 0) {
-                uint256 userShare = (req.amountInUSD * totalDistributableKash) / batchTotalMintValueUSD[batchCycle];
-                kashTokenEth.transfer(user, userShare);
-                emit TokensClaimed(user, address(kashTokenEth), userShare, true);
-                totalDepositedEthByUser[user] += req.amountIn;
-            }
-        }
+    function claimMint(uint256 batchCycle, uint256 kashAmount, bytes32[] calldata proof) external nonReentrant whenNotPaused {
+        if (!batchProcessed[batchCycle]) revert WrongPhase();
+        BatchClaimInfo storage info = batchClaimInfo[batchCycle];
+        if (info.mintMerkleRoot == bytes32(0)) revert InvalidMerkleRoot();
+        if (mintClaimed[batchCycle][msg.sender]) revert AlreadyClaimed();
+        if (block.timestamp > info.claimDeadline) revert ClaimExpired();
+
+        bytes32 leaf = keccak256(abi.encode(batchCycle, msg.sender, kashAmount));
+        if (!MerkleVerify.verify(proof, info.mintMerkleRoot, leaf)) revert InvalidProof();
+
+        MintRequest storage req = userMintRequests[msg.sender][batchCycle];
+        if (req.amountIn == 0) revert NoRequest();
+
+        mintClaimed[batchCycle][msg.sender] = true;
+        info.mintClaimedAmount += kashAmount;
+        lockedClaimKash -= kashAmount;
+        totalDepositedEthByUser[msg.sender] += req.amountIn;
+        kashTokenEth.transfer(msg.sender, kashAmount);
+        emit TokensClaimed(msg.sender, address(kashTokenEth), kashAmount, true);
     }
 
     function claimRedeem(uint256 batchCycle, uint256 ethAmount, bytes32[] calldata proof) external nonReentrant whenNotPaused {
@@ -594,6 +623,16 @@ contract KashYieldETH is ReentrancyGuard {
         emit RedeemMerkleRootOverridden(batchCycle, oldRoot, newRoot);
     }
 
+    function overrideMintMerkleRoot(uint256 batchCycle, bytes32 newRoot) external onlyOwner {
+        BatchClaimInfo storage info = batchClaimInfo[batchCycle];
+        if (!batchProcessed[batchCycle] || info.totalMintClaimable == 0) revert WrongPhase();
+        if (info.mintClaimedAmount > 0) revert AlreadyClaimed();
+        if (newRoot == bytes32(0)) revert InvalidMerkleRoot();
+        bytes32 oldRoot = info.mintMerkleRoot;
+        info.mintMerkleRoot = newRoot;
+        emit MintMerkleRootOverridden(batchCycle, oldRoot, newRoot);
+    }
+
     function sweepExpiredClaims(uint256 batchCycle) external onlyBotOrKeeper {
         BatchClaimInfo storage info = batchClaimInfo[batchCycle];
         if (!batchProcessed[batchCycle]) revert WrongPhase();
@@ -605,6 +644,18 @@ contract KashYieldETH is ReentrancyGuard {
         ownerEthReserve += unclaimed;
         protocolFeeEthReserve += unclaimed;
         emit ExpiredClaimsSwept(batchCycle, unclaimed);
+    }
+
+    function sweepExpiredMintClaims(uint256 batchCycle) external onlyBotOrKeeper {
+        BatchClaimInfo storage info = batchClaimInfo[batchCycle];
+        if (!batchProcessed[batchCycle]) revert WrongPhase();
+        if (block.timestamp <= info.claimDeadline) revert ClaimsNotExpired();
+        uint256 unclaimed = info.totalMintClaimable - info.mintClaimedAmount;
+        if (unclaimed == 0) revert ZeroAmount();
+        info.mintClaimedAmount = info.totalMintClaimable;
+        lockedClaimKash -= unclaimed;
+        kashTokenEth.burn(address(this), unclaimed);
+        emit ExpiredMintClaimsSwept(batchCycle, unclaimed);
     }
 
     // ── Aave (unchanged) ──────────────────────────────────────────────────
@@ -773,10 +824,16 @@ contract KashYieldETH is ReentrancyGuard {
 
     function emergencyWithdrawMint(uint256 batchCycle) external {
         if (!paused) revert NotPaused();
+        if (batchPhase[batchCycle] != 0) revert WrongPhase();
         MintRequest storage req = userMintRequests[msg.sender][batchCycle];
-        if (req.user != msg.sender || req.amountIn == 0 || req.amountInUSD != 0) revert InvalidRequest();
-        payable(msg.sender).transfer(req.amountIn);
+        if (req.user != msg.sender || req.amountIn == 0) revert InvalidRequest();
+        uint256 amount = req.amountIn;
+        uint256 usdAmount = req.amountInUSD;
+        batchTotalMintEth[batchCycle] -= amount;
+        batchTotalMintValueUSD[batchCycle] -= usdAmount;
+        unchecked { activeMintUsers[batchCycle]--; }
         delete userMintRequests[msg.sender][batchCycle];
+        payable(msg.sender).transfer(amount);
     }
 
     function emergencyWithdrawRedeem(uint256 batchCycle) external {

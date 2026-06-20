@@ -15,6 +15,7 @@ const {
   settleMintPhase2,
   settleRedeemPhase2,
   claimRedeemForUser,
+  claimMintForUser,
   deployAndWireExchangeFacade,
   depositToHyperliquidViaFacade,
   withdrawFromHyperliquidViaFacade,
@@ -121,6 +122,7 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     });
 
     await settleMintPhase2({ kashYield: kashYieldEth, bot, batchCycle, nav: NAV_1 });
+    await claimMintForUser(kashYieldEth, user, batchCycle, NAV_1);
     return batchCycle;
   }
 
@@ -147,6 +149,8 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     await depositToHyperliquidViaFacade(kashYieldEth, bot, borrowUsdc);
 
     await settleMintPhase2({ kashYield: kashYieldEth, bot, batchCycle, nav: NAV_1 });
+    await claimMintForUser(kashYieldEth, user1, batchCycle, NAV_1);
+    await claimMintForUser(kashYieldEth, user2, batchCycle, NAV_1);
     return batchCycle;
   }
 
@@ -223,6 +227,8 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     await depositToHyperliquidViaFacade(kashYieldEth, bot, borrowUsdc);
 
     await settleMintPhase2({ kashYield: kashYieldEth, bot, batchCycle, nav: NAV_1 });
+    await claimMintForUser(kashYieldEth, user1, batchCycle, NAV_1);
+    await claimMintForUser(kashYieldEth, user2, batchCycle, NAV_1);
 
     const bal1 = await kashTokenEth.balanceOf(user1.address);
     const bal2 = await kashTokenEth.balanceOf(user2.address);
@@ -386,6 +392,7 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
       mintEthAmount: ethers.parseEther("0.05"),
     });
     await settleRedeemCycleThroughAaveAndHl(batchCycle);
+    await claimMintForUser(kashYieldEth, user1, batchCycle, NAV_1);
     await claimRedeemForUser(kashYieldEth, user1, batchCycle);
 
     const user1AfterSettlement = await kashTokenEth.balanceOf(user1.address);

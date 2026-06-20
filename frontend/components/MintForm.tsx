@@ -1,13 +1,14 @@
 'use client';
 
 import { useState, useMemo, useEffect } from 'react';
-import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadContract, useBalance, useEstimateFeesPerGas } from 'wagmi';
+import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadContract, useBalance, useEstimateFeesPerGas, usePublicClient, useReadContracts } from 'wagmi';
 import { CONTRACTS, ARBITRUM_ONE_BLOCK_EXPLORER, HARDHAT_CHAIN_ID } from '@/lib/contracts/addresses';
 import { ContractVerifiedBadge } from '@/components/ContractVerifiedBadge';
 import { BatchUserCapStatus } from '@/components/BatchUserCapStatus';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 import { kashTokenABI } from '@/lib/contracts/kashTokenABI';
-import { usePendingBatchRequest } from '@/lib/usePendingBatchRequest';
+import { usePendingBatchRequest, type PendingBatchRequest } from '@/lib/usePendingBatchRequest';
+import { resolveMintClaimProof, formatMintClaimAmount } from '@/lib/mintProofs';
 import { useBatchUserCap } from '@/lib/useBatchUserCap';
 import {
   batchCapNotice,
@@ -98,6 +99,7 @@ function formatApproxUsd(usdWei18: bigint | null): string {
 
 export function MintForm({ product = 'eth' }: { product?: Product }) {
   const { address } = useAccount();
+  const publicClient = usePublicClient();
   const chainId = useChainId();
   const blockExplorer = chainId === HARDHAT_CHAIN_ID ? 'http://localhost:8545' : ARBITRUM_ONE_BLOCK_EXPLORER;
 
@@ -113,7 +115,10 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
     symbol: string;
   } | null>(null);
   const [lastActivityRefreshHash, setLastActivityRefreshHash] = useState<`0x${string}` | null>(null);
-  const [dismissedSettledCycles, setDismissedSettledCycles] = useState<Set<string>>(() => new Set());
+  const [claimingCycle, setClaimingCycle] = useState<string | null>(null);
+  const [pendingClaimCycle, setPendingClaimCycle] = useState<bigint | null>(null);
+  const [claimErrors, setClaimErrors] = useState<Record<string, string>>({});
+  const [claimPayouts, setClaimPayouts] = useState<Record<string, bigint | null>>({});
 
   const { data: balance } = useBalance({ address });
   const nativeBalance = balance?.value ?? 0n;
@@ -220,50 +225,124 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
     [mintRequests],
   );
 
-  const settledDismissStorageKey = (cycle: bigint) =>
-    address ? `kash-mint-settled-dismiss-${address}-${cycle.toString()}-${product}` : null;
+  const mintClaimedContracts = useMemo(() => {
+    if (!address || processedMintRequests.length === 0) return [];
+    return processedMintRequests.map((r) => ({
+      address: kashYield,
+      abi: kashYieldABI,
+      functionName: 'mintClaimed' as const,
+      args: [r.batchCycle, address] as const,
+    }));
+  }, [kashYield, address, processedMintRequests]);
+
+  const { data: mintClaimedResults, refetch: refetchClaimStatuses } = useReadContracts({
+    contracts: mintClaimedContracts,
+    query: {
+      enabled: mintClaimedContracts.length > 0,
+      refetchInterval: 15_000,
+    },
+  });
+
+  const claimableMints = useMemo((): PendingBatchRequest[] => {
+    const unclaimed: PendingBatchRequest[] = [];
+    for (let i = 0; i < processedMintRequests.length; i++) {
+      const req = processedMintRequests[i];
+      const claimed =
+        mintClaimedResults?.[i]?.status === 'success' &&
+        mintClaimedResults[i].result === true;
+      if (!claimed) unclaimed.push(req);
+    }
+    return unclaimed.sort((a, b) => (a.batchCycle > b.batchCycle ? -1 : 1));
+  }, [processedMintRequests, mintClaimedResults]);
+
+  const needsClaim = claimableMints.length > 0;
 
   useEffect(() => {
-    if (!address) {
-      setDismissedSettledCycles(new Set());
+    if (!address || claimableMints.length === 0) {
+      setClaimPayouts({});
       return;
     }
-    const dismissed = new Set<string>();
-    for (const req of processedMintRequests) {
-      const key = settledDismissStorageKey(req.batchCycle);
-      if (key && localStorage.getItem(key) === '1') {
-        dismissed.add(req.batchCycle.toString());
+    let cancelled = false;
+    setClaimPayouts({});
+    const loadPayouts = async () => {
+      const entries = await Promise.all(
+        claimableMints.map(async (req) => {
+          const key = req.batchCycle.toString();
+          const proof = await resolveMintClaimProof({
+            product,
+            batchCycle: req.batchCycle,
+            userAddress: address,
+            kashYield,
+            publicClient,
+          });
+          return [key, proof && proof.amount > 0n ? proof.amount : null] as const;
+        }),
+      );
+      if (!cancelled) {
+        setClaimPayouts(Object.fromEntries(entries));
       }
-    }
-    setDismissedSettledCycles(dismissed);
-  }, [address, product, processedMintRequests]);
-
-  const visibleSettledMints = useMemo(
-    () =>
-      processedMintRequests
-        .filter((r) => !dismissedSettledCycles.has(r.batchCycle.toString()))
-        .sort((a, b) => (a.batchCycle > b.batchCycle ? -1 : 1)),
-    [processedMintRequests, dismissedSettledCycles],
-  );
-
-  const hasSettledMintNotice = visibleSettledMints.length > 0;
-
-  const dismissSettledMint = (batchCycle: bigint) => {
-    const cycleKey = batchCycle.toString();
-    const key = settledDismissStorageKey(batchCycle);
-    if (key) localStorage.setItem(key, '1');
-    setDismissedSettledCycles((prev) => new Set(prev).add(cycleKey));
-  };
+    };
+    void loadPayouts();
+    return () => {
+      cancelled = true;
+    };
+  }, [address, claimableMints, product, publicClient, kashYield]);
 
   const { writeContract: approve, data: approveHash, isPending: isApprovePending, error: approveError } = useWriteContract();
   const mintWriteResult = useWriteContract();
   const { writeContract: mint, data: mintHash, isPending: isMintPending, error: mintError } = mintWriteResult;
   const resetMint = 'reset' in mintWriteResult ? (mintWriteResult as { reset: () => void }).reset : () => {};
   const { writeContract: cancelMint, data: cancelMintHash, isPending: isCancelMintPending } = useWriteContract();
+  const claimWrite = useWriteContract();
+  const { writeContract: claimMint, data: claimHash, isPending: isClaimPending } = claimWrite;
 
   const { isLoading: isApproveConfirming, isSuccess: isApproveSuccess, isError: isApproveError } = useWaitForTransactionReceipt({ hash: approveHash });
   const { isLoading: isMintConfirming, isSuccess: isMintSuccess, isError: isMintError } = useWaitForTransactionReceipt({ hash: mintHash });
   const { isLoading: isCancelMintConfirming } = useWaitForTransactionReceipt({ hash: cancelMintHash });
+  const { isLoading: isClaimConfirming, isSuccess: isClaimSuccess } = useWaitForTransactionReceipt({ hash: claimHash });
+
+  const handleClaimMint = async (batchCycle: bigint) => {
+    if (!address) return;
+    const cycleKey = batchCycle.toString();
+    setClaimErrors((prev) => {
+      const next = { ...prev };
+      delete next[cycleKey];
+      return next;
+    });
+    setClaimingCycle(cycleKey);
+    try {
+      const proofData = await resolveMintClaimProof({
+        product,
+        batchCycle,
+        userAddress: address,
+        kashYield,
+        publicClient,
+      });
+      if (!proofData) {
+        setClaimErrors((prev) => ({
+          ...prev,
+          [cycleKey]: 'Could not build claim proof for this batch. Contact the operator.',
+        }));
+        setClaimingCycle(null);
+        return;
+      }
+      setPendingClaimCycle(batchCycle);
+      claimMint({
+        address: kashYield,
+        abi: kashYieldABI,
+        functionName: 'claimMint',
+        args: [batchCycle, proofData.amount, proofData.proof],
+        ...gasOptions,
+      });
+    } catch (e) {
+      setClaimErrors((prev) => ({
+        ...prev,
+        [cycleKey]: e instanceof Error ? e.message : 'Failed to load claim proof',
+      }));
+      setClaimingCycle(null);
+      setPendingClaimCycle(null);
+    }
+  };
 
   // Refetch allowance after approve succeeds so UI updates and Submit Mint Request becomes enabled
   useEffect(() => {
@@ -273,6 +352,16 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
   }, [isApproveSuccess, refetchAllowance]);
 
   // Refetch pending request after mint confirms so cancel button and status update immediately
+  useEffect(() => {
+    if (isClaimSuccess) {
+      setClaimingCycle(null);
+      setPendingClaimCycle(null);
+      refetchClaimStatuses();
+      refetchPendingLookback();
+      dispatchActivityRefresh();
+    }
+  }, [isClaimSuccess, refetchClaimStatuses, refetchPendingLookback]);
+
   useEffect(() => {
     if (isMintSuccess) {
       refetchPendingLookback();
@@ -380,7 +469,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
     });
   };
 
-  if (submittedMint && submittedMint.product === product && !hasSettledMintNotice) {
+  if (submittedMint && submittedMint.product === product && !needsClaim) {
     const txUrl = chainId === HARDHAT_CHAIN_ID ? '#' : `${ARBITRUM_ONE_BLOCK_EXPLORER}/tx/${submittedMint.hash}`;
     return (
       <div className="text-center py-8">
@@ -584,40 +673,45 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
       )}
 
 
-      {/*
-        Mints currently push KASH to the user's wallet when the batch settles.
-        TODO(contract): When mint settlement moves to a user pull-claim flow (like redeems),
-        replace this notice with claim actions and copy similar to RedeemForm.
-      */}
-      {hasSettledMintNotice && (
+      {needsClaim && (
         <div className="rounded-lg border border-green-200 bg-green-50 p-3 space-y-3">
           <p className="text-sm text-green-800 font-medium">
-            {visibleSettledMints.length === 1
-              ? `Your mint for batch cycle ${visibleSettledMints[0].batchCycle.toString()} is complete.`
-              : `You have ${visibleSettledMints.length} completed mints.`}
+            {claimableMints.length === 1
+              ? `Your mint for batch cycle ${claimableMints[0].batchCycle.toString()} is settled.`
+              : `You have ${claimableMints.length} settled mints ready to claim.`}
           </p>
           <ul className="space-y-2">
-            {visibleSettledMints.map((req) => {
+            {claimableMints.map((req) => {
               const cycleKey = req.batchCycle.toString();
+              const payout = claimPayouts[cycleKey];
+              const claimErr = claimErrors[cycleKey];
+              const isThisClaimPending =
+                claimingCycle === cycleKey &&
+                (isClaimPending || isClaimConfirming || pendingClaimCycle === req.batchCycle);
               return (
                 <li
                   key={cycleKey}
-                  className="kash-notice-nested rounded-md border border-green-200 p-3 flex items-start justify-between gap-2"
+                  className="kash-notice-nested rounded-md border border-green-200 p-3 space-y-2"
                 >
                   <p className="text-sm text-gray-700">
                     <span className="font-medium text-green-800">Batch {cycleKey}</span>
-                    {' · '}
-                    Mint settled — your {kashSymbol} tokens were sent to your wallet.
+                    {payout != null ? (
+                      <>
+                        {' · '}
+                        Claim <span className="font-medium">{formatMintClaimAmount(payout)}</span> {kashSymbol}
+                      </>
+                    ) : (
+                      <> · Loading claim amount…</>
+                    )}
                   </p>
+                  {claimErr ? <p className="text-sm text-red-600">{claimErr}</p> : null}
                   <button
                     type="button"
-                    onClick={() => dismissSettledMint(req.batchCycle)}
-                    className="text-green-600 hover:text-green-800 transition shrink-0 cursor-pointer"
-                    aria-label="Dismiss"
+                    onClick={() => void handleClaimMint(req.batchCycle)}
+                    disabled={isThisClaimPending || payout == null}
+                    className="w-full px-4 py-2 bg-green-700 text-white rounded-lg text-sm font-medium hover:bg-green-800 disabled:bg-gray-300 disabled:cursor-not-allowed cursor-pointer transition-colors"
                   >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
+                    {isThisClaimPending ? 'Claiming…' : `Claim ${kashSymbol}`}
                   </button>
                 </li>
               );
