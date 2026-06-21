@@ -1,4 +1,5 @@
 const { ethers } = require("hardhat");
+const hre = require("hardhat");
 
 const WBTC_ADDRESS = "0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f";
 const WETH_ADDRESS = "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1";
@@ -8,7 +9,6 @@ const HL_BRIDGE = "0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7";
 
 const ERC20_ABI = [
   "function balanceOf(address) view returns (uint256)",
-  "function approve(address,uint256) returns (bool)",
   "function transfer(address,uint256) returns (bool)",
 ];
 
@@ -22,13 +22,19 @@ const ARBITRUM_BLOCK_GAS_LIMIT = 32_000_000n;
 const CYCLE_SECS = 3600n;
 const NAV_1 = 10n ** 18n;
 
-async function createFundedWallets(count, funder, ethPerWallet = ethers.parseEther("0.002")) {
-  const wallets = [];
-  for (let i = 0; i < count; i++) {
-    const wallet = ethers.Wallet.createRandom().connect(ethers.provider);
-    await (await funder.sendTransaction({ to: wallet.address, value: ethPerWallet })).wait();
-    wallets.push(wallet);
-  }
+/** Extra headroom for deploy, swap, Merkle build, and phase 1/2. */
+const BENCHMARK_BASE_TIMEOUT_MS = 180_000;
+
+async function createFundedWallets(count, ethPerWallet = ethers.parseEther("0.05")) {
+  const wallets = Array.from({ length: count }, () =>
+    ethers.Wallet.createRandom().connect(ethers.provider),
+  );
+  const ethHex = ethers.toBeHex(ethPerWallet);
+  await Promise.all(
+    wallets.map((wallet) =>
+      hre.network.provider.send("hardhat_setBalance", [wallet.address, ethHex]),
+    ),
+  );
   return wallets;
 }
 
@@ -37,8 +43,8 @@ async function deployKashYieldBtcBenchmark(owner, bot) {
   const uniAdapter = await UniswapV3Adapter.deploy(UNISWAP_ROUTER_V2, WETH_ADDRESS);
   await uniAdapter.waitForDeployment();
 
-  const KashYieldBtc = await ethers.getContractFactory("KashYieldBtc");
-  const kashYieldBtc = await KashYieldBtc.deploy(bot.address, WBTC_ADDRESS, USDC_ADDRESS);
+  const BenchmarkKashYieldBtc = await ethers.getContractFactory("BenchmarkKashYieldBtc");
+  const kashYieldBtc = await BenchmarkKashYieldBtc.deploy(bot.address, WBTC_ADDRESS, USDC_ADDRESS);
   await kashYieldBtc.setSpotDex(await uniAdapter.getAddress());
   await kashYieldBtc.setCycleDurationSeconds(CYCLE_SECS);
   await kashYieldBtc.setUserWindowEnd(CYCLE_SECS);
@@ -76,17 +82,24 @@ async function swapEthForWbtc(signer, ethAmount) {
   return wbtc.balanceOf(await signer.getAddress());
 }
 
-async function submitMintRequests({ kashYieldBtc, wbtc, wallets, mintAmountEach, chunkSize = 3 }) {
-  const vault = await kashYieldBtc.getAddress();
+/**
+ * Register minters via BenchmarkKashYieldBtc (test-only). Caller must send wBTC to the
+ * vault separately — same totals as real requestMint, without N approve/mint txs.
+ */
+async function benchmarkEnrollMints({
+  kashYieldBtc,
+  owner,
+  wallets,
+  mintAmountEach,
+  chunkSize = 50,
+}) {
+  let completed = 0;
   for (let i = 0; i < wallets.length; i += chunkSize) {
-    const chunk = wallets.slice(i, i + chunkSize);
-    for (const wallet of chunk) {
-      const wbtcUser = wbtc.connect(wallet);
-      await (await wbtcUser.approve(vault, mintAmountEach)).wait();
-      await (await kashYieldBtc.connect(wallet).requestMint(mintAmountEach)).wait();
-    }
-    if ((i + chunkSize) % 30 === 0 || i + chunkSize >= wallets.length) {
-      console.log(`       … ${Math.min(i + chunkSize, wallets.length)}/${wallets.length} mint requests submitted`);
+    const chunk = wallets.slice(i, i + chunkSize).map((w) => w.address);
+    await (await kashYieldBtc.connect(owner).benchmarkEnrollMints(chunk, mintAmountEach)).wait();
+    completed += chunk.length;
+    if (completed % 50 === 0 || completed === wallets.length) {
+      console.log(`       … enrolled ${completed}/${wallets.length} minters`);
     }
   }
 }
@@ -96,36 +109,41 @@ async function currentBatchCycle() {
   return BigInt(block.timestamp) / CYCLE_SECS;
 }
 
-function extrapolatePhase2Gas(phase2Gas, mintCount) {
-  if (mintCount <= 0) return null;
-  return (phase2Gas * 500n) / BigInt(mintCount);
+function benchmarkTimeoutMs(mintCount) {
+  const env = process.env.BENCHMARK_TIMEOUT_MS;
+  if (env) return parseInt(env, 10);
+  // ~2s per enrolled minter on a fork (50-user enroll txs) + Merkle RPC reads + overhead.
+  return Math.max(BENCHMARK_BASE_TIMEOUT_MS, mintCount * 2_500 + BENCHMARK_BASE_TIMEOUT_MS);
 }
 
 function formatGasReport({ mintCount, phase1Gas, phase2Gas, phase2Estimate, phase2Failed }) {
-  const extrapolated = phase2Gas != null ? extrapolatePhase2Gas(phase2Gas, mintCount) : null;
   const lines = [
     "",
     "══════════════════════════════════════════════════════════════",
     `  KashYieldBtc batch gas benchmark (${mintCount} minters, mint-only)`,
     "══════════════════════════════════════════════════════════════",
-    `  Phase 1 (performUpkeep — NAV / USD totals) : ${phase1Gas?.toLocaleString() ?? "n/a"} gas`,
-    `  Phase 2 (mint KASH push payouts)           : ${phase2Gas?.toLocaleString() ?? "n/a"} gas`,
+    `  Phase 1 (performUpkeep — O(1) totals)     : ${phase1Gas?.toLocaleString() ?? "n/a"} gas`,
+    `  Phase 2 (Merkle root commit + net mint)   : ${phase2Gas?.toLocaleString() ?? "n/a"} gas`,
   ];
   if (phase2Estimate != null) {
     lines.push(`  Phase 2 eth_estimateGas                  : ${phase2Estimate.toLocaleString()} gas`);
   }
-  if (extrapolated != null && mintCount !== 500) {
-    lines.push(`  Phase 2 extrapolated @ 500 minters       : ~${extrapolated.toLocaleString()} gas`);
+  lines.push(`  Arbitrum block gas limit (reference)       : ${ARBITRUM_BLOCK_GAS_LIMIT.toLocaleString()} gas`);
+  if (phase1Gas != null) {
     lines.push(
-      extrapolated <= ARBITRUM_BLOCK_GAS_LIMIT
-        ? "  Extrapolated 500-minter fit (one block)    : YES"
-        : "  Extrapolated 500-minter fit (one block)    : NO — likely OOG on mainnet",
+      phase1Gas <= 600_000n
+        ? "  Phase 1 looks O(1) (under 600k)            : YES"
+        : "  Phase 1 looks O(1) (under 600k)            : NO — investigate",
     );
   }
-  lines.push(`  Arbitrum block gas limit (reference)       : ${ARBITRUM_BLOCK_GAS_LIMIT.toLocaleString()} gas`);
   if (phase2Gas != null) {
     const pct = Number((phase2Gas * 10000n) / ARBITRUM_BLOCK_GAS_LIMIT) / 100;
     lines.push(`  Phase 2 vs block limit                   : ${pct.toFixed(1)}%`);
+    lines.push(
+      phase2Gas <= 3_000_000n
+        ? "  Phase 2 looks O(1) (under 3M)              : YES"
+        : "  Phase 2 looks O(1) (under 3M)              : NO — investigate",
+    );
     lines.push(
       phase2Gas <= ARBITRUM_BLOCK_GAS_LIMIT
         ? "  Phase 2 fits in one Arbitrum block         : YES"
@@ -149,8 +167,8 @@ module.exports = {
   createFundedWallets,
   deployKashYieldBtcBenchmark,
   swapEthForWbtc,
-  submitMintRequests,
+  benchmarkEnrollMints,
   currentBatchCycle,
-  extrapolatePhase2Gas,
+  benchmarkTimeoutMs,
   formatGasReport,
 };

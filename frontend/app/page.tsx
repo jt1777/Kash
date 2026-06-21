@@ -54,7 +54,7 @@ export default function Home() {
       },
     },
     scheduleHint:
-      'Mint/redeem requests accepted until batch cutoff (~23:45 UTC); mints settle automatically, redeems become claimable after processing.',
+      'Mint/redeem requests accepted until batch cutoff (~23:45 UTC); after settlement, call claimMint or claimRedeem with hosted Merkle proofs.',
     reads: [
       'isUserWindow()',
       'isProcessingWindow()',
@@ -65,6 +65,7 @@ export default function Home() {
       'getPendingRedeemRequest(user, batchCycle)',
       'getBatchInfo(batchCycle)',
       'batchClaimInfo(batchCycle)',
+      'mintClaimed(batchCycle, user)',
       'redeemClaimed(batchCycle, user)',
     ],
     eventsToWatch: [
@@ -75,6 +76,8 @@ export default function Home() {
     ],
     redeemClaimProofs:
       process.env.NEXT_PUBLIC_REDEEM_PROOF_BASE_URL || '/redeem-proofs',
+    mintClaimProofs:
+      process.env.NEXT_PUBLIC_MINT_PROOF_BASE_URL || '/mint-proofs',
     quickstartDocs: GITBOOK_AGENT_QUICKSTART,
     riskDocs: GITBOOK_RISKS,
     mechanicsDocs: GITBOOK_HOW_YIELD_WORKS,
@@ -738,17 +741,25 @@ export default function Home() {
               <div className="proof-card">
                 <h3>4. Monitor</h3>
                 <p>
-                  Watch <code style={{ color: '#00FFFF' }}>MintRequested</code>, <code style={{ color: '#00FFFF' }}>RedeemRequested</code>, <code style={{ color: '#00FFFF' }}>BatchProcessed</code>, and your KASH token balance or redeem claim status after settlement.
+                  Watch <code style={{ color: '#00FFFF' }}>MintRequested</code>, <code style={{ color: '#00FFFF' }}>RedeemRequested</code>, <code style={{ color: '#00FFFF' }}>BatchProcessed</code>, then{' '}
+                  <code style={{ color: '#00FFFF' }}>mintClaimed</code> / <code style={{ color: '#00FFFF' }}>redeemClaimed</code> and <code style={{ color: '#00FFFF' }}>TokensClaimed</code> after you claim.
                 </p>
               </div>
               <div className="proof-card">
-                <h3>5. Redeem</h3>
+                <h3>5. Claim mint</h3>
+                <p>
+                  After settlement, load the hosted mint proof for the batch and call{' '}
+                  <code style={{ color: '#00FFFF' }}>claimMint(batchCycle, amount, proof)</code> to receive KASH (same pull-claim model as redeems).
+                </p>
+              </div>
+              <div className="proof-card">
+                <h3>6. Redeem</h3>
                 <p>
                   Approve the relevant KASH token to its KashYield vault, call <code style={{ color: '#00FFFF' }}>requestRedeem(kashAmount)</code> before the batch cutoff, then call <code style={{ color: '#00FFFF' }}>claimRedeem(batchCycle, amount, proof)</code> after settlement.
                 </p>
               </div>
               <div className="proof-card">
-                <h3>6. Risk gate</h3>
+                <h3>7. Risk gate</h3>
                 <p>
                   Do not infer yield from copy. Check NAV history, operator assumptions, portfolio exposure, batch status, and{' '}
                   <a href={GITBOOK_RISKS} target="_blank" rel="noopener noreferrer">Risks</a> before sizing capital.
@@ -762,7 +773,7 @@ export default function Home() {
           <div className="container">
             <h2 className="section-title">Minimal integration (matches deployed ABI)</h2>
             <p className="section-caption">
-              Contracts use <code style={{ color: '#00FFFF' }}>requestMint</code> / <code style={{ color: '#00FFFF' }}>requestRedeem</code>. ABI reference:{' '}
+              Contracts use <code style={{ color: '#00FFFF' }}>requestMint</code> / <code style={{ color: '#00FFFF' }}>requestRedeem</code>, then <code style={{ color: '#00FFFF' }}>claimMint</code> / <code style={{ color: '#00FFFF' }}>claimRedeem</code> after settlement. ABI reference:{' '}
               <code style={{ color: '#a5d6ff' }}>frontend/lib/contracts/kashYieldABI.ts</code>.
             </p>
             <div className="code-block">
@@ -784,10 +795,8 @@ const hash = await wallet.writeContract({
   value: depositWei,
 });
 
-// After batch: read NAV, watch BatchProcessed; to exit:
-// await wallet.writeContract({ address: kashTokenEth, abi: erc20Abi, functionName: 'approve', args: [vaultEth, kashWei] });
-// await wallet.writeContract({ address: vaultEth, abi, functionName: 'requestRedeem', args: [kashWei] });
-// After redeem settlement: claimRedeem(batchCycle, amount, proof) using hosted proof JSON.`}
+// After batch settlement: claimMint(batchCycle, kashAmount, proof) using hosted mint proof JSON.
+// To exit: approve KASH, requestRedeem(kashWei), then claimRedeem(batchCycle, amount, proof).`}
               </pre>
             </div>
             <h2 className="section-title" style={{ marginTop: 60 }}>Python (Web3.py) — no pip SDK yet</h2>

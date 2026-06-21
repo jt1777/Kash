@@ -1,7 +1,11 @@
 // test/batch-gas-benchmark.fork.test.js
 //
-// Measures on-chain gas for KashYieldBtc batch Phase 1 and Phase 2 with many
-// unique minters (default 500 — the on-chain MAX_MINT_USERS cap).
+// Measures on-chain gas for KashYieldBtc batch Phase 1 and Phase 2 (O(1) — gas does
+// not scale with minter count). Default 50 wallets is enough for regression; larger
+// MINT_USER_COUNT only stress-tests enrollment setup time on the fork.
+//
+// Setup uses BenchmarkKashYieldBtc.benchmarkEnrollMints (batched state registration)
+// plus one wBTC transfer to the vault — not N×requestMint.
 //
 // Requires a forked Arbitrum One RPC (same as other fork e2e tests).
 //
@@ -29,8 +33,9 @@ const {
   createFundedWallets,
   deployKashYieldBtcBenchmark,
   swapEthForWbtc,
-  submitMintRequests,
+  benchmarkEnrollMints,
   currentBatchCycle,
+  benchmarkTimeoutMs,
   formatGasReport,
 } = require("./helpers/batchGasBenchmark");
 
@@ -38,7 +43,7 @@ const FORK_BLOCK = process.env.FORK_BLOCK_NUMBER
   ? parseInt(process.env.FORK_BLOCK_NUMBER, 10)
   : 440_000_000;
 
-const MINT_COUNT = parseInt(process.env.MINT_USER_COUNT || "500", 10);
+const MINT_COUNT = parseInt(process.env.MINT_USER_COUNT || "50", 10);
 /** ~$15+ of wBTC at typical prices — above the ~10 USDC minimum. */
 const MINT_WBTC_EACH = 25_000n; // 0.00025 BTC (8 decimals)
 
@@ -55,7 +60,7 @@ describe(`Batch gas benchmark — ${MINT_COUNT} mint wallets`, function () {
     }
   });
 
-  this.timeout(900_000); // 15 min — 500-wallet setup can be slow on first fork run
+  this.timeout(benchmarkTimeoutMs(MINT_COUNT));
 
   it("reports Phase 1 and Phase 2 gas for mint-only batch", async function () {
     await hre.network.provider.request({
@@ -69,7 +74,7 @@ describe(`Batch gas benchmark — ${MINT_COUNT} mint wallets`, function () {
 
     console.log(`\n    Setting up ${MINT_COUNT} wallets with wBTC mint requests…`);
 
-    const wallets = await createFundedWallets(MINT_COUNT, owner);
+    const wallets = await createFundedWallets(MINT_COUNT);
 
     const totalWbtcNeeded = MINT_WBTC_EACH * BigInt(MINT_COUNT);
     const ethForSwap = ethers.parseEther(
@@ -79,16 +84,11 @@ describe(`Batch gas benchmark — ${MINT_COUNT} mint wallets`, function () {
     const ownerWbtc = await wbtc.balanceOf(owner.address);
     expect(ownerWbtc).to.be.gte(totalWbtcNeeded);
 
-    for (let i = 0; i < wallets.length; i++) {
-      await (await wbtc.connect(owner).transfer(wallets[i].address, MINT_WBTC_EACH)).wait();
-      if ((i + 1) % 50 === 0 || i + 1 === wallets.length) {
-        console.log(`       … funded ${i + 1}/${wallets.length} wallets with wBTC`);
-      }
-    }
-
-    await submitMintRequests({
+    const vaultAddr = await kashYieldBtc.getAddress();
+    await (await wbtc.transfer(vaultAddr, totalWbtcNeeded)).wait();
+    await benchmarkEnrollMints({
       kashYieldBtc,
-      wbtc,
+      owner,
       wallets,
       mintAmountEach: MINT_WBTC_EACH,
     });

@@ -125,13 +125,62 @@ Useful reads (method names in KashYield ABI):
 - Batch info for a cycle
 - KASH token balance for the user
 - Current NAV
+- Mint claim info and claimed status, when monitoring settled mints
 - Redeem claim info and claimed status, when monitoring settled redeems
 
-Do not assume immediate KASH receipt after a deposit request. Wait for batch processing and confirm the KASH token balance. For redeems, wait for settlement, load the hosted claim proof for the batch, then call `claimRedeem`.
+Do not assume immediate KASH receipt after a deposit request. Wait for batch processing (`BatchProcessed`), then load the hosted mint claim proof for the batch and call **`claimMint`**. For redeems, wait for settlement, load the hosted redeem claim proof, then call **`claimRedeem`**.
 
 ---
 
-## 6. Redeem
+## 6. Claim minted KASH
+
+After **`BatchProcessed`** for a cycle where you had a pending mint, KASH is allocated but not pushed to your wallet. Claim with the Merkle proof published for that batch.
+
+Proof manifest shape (hosted JSON, same pattern as redeem proofs):
+
+```json
+{
+  "batchCycle": "492518",
+  "root": "0x…",
+  "leaves": [{ "user": "0x…", "amount": "…", "proof": ["0x…", "…"] }]
+}
+```
+
+KASH-ETH example:
+
+```ts
+await wallet.writeContract({
+  address: kashYieldEth,
+  abi: kashYieldAbi,
+  functionName: 'claimMint',
+  args: [batchCycle, kashAmount, proof],
+});
+```
+
+KASH-BTC example:
+
+```ts
+await wallet.writeContract({
+  address: kashYieldBtc,
+  abi: kashYieldAbi,
+  functionName: 'claimMint',
+  args: [batchCycle, kashAmount, proof],
+});
+```
+
+Useful reads before claiming:
+
+- `batchClaimInfo(batchCycle)` — includes `mintMerkleRoot`, `totalMintClaimable`, `claimDeadline`
+- `mintClaimed(batchCycle, user)` — whether you already claimed
+- `getPendingMintRequest(user, batchCycle)` — confirms your deposit was in that batch
+
+Watch for **`TokensClaimed`** after a successful claim.
+
+The frontend resolves proofs from hosted manifests (`NEXT_PUBLIC_MINT_PROOF_BASE_URL` or `/mint-proofs/{product}-mint-batch-{cycle}.json`) and can rebuild from chain when manifests are unavailable.
+
+---
+
+## 7. Redeem
 
 Redeems require approving the relevant KASH token to the matching KashYield vault, then submitting a redeem request (see KashYield ABI).
 
@@ -173,7 +222,7 @@ await wallet.writeContract({
 
 Watch for **RedeemRequested**, then batch settlement.
 
-After settlement, claim the underlying asset with the Merkle proof published for the batch:
+After settlement, claim the underlying asset with the Merkle proof published for the batch (see §6 for the analogous **`claimMint`** flow for deposits):
 
 ```ts
 await wallet.writeContract({
@@ -186,7 +235,7 @@ await wallet.writeContract({
 
 ---
 
-## 7. Risk gate
+## 8. Risk gate
 
 Before allocating capital, read:
 

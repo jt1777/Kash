@@ -10,7 +10,7 @@ Most yield products require users to actively manage positions, monitor rates, o
 
 KASH tokens are worth more over time because the protocol is continuously earning funding rates through a delta-neutral strategy — meaning it is not taking directional bets on whether ETH or BTC goes up or down.
 
-Agent developers and autonomous integrators should refer to the [Agent Quickstart](agent-quickstart.md) for addresses, ABI pointers, preflight checks, mint/redeem calls, events, and risk gates.
+Agent developers and autonomous integrators should refer to the [Agent Quickstart](agent-quickstart.md) for addresses, ABI pointers, preflight checks, mint/redeem requests, **`claimMint` / `claimRedeem`**, events, and risk gates.
 
 ---
 

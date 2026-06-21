@@ -60,7 +60,7 @@ Every 24 hours:
 |-----------|--------------|
 | 00:00 – 23:49 | User window: deposits and redemptions may be submitted |
 | 23:45 – 23:59 | Processing window: batch runs, no new requests accepted |
-| After 23:59 | Batch complete: KASH tokens sent to depositors, redeem assets become claimable |
+| After 23:59 | Batch complete: KASH tokens become claimable via `claimMint`; redeem assets become claimable via `claimRedeem` |
 
 A deposit or redemption submitted on a given day is included in that day's batch, provided it is submitted before **23:45 UTC**.
 

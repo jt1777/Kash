@@ -480,7 +480,8 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
         </div>
         <h3 className="text-lg font-semibold text-gray-900 mb-2">Mint Request Submitted!</h3>
         <p className="text-sm text-gray-600 mb-4">
-          Your request will be processed in the next batch cycle (23:45 UTC).
+          Your request will be processed in the next batch cycle (23:45 UTC). After settlement, return here and use{' '}
+          <span className="font-medium">Claim {kashSymbol}</span> to receive your KASH tokens.
         </p>
 
         <div className="rounded-xl p-4 mb-6 border border-gray-200 bg-indigo-50 shadow-md text-left space-y-2">
@@ -560,8 +561,8 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
               ) : null}
             </p>
             <p className="text-xs text-gray-500 mt-4 leading-relaxed">
-              and will receive KASH tokens at an NAV that will be determined at the end of the next batch cycle.
-              Your KASH tokens will be sent to your wallet when ready.
+              and will receive KASH tokens at an NAV determined at the end of the next batch cycle.
+              After the batch settles, use the <span className="font-medium">Claim {kashSymbol}</span> button on this form to receive your tokens (Merkle pull claim).
             </p>
             <div className="flex flex-col sm:flex-row gap-3 mt-6">
               <button

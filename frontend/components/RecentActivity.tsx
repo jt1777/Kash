@@ -230,7 +230,7 @@ export function RecentActivity() {
             : (pendingR.result.kashAmount ?? 0n) > 0n
           : false;
         // Add hash when there is a request (pending or already processed) so we can show
-        // "Kash-BTC minted" / "wBTC redeemed" after batch runs, even if the user didn't
+        // "Settled · claim KASH" / "Settled · claim wBTC/ETH" after batch runs, even if the user didn't
         // have the page open while it was still pending.
         if (hasRequest && !updated.has(activities[i].hash)) {
           updated.add(activities[i].hash);
@@ -424,8 +424,8 @@ export function RecentActivity() {
               // (cancelEligibleHashes tracks hashes we observed as cancellable, i.e. pre-batch)
               const settledLabel = processed && hasReq && cancelEligibleHashes.has(item.hash)
                 ? item.type === 'mint'
-                  ? (isBtcContract ? 'Kash-BTC minted' : 'Kash-ETH minted')
-                  : (isBtcContract ? 'wBTC redeemed' : 'ETH redeemed')
+                  ? (isBtcContract ? 'Settled · claim KASH-BTC' : 'Settled · claim KASH-ETH')
+                  : (isBtcContract ? 'Settled · claim wBTC' : 'Settled · claim ETH')
                 : null;
               // Request exists on-chain and is waiting for the batch to run
               const isPending = !processed && hasReq;

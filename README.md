@@ -8,11 +8,11 @@ Kash is an AI-managed, leveraged yield protocol built on Arbitrum, an Ethereum L
 - **NAV-based pricing**: KASH priced at current Net Asset Value, updated after each settlement cycle.
 - **Configurable batch cycle**: Default 24-hour cycle. Owner can adjust duration for testing or production.
 - **ExchangeFacade**: Perp exchange registry and Hyperliquid write ops live in a separate `ExchangeFacade` contract (bytecode headroom). The vault holds `exchangeFacade` and forwards HL view calls.
-- **Merkle pull claims (redeems)**: Users call `claimRedeem(batchCycle, amount, proof)` to receive ETH/wBTC after settlement. Mint payouts remain push-based.
+- **Merkle pull claims (mints and redeems)**: After settlement, users call `claimMint(batchCycle, amount, proof)` to receive KASH or `claimRedeem(batchCycle, amount, proof)` to receive ETH/wBTC. Proofs are published in hosted manifests.
 - **Perp adapter pattern**: `HyperliquidAdapter` implements `IPerpExchange` and is registered on **ExchangeFacade** (additional adapters can be added via the facade registry).
 - **Spot DEX integration**: An `ISpotDex` adapter (e.g. UniswapV3Adapter) enables on-chain asset ↔ USDC swaps with configurable slippage caps.
 - **24-hour timelock on adapter registration**: On **ExchangeFacade**, the first adapter is immediate; subsequent registrations use proposal + confirmation after the facade timelock.
-- **Batch user caps**: Up to **400** unique wallets per batch cycle for mints and redeems (separate counters), enforced in the app. On-chain `MAX_MINT_USERS` / `MAX_REDEEM_USERS` remain 500.
+- **Batch user caps**: Up to **400** unique wallets per batch cycle for mints and redeems (separate counters), enforced in the app. On-chain defaults are **10,000** per side (`maxMintUsers` / `maxRedeemUsers`), with a ceiling of 100,000.
 - **Security**: `ReentrancyGuard` on user-facing functions, two-step ownership transfer, and custom Solidity errors.
 - **Aave**: Lending/borrowing for capital deployment.
 
@@ -22,10 +22,10 @@ Kash is an AI-managed, leveraged yield protocol built on Arbitrum, an Ethereum L
 
 | Contract | Role |
 |----------|------|
-| `KashYieldETH.sol` / `KashYieldBtc.sol` | Main vaults: mint/redeem requests, batch phases, Aave, spot swaps, `claimRedeem` |
+| `KashYieldETH.sol` / `KashYieldBtc.sol` | Main vaults: mint/redeem requests, batch phases, Aave, spot swaps, `claimMint`, `claimRedeem` |
 | `ExchangeFacade.sol` | Perp registry + HL write ops; pulls USDC from vault |
 | `KashTokenEth` / `KashTokenBtc` | ERC-20 KASH tokens, minted/burned by the respective KashYield contract only |
-| `libraries/MerkleVerify.sol` | Sorted-pair Merkle verification for redeem claim proofs |
+| `libraries/MerkleVerify.sol` | Sorted-pair Merkle verification for mint and redeem claim proofs |
 | `interfaces/IPerpExchange.sol` | Common interface for all perp exchange adapters |
 | `interfaces/ISpotDex.sol` | Common interface for spot DEX adapters |
 | `adapters/HyperliquidAdapter.sol` | `IPerpExchange` + ERC-1271 for HL REST when adapter is HL master |
@@ -36,6 +36,7 @@ Kash is an AI-managed, leveraged yield protocol built on Arbitrum, an Ethereum L
 | Batch cycle | Configurable via `setCycleDurationSeconds` (default 86400 s) |
 | Mint valuation | Phase 1 via Chainlink price feed |
 | NAV | Updated before settlement; Phase 2 mint uses settlement NAV |
+| Mint distribution | Phase 2 commits Merkle root; users **`claimMint`** (pull model) |
 | Redeem distribution | Phase 2 commits Merkle root; users **`claimRedeem`** (pull model) |
 | Exchange registry | On **ExchangeFacade**: `perpExchanges`, `activePerpExchange` |
 | Adapter registration | On facade: first HL adapter immediate; later changes timelocked |
@@ -54,7 +55,7 @@ A private **kash-ops** repository holds the batch bot, post-deploy wiring script
 
 1. User sends ETH/wETH (ETH product) or approves wBTC (BTC product) and calls `requestMint()`.
 2. Request queues until the next batch cycle processes it.
-3. After settlement, user receives KASH tokens (push transfer).
+3. After settlement, user calls **`claimMint`** with a Merkle proof (from hosted manifest or on-chain rebuild) to receive KASH tokens.
 
 ### Redeem
 

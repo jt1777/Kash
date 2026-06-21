@@ -171,7 +171,7 @@ Document in new [`docs/referrals.md`](referrals.md): economics, share %, payout 
 
 ## Phase B — On-chain fee split + mint Merkle (bundled upgrade)
 
-Bundle referral enforcement with the **mint pull-claim** migration already anticipated in [`MintForm.tsx`](../frontend/components/MintForm.tsx) (TODO comment). Redeem already uses Merkle; mint should follow the same pattern.
+Bundle referral enforcement with the **mint pull-claim** migration (shipped in v2.0.0). Redeem and mint both use Merkle pull claims.
 
 ### B1. Contract changes ([`KashYieldETH.sol`](../contracts/KashYieldETH.sol) / [`KashYieldBtc.sol`](../contracts/KashYieldBtc.sol))
 
@@ -231,7 +231,7 @@ sequenceDiagram
 
 ### B2. Frontend updates for Phase B
 
-- **MintForm**: replace push-settled notice with `claimMint` UI (same structure as [`RedeemForm`](../frontend/components/RedeemForm.tsx) claim box); referral bind becomes `setReferrer` tx before mint.
+- **MintForm**: `claimMint` UI shipped (same structure as [`RedeemForm`](../frontend/components/RedeemForm.tsx) claim box); Phase B adds referral bind via `setReferrer` tx before mint.
 - **New ReferralRewards panel**: read `referralAccrued` + `claimReferralRewards` button.
 - **Mint/redeem proof loaders**: extend [`redeemProofs.ts`](../frontend/lib/redeemProofs.ts) pattern for mint proofs.
 - **ABI + addresses**: update [`kashYieldABI.ts`](../frontend/lib/contracts/kashYieldABI.ts) after deploy.
@@ -305,5 +305,5 @@ Phase B additionally touches contracts, bot Merkle builders, proof JSON layout, 
 - [ ] ReferralPanel on app page: show code, share link, accrued earnings
 - [ ] kash-ops: post-batch indexer to compute `referral_earnings` from on-chain batch data + manual payout runbook
 - [ ] Write `docs/referrals.md` (economics, grandfathering, Phase A vs B)
-- [ ] Phase B: bundle `setReferrer`, fee split, `claimReferralRewards`, mint Merkle + `claimMint` in vault upgrade
-- [ ] Phase B: MintForm `claimMint` UI + mint proof loader mirroring RedeemForm
+- [ ] Phase B: bundle `setReferrer`, fee split, `claimReferralRewards` in vault upgrade (mint Merkle + `claimMint` shipped in v2.0.0)
+- [x] MintForm `claimMint` UI + mint proof loader mirroring RedeemForm (shipped)

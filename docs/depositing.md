@@ -18,16 +18,16 @@ KASH uses a **batch system**. Deposits are not processed instantly. Instead:
 
 1. A deposit request is submitted — this queues funds for the next batch
 2. Once per day, the batch is processed (around **23:45 UTC**)
-3. After processing completes, KASH tokens are sent to the depositor's wallet automatically — no claim step is needed
+3. After processing completes, KASH tokens become **claimable** — use the **Claim KASH** button in the app (or call `claimMint` on-chain with a Merkle proof)
 
-This means there is a **waiting period** between request submission and KASH token receipt. The wait is at most 24 hours.
+This means there is a **waiting period** between request submission and receiving KASH. The wait is at most 24 hours, plus a short claim step after settlement.
 **Minimum deposit:** the minimum deposit size is 10 USDC worth of ETH or wBTC.
 
 ---
 
 ## Batch wallet limit
 
-Each batch cycle accepts at most **400 unique wallet addresses** for deposits through the app. This limit keeps batch processing within safe block gas bounds. The on-chain contract allows up to 500 (`MAX_MINT_USERS`); direct contract calls may still use slots above the app limit until a contract upgrade.
+Each batch cycle accepts at most **400 unique wallet addresses** for deposits through the app. This limit keeps batch processing within safe block gas bounds. The on-chain contract default is **10,000** unique minters per cycle (`maxMintUsers`); direct contract calls may use slots above the app limit.
 
 - When the limit is reached, **new wallets** cannot submit a mint request for that cycle in the app.
 - A wallet that **already has a pending deposit** in the current cycle may add to its existing request.
@@ -59,8 +59,9 @@ If demand grows, cycles may be shortened or scheduling updated so more batches r
 3. Click **Deposit ETH**
 4. Confirm the transaction in the wallet
 5. Wait for the daily batch to process (by 23:59 UTC)
-6. Click the "Add to wallet" link in the "Your KASH Balance" box to display KASH-ETH tokens in the wallet
-7. A mint request may be cancelled at any time prior to the batch process run time; deposited ETH will be returned to the wallet
+6. After settlement, click **Claim KASH-ETH** in the Deposit form to receive your tokens
+7. Click the "Add to wallet" link in the "Your KASH Balance" box to display KASH-ETH tokens in the wallet
+8. A mint request may be cancelled at any time prior to the batch process run time; deposited ETH will be returned to the wallet
 
 ---
 
@@ -71,14 +72,15 @@ If demand grows, cycles may be shortened or scheduling updated so more batches r
 3. On first use, **Approve** the contract to spend wBTC — confirm this transaction
 4. Click **Deposit wBTC** and confirm the deposit transaction
 5. Wait for the daily batch
-6. Click the "Add to wallet" link in the "Your KASH Balance" box to display KASH-BTC tokens in the wallet
-7. A mint request may be cancelled at any time prior to the batch process run time; deposited wBTC will be returned to the wallet
+6. After settlement, click **Claim KASH-BTC** in the Deposit form to receive your tokens
+7. Click the "Add to wallet" link in the "Your KASH Balance" box to display KASH-BTC tokens in the wallet
+8. A mint request may be cancelled at any time prior to the batch process run time; deposited wBTC will be returned to the wallet
 
 ---
 
 ## What happens to funds during the batch?
 
-Deposited ETH or wBTC is held in the smart contract until the batch runs. The protocol deploys the ETH or wBTC received in a yield strategy, then KASH tokens are minted at the latest NAV and sent to the depositor's wallet.
+Deposited ETH or wBTC is held in the smart contract until the batch runs. The protocol deploys the ETH or wBTC received in a yield strategy, then KASH tokens are minted at the latest NAV. After settlement, each depositor must **claim** their KASH allocation using a Merkle proof (the app loads proofs automatically when available).
 
 ---
 
@@ -90,7 +92,7 @@ There is a **0.05% fee (5 basis points)** on deposits and redemptions. This is d
 
 ## Checking a position
 
-After KASH tokens arrive, the following are visible in the app:
+After KASH tokens are claimed, the following are visible in the app:
 
 - **KASH balance** in the stats panel
 - Current **NAV** — the USD value of each KASH token

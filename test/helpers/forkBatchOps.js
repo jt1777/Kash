@@ -161,14 +161,15 @@ async function buildMintMerkleRoot(kashYield, batchCycle, nav) {
   const totalMintKash = (amountAfterFeeTotal * nav) / (10n ** 18n);
   const info = await kashYield.getBatchInfo(batchCycle);
   const mintCount = Number(info[3]);
-  const minters = [];
-  const amountInUSD = [];
-  for (let i = 0; i < mintCount; i++) {
-    const addr = await kashYield.batchMintUsers(batchCycle, i);
-    const req = await kashYield.getPendingMintRequest(addr, batchCycle);
-    minters.push(addr);
-    amountInUSD.push(BigInt(req.amountInUSD.toString()));
-  }
+  const rows = await Promise.all(
+    Array.from({ length: mintCount }, async (_, i) => {
+      const addr = await kashYield.batchMintUsers(batchCycle, i);
+      const req = await kashYield.getPendingMintRequest(addr, batchCycle);
+      return { addr, amountInUSD: BigInt(req.amountInUSD.toString()) };
+    }),
+  );
+  const minters = rows.map((r) => r.addr);
+  const amountInUSD = rows.map((r) => r.amountInUSD);
   const entries = allocMintKashAmounts(minters, amountInUSD, totalMintUSD, totalMintKash);
   return buildMintMerkleTree(batchCycle, entries).root;
 }
