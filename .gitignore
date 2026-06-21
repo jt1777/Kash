@@ -18,3 +18,5 @@ gasReporterOutput.json
 
 # Deployment files
 /deployments
+
+.cursorignore
