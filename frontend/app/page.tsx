@@ -54,7 +54,7 @@ export default function Home() {
       },
     },
     scheduleHint:
-      'Mint/redeem requests accepted until batch cutoff (~23:45 UTC); after settlement, call claimMint or claimRedeem with hosted Merkle proofs.',
+      'Mint/redeem requests accepted until batch cutoff (~23:40 UTC); after settlement, call claimMint or claimRedeem with hosted Merkle proofs.',
     reads: [
       'isUserWindow()',
       'isProcessingWindow()',
@@ -635,7 +635,7 @@ export default function Home() {
                 <h3>Batches &amp; settlement</h3>
                 <p>
                   Use <code style={{ color: '#00FFFF' }}>isUserWindow()</code> / <code style={{ color: '#00FFFF' }}>isProcessingWindow()</code> and subscribe to{' '}
-                  <code style={{ color: '#00FFFF' }}>BatchProcessed</code> events to anchor automation — cutoff time is documented (~23:45 UTC); validate against deployment.
+                  <code style={{ color: '#00FFFF' }}>BatchProcessed</code> events to anchor automation — cutoff time is documented (~23:40 UTC); validate against deployment.
                 </p>
               </div>
               <div className="proof-card">

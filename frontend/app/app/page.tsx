@@ -453,7 +453,7 @@ function AppContent() {
               </div>
               <h3 className="font-semibold text-gray-900 mb-2">Daily Batch Processing</h3>
               <p className="text-sm text-gray-600">
-                Submit requests before 23:45 UTC. Batch processes run between 23:45-23:59 daily.
+                Submit requests before 23:40 UTC. Batch processes run between 23:40-23:59 daily.
               </p>
             </div>
 

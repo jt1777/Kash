@@ -398,7 +398,7 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
         </div>
         <h3 className="text-lg font-semibold text-gray-900 mb-2">Redeem Request Submitted!</h3>
         <p className="text-sm text-gray-600 mb-4">
-          Your request will be processed in the next batch cycle (23:45 UTC).
+          Your request will be processed in the next batch cycle (23:40 UTC).
         </p>
 
         <div className="rounded-xl p-4 mb-6 border border-gray-200 bg-purple-50 shadow-md text-left space-y-2">
@@ -688,7 +688,7 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
       )}
 
       {/*<p className="text-xs text-gray-500 text-center">
-        Fee: 0.05% | Processed at next batch (23:45 UTC)
+        Fee: 0.05% | Processed at next batch (23:40 UTC)
       </p>*/}
     </div>
   );

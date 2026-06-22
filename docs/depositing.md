@@ -17,7 +17,7 @@ Depositing into KASH mints KASH tokens that accrue yield over time.
 KASH uses a **batch system**. Deposits are not processed instantly. Instead:
 
 1. A deposit request is submitted — this queues funds for the next batch
-2. Once per day, the batch is processed (around **23:45 UTC**)
+2. Once per day, the batch is processed (around **23:40 UTC**)
 3. After processing completes, KASH tokens become **claimable** — use the **Claim KASH** button in the app (or call `claimMint` on-chain with a Merkle proof)
 
 KASH uses a **pull-claim** model (same as redemptions): the batch commits a Merkle root on-chain; KASH is not sent to wallets automatically. The app loads proof JSON from hosted manifests (`/mint-proofs/{eth|btc}-mint-batch-{cycle}.json`) after settlement. Claims must be submitted within **30 days** of batch settlement.
@@ -47,8 +47,8 @@ At launch, the typical schedule is:
 
 | Phase | Typical time (UTC) |
 |-------|-------------------|
-| User window | Submissions accepted throughout the cycle (e.g. until ~23:45) |
-| Processing window | Batch runs (~23:45–23:59) |
+| User window | Submissions accepted throughout the cycle (e.g. until ~23:40) |
+| Processing window | Batch runs (~23:40–23:59) |
 
 If demand grows, cycles may be shortened or scheduling updated so more batches run per day. Confirm the live schedule in the app before submitting a request.
 

@@ -38,8 +38,8 @@ At launch, the typical schedule is:
 
 | Phase | Typical time (UTC) |
 |-------|-------------------|
-| User window | Submissions accepted throughout the cycle (e.g. until ~23:45) |
-| Processing window | Batch runs (~23:45–23:59) |
+| User window | Submissions accepted throughout the cycle (e.g. until ~23:40) |
+| Processing window | Batch runs (~23:40–23:59) |
 
 If demand grows, cycles may be shortened or scheduling updated so more batches run per day. Confirm the live schedule in the app before submitting a request.
 
@@ -76,9 +76,9 @@ Any portion of a KASH balance may be redeemed. A full exit is not required.
 
 ## Timing
 
-During the **processing window** (~23:45 UTC until the end of the cycle), mint and redeem requests are **suspended** — `requestMint` and `requestRedeem` revert with `UserWindowClosed`. Nothing is queued automatically.
+During the **processing window** (~23:40 UTC until the end of the cycle), mint and redeem requests are **suspended** — `requestMint` and `requestRedeem` revert with `UserWindowClosed`. Nothing is queued automatically.
 
-To redeem in the **current day's batch**, submit before **23:45 UTC**. If you miss that cutoff, wait until the **next cycle** opens (typically 00:00 UTC), then submit a new redemption request for that batch.
+To redeem in the **current day's batch**, submit before **23:40 UTC**. If you miss that cutoff, wait until the **next cycle** opens (typically 00:00 UTC), then submit a new redemption request for that batch.
 
 ---
 

@@ -13,7 +13,7 @@ The **protocol fee** is KASH's own charge on user flows. It is the **only fee ta
 | | |
 |---|---|
 | **Rate** | **0.05% (5 basis points)** on the amount processed in each batch |
-| **When charged** | Once per batch, when mints and redeems are settled (~23:45–23:59 UTC) — not when the request is submitted |
+| **When charged** | Once per batch, when mints and redeems are settled (~23:40–23:59 UTC) — not when the request is submitted |
 | **On deposits** | Fee is taken from deposited ETH or wBTC before KASH tokens are minted. KASH is minted from the **post-fee** USD value at the batch NAV. |
 | **On redemptions** | Fee is taken from the gross asset value of the redemption before payout. The **net amount after the fee** is what you claim. |
 | **Where it goes** | Credited to the protocol owner's reserve on-chain (`ownerEthReserve` / `ownerWbtcReserve`). It is **not** redeployed into the yield strategy. |

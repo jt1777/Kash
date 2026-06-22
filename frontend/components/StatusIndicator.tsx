@@ -73,10 +73,10 @@ export function StatusIndicator({ product = 'eth' }: { product?: Product }) {
           </div>
           <div className="ml-3">
             <h3 className="text-sm font-medium text-green-800">
-              The current time is {utcTime} UTC. Window open time for Users 00:00-23:45 UTC.
+              The current time is {utcTime} UTC. Window open time for Users 00:00-23:40 UTC.
             </h3>
             <p className="text-sm text-green-700 mt-1">
-              All mint and redemption requests each day will be processed at the batch processing time (23:45 UTC).
+              All mint and redemption requests each day will be processed at the batch processing time (23:40 UTC).
             </p>
           </div>
         </div>
@@ -94,7 +94,7 @@ export function StatusIndicator({ product = 'eth' }: { product?: Product }) {
           </div>
           <div className="ml-3">
             <h3 className="text-sm font-medium text-amber-800">
-              Processing Window Active (23:45-23:59 UTC)
+              Processing Window Active (23:40-23:59 UTC)
             </h3>
             <p className="text-sm text-amber-700 mt-1">
               Batch processing in progress. User transactions temporarily disabled. Check back after 00:00 UTC.
