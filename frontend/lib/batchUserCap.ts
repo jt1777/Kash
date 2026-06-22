@@ -1,12 +1,21 @@
 /**
- * Frontend batch wallet cap (mint and redeem). On-chain MAX_*_USERS remains 500;
- * the app stops accepting new wallets at this lower limit to stay clear of block gas limits.
+ * Frontend batch wallet cap (mint and redeem). Matches on-chain maxMintUsers / maxRedeemUsers
+ * default (10_000); owner may raise up to 100_000 on-chain.
  */
-export const BATCH_USER_CAP = 400;
+export const BATCH_USER_CAP = 10_000;
 
-/** Status band thresholds (relative to BATCH_USER_CAP). */
-export const BATCH_CAP_MOSTLY_FULL_AT = 301;
-export const BATCH_CAP_ALMOST_FULL_AT = 376;
+/** ~75% of cap — "mostly full" (same ratio as 301 @ the former 400-wallet limit). */
+export function batchCapMostlyFullAt(cap: number = BATCH_USER_CAP): number {
+  return Math.floor((cap * 301) / 400);
+}
+
+/** ~94% of cap — "almost full" (same ratio as 376 @ 400). */
+export function batchCapAlmostFullAt(cap: number = BATCH_USER_CAP): number {
+  return Math.floor((cap * 376) / 400);
+}
+
+export const BATCH_CAP_MOSTLY_FULL_AT = batchCapMostlyFullAt(BATCH_USER_CAP);
+export const BATCH_CAP_ALMOST_FULL_AT = batchCapAlmostFullAt(BATCH_USER_CAP);
 
 export const MINT_CAP_REACHED_SELECTOR = '0x5fb1eed1';
 export const REDEEM_CAP_REACHED_SELECTOR = '0x94f90443';
@@ -43,14 +52,14 @@ export function batchCapLabel(kind: 'mint' | 'redeem'): string {
 
 export type BatchCapStatusLevel = 'available' | 'mostly-full' | 'almost-full' | 'full';
 
-/** Status bands: green 0–300, yellow 301–375, red 376–399, full at cap (400). */
+/** Status bands: green below ~75%, yellow ~75–93%, red ~94% to cap−1, full at cap. */
 export function getBatchCapStatusLevel(
   usersCount: number,
   cap: number = BATCH_USER_CAP,
 ): BatchCapStatusLevel {
   if (usersCount >= cap) return 'full';
-  if (usersCount >= BATCH_CAP_ALMOST_FULL_AT) return 'almost-full';
-  if (usersCount >= BATCH_CAP_MOSTLY_FULL_AT) return 'mostly-full';
+  if (usersCount >= batchCapAlmostFullAt(cap)) return 'almost-full';
+  if (usersCount >= batchCapMostlyFullAt(cap)) return 'mostly-full';
   return 'available';
 }
 
