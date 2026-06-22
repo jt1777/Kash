@@ -15,8 +15,16 @@ KASH is not a guaranteed-yield product. Before allocating capital, verify the co
 
 | Product | KashYield vault | KASH token | Deposit asset |
 |---------|-----------------|------------|---------------|
-| KASH-ETH | `0x92c5833Deaac65a7aCB47867Cf009cAC1bF1dD5a` | `0x8642483DcCE55270692aD559dCac7cf7eA0F9Bd9` | Native ETH or WETH |
-| KASH-BTC | `0x26a2610F360049787F3E34912AAA27CA397d4a99` | `0x8EaEf1D89B363c4DFF1d7D69843faC7744198660` | wBTC (`0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f`) |
+| KASH-ETH | `0xC5C8B1Dc1fFF6728869C8BCCe6105Caa6Df9E68d` | `0xf29483f62502D714c14CB3141944C6D8CCDF9962` | Native ETH or WETH |
+| KASH-BTC | `0x86B0095f866c05F53363AE31F994E9540033fC2E` | `0x4f628402227a2Fe292641db7aDa1Fae744568445` | wBTC (`0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f`) |
+
+**Infrastructure (shared or per product):**
+
+| Contract | KASH-ETH | KASH-BTC |
+|----------|----------|----------|
+| ExchangeFacade | `0x552f7161FdEb53131DF590a36560Cc6B386AE267` | `0x6362722b469850e0Fee60B312D7dc253bfC4cd15` |
+| HyperliquidAdapter | `0x88699f0D22654dCa99a95e64efA994BDA79faa72` | `0x753E9232f48eb512A5C06257196046bb09EfF628` |
+| UniswapV3Adapter (spot DEX, shared) | `0x43e4283eAc834A6738C8a125Aa4438b8fC91e759` | same |
 
 Source of truth in the app:
 
@@ -136,7 +144,9 @@ Do not assume immediate KASH receipt after a deposit request. Wait for batch pro
 
 After **`BatchProcessed`** for a cycle where you had a pending mint, KASH is allocated but not pushed to your wallet. Claim with the Merkle proof published for that batch.
 
-Proof manifest shape (hosted JSON, same pattern as redeem proofs):
+**Pull-claim model:** Phase 2 batch settlement commits a `mintMerkleRoot` on-chain. KASH is **not** transferred automatically — each minter must call `claimMint` with a Merkle proof. Claims expire **30 days** after root commit (`CLAIM_EXPIRY_SECONDS`; see `batchClaimInfo(batchCycle).claimDeadline`).
+
+**Proof manifests** are published by the operator after each batch (same JSON shape as redeem proofs):
 
 ```json
 {
@@ -145,6 +155,10 @@ Proof manifest shape (hosted JSON, same pattern as redeem proofs):
   "leaves": [{ "user": "0x…", "amount": "…", "proof": ["0x…", "…"] }]
 }
 ```
+
+- Hosted paths: `NEXT_PUBLIC_MINT_PROOF_BASE_URL/{product}-mint-batch-{cycle}.json` or `/mint-proofs/{product}-mint-batch-{cycle}.json` (`product` = `eth` or `btc`)
+- Leaf hash: `keccak256(abi.encode(batchCycle, user, kashAmount))` — `amount` in the manifest is KASH wei (18 decimals)
+- If no manifest is available, the frontend can rebuild a single-user proof from chain events (see `frontend/lib/mintProofs.ts`)
 
 KASH-ETH example:
 
@@ -224,6 +238,9 @@ Watch for **RedeemRequested**, then batch settlement.
 
 After settlement, claim the underlying asset with the Merkle proof published for the batch (see §6 for the analogous **`claimMint`** flow for deposits):
 
+- Redeem proof manifests: `NEXT_PUBLIC_REDEEM_PROOF_BASE_URL/{product}-batch-{cycle}.json` or `/redeem-proofs/{product}-batch-{cycle}.json`
+- Leaf hash: `keccak256(abi.encode(batchCycle, user, claimAmount))` — ETH/wBTC wei (18 / 8 decimals respectively)
+
 ```ts
 await wallet.writeContract({
   address: kashYieldBtc,
@@ -241,12 +258,3 @@ Before allocating capital, read:
 
 - [How Yield Works](how-yield-works.md)
 - [Risks & Safeguards](risks.md)
-
-Agent policy suggestion:
-
-- Set a maximum allocation per product.
-- Require the contract not to be paused.
-- Require the user window to be open for mint/redeem.
-- Require the protocol fee to be within your configured maximum.
-- Require NAV and batch state to be read from your own RPC or indexer.
-- Size deposits based on current TVL, liquidity, strategy risks, operator assumptions, and your own risk budget.

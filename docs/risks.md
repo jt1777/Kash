@@ -14,8 +14,8 @@ The vault contracts only recognize deposits submitted via **`requestMint`** duri
 
 | Vault | Accepted asset | Correct method | What goes wrong if you transfer directly |
 |-------|----------------|----------------|----------------------------------------|
-| **KASH-ETH** (`KashYieldETH`) | ETH or wETH | Use **Mint KASH** on the ETH tab (calls `requestMint`) | **Native ETH** sent to the contract is accepted by `receive()` but is **not** tied to your wallet — you receive no KASH and have **no way to reclaim it**. **wETH** sent without calling `requestMint` is likewise not credited to you. |
-| **KASH-BTC** (`KashYieldBtc`) | wBTC only | Use **Mint KASH** on the BTC tab (calls `requestMint`) | **wBTC** sent via a direct ERC-20 transfer is **not** credited and **cannot be recovered** — `rescueERC20` explicitly blocks the vault’s wBTC address, so even the protocol owner cannot pull it back out. |
+| **KASH-ETH** (`0xC5C8B1Dc1fFF6728869C8BCCe6105Caa6Df9E68d`) | ETH or wETH | Use **Mint KASH** on the ETH tab (calls `requestMint`) | **Native ETH** sent to the contract is accepted by `receive()` but is **not** tied to your wallet — you receive no KASH and have **no way to reclaim it**. **wETH** sent without calling `requestMint` is likewise not credited to you. |
+| **KASH-BTC** (`0x86B0095f866c05F53363AE31F994E9540033fC2E`) | wBTC only | Use **Mint KASH** on the BTC tab (calls `requestMint`) | **wBTC** sent via a direct ERC-20 transfer is **not** credited and **cannot be recovered** — `rescueERC20` explicitly blocks the vault’s wBTC address, so even the protocol owner cannot pull it back out. |
 
 **Use the right vault for the right asset:**
 

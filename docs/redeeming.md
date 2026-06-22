@@ -12,13 +12,13 @@ Like deposits, redemptions go through the **daily batch**:
 2. KASH tokens are locked in the contract until the batch runs
 3. At the next batch (around **23:59 UTC**), KASH is burned and the redeem amount becomes claimable
 
-After settlement, use the app's **Claim** button to receive ETH or wBTC. The claim uses a Merkle proof published for the processed batch.
+After settlement, use the app's **Claim** button to receive ETH or wBTC.
 
 ---
 
 ## Batch wallet limit
 
-Each batch cycle accepts at most **400 unique wallet addresses** for redemptions through the app. The on-chain contract default is **10,000** unique redeemers per cycle (`maxRedeemUsers`); direct contract calls may use slots above the app limit.
+Each batch cycle accepts at most **10,000 unique wallet addresses** for redemptions through the app, configurable in the contract up to a maximum of 100,000 addresses.
 
 - When the limit is reached, **new wallets** cannot submit a redemption request for that cycle in the app.
 - A wallet that **already has a pending redemption** in the current cycle may add to its existing request.
@@ -32,7 +32,7 @@ Mint and redeem limits are tracked **separately** — a full mint batch does not
 
 ## Batch timing and capacity
 
-Batch **cycle length** and **processing windows** are configurable on-chain to accommodate demand. The operator can adjust parameters such as `cycleDurationSeconds` and the user vs processing windows.
+Batch **cycle length** and **processing windows** are configurable on-chain to accommodate demand. The operator can adjust parameters such as `cycleDurationSeconds` and batch processing windows.
 
 At launch, the typical schedule is:
 
@@ -76,7 +76,9 @@ Any portion of a KASH balance may be redeemed. A full exit is not required.
 
 ## Timing
 
-Redemption requests submitted **after the batch starts** (~23:45 UTC) will be queued for the **following day's batch**. Requests must be submitted before 23:45 UTC to be included in the current day's batch.
+During the **processing window** (~23:45 UTC until the end of the cycle), mint and redeem requests are **suspended** — `requestMint` and `requestRedeem` revert with `UserWindowClosed`. Nothing is queued automatically.
+
+To redeem in the **current day's batch**, submit before **23:45 UTC**. If you miss that cutoff, wait until the **next cycle** opens (typically 00:00 UTC), then submit a new redemption request for that batch.
 
 ---
 

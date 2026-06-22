@@ -20,6 +20,8 @@ KASH uses a **batch system**. Deposits are not processed instantly. Instead:
 2. Once per day, the batch is processed (around **23:45 UTC**)
 3. After processing completes, KASH tokens become **claimable** — use the **Claim KASH** button in the app (or call `claimMint` on-chain with a Merkle proof)
 
+KASH uses a **pull-claim** model (same as redemptions): the batch commits a Merkle root on-chain; KASH is not sent to wallets automatically. The app loads proof JSON from hosted manifests (`/mint-proofs/{eth|btc}-mint-batch-{cycle}.json`) after settlement. Claims must be submitted within **30 days** of batch settlement.
+
 This means there is a **waiting period** between request submission and receiving KASH. The wait is at most 24 hours, plus a short claim step after settlement.
 **Minimum deposit:** the minimum deposit size is 10 USDC worth of ETH or wBTC.
 

@@ -16,9 +16,9 @@ This guide covers the prerequisites for making a first deposit.
 
 ## Step 1 — Add Arbitrum One to the wallet
 
-**Arbitrum One** is a Layer 2 (L2) network built on top of Ethereum. Instead of running every transaction on Ethereum mainnet (often called “L1”), Arbitrum processes them on a separate chain and periodically posts the results back to Ethereum for security. That design keeps fees much lower and confirmations faster, while still inheriting Ethereum’s security model.
+KASH is deployed on **Arbitrum One** — not on Ethereum mainnet.  Arbitrum One is a Layer 2 (L2) network built on top of Ethereum. Instead of running every transaction on Ethereum mainnet (often called “L1”), Arbitrum processes them on a separate chain and periodically posts the results back to Ethereum for security. That design keeps fees much lower and confirmations faster, while still inheriting Ethereum’s security model.
 
-KASH is deployed on Arbitrum One — not on Ethereum mainnet. Wallets default to Ethereum L1, so **Arbitrum One must be added as a network** before connecting to the app or sending a deposit. On Arbitrum One, **ETH** is still used to pay gas (the same asset as on mainnet, but on a different chain).
+Wallets default to Ethereum L1, so **Arbitrum One must be added as a network** before connecting to the app or sending a deposit. On Arbitrum One, **ETH** is still used to pay gas (the same asset as on mainnet, but on a different chain).
 
 If Arbitrum One is not already configured, add it manually:
 
@@ -54,6 +54,17 @@ For **KASH-BTC**, **wBTC** must be held on Arbitrum One (`0x2f2a2543B76A4166549F
 2. Click **Connect Wallet** in the top-right corner
 3. Select the wallet and approve the connection
 4. Ensure the wallet is on **Arbitrum One** — the app will show **Wrong network** if another chain is selected
+
+---
+
+## Live contract addresses (Arbitrum One)
+
+| Product | Vault | KASH token |
+|---------|-------|------------|
+| KASH-ETH | `0xC5C8B1Dc1fFF6728869C8BCCe6105Caa6Df9E68d` | `0xf29483f62502D714c14CB3141944C6D8CCDF9962` |
+| KASH-BTC | `0x86B0095f866c05F53363AE31F994E9540033fC2E` | `0x4f628402227a2Fe292641db7aDa1Fae744568445` |
+
+Programmatic integrators: see [Agent Quickstart](agent-quickstart.md) for adapter/facade addresses, ABIs, and Merkle claim flows.
 
 ---
 
