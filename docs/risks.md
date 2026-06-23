@@ -10,7 +10,7 @@ KASH is a Decentralized Finance protocol on **Arbitrum One** mainnet. Participat
 
 > **Critical:** Never transfer ETH, wETH, wBTC, or any other token **directly** to a KASH vault contract address (for example from a wallet’s “Send” screen or a raw ERC-20 transfer). Deposits **must** go through the app’s **Mint KASH** flow, which calls `requestMint` on the correct vault. Tokens sent any other way are **not** credited as a deposit and, in most cases, **cannot be returned to you**.
 
-The vault contracts only recognize deposits submitted via **`requestMint`** during the open user window. A plain transfer to the contract address does **not** create a mint request, does **not** mint KASH, and is **not** refundable through the app.
+The vault contracts only recognize deposits submitted via the **Submit Mint Request** button during the open user window. A plain transfer to the contract address does **not** create a mint request, does **not** mint KASH, and is **not** refundable through the app.
 
 | Vault | Accepted asset | Correct method | What goes wrong if you transfer directly |
 |-------|----------------|----------------|----------------------------------------|
@@ -135,8 +135,6 @@ KASH is designed with layered protections against **external exploits** (hacks, 
 **Users can cancel before the batch runs.** While the user window is open and the batch has not entered processing, a pending mint or redeem may be **cancelled** and assets or KASH returned — without owner involvement.
 
 **Users can self-rescue if the contract is paused.** If the contract is paused, dedicated emergency withdrawal paths allow reclamation of a **still-pending** request directly from the contract. These paths do not go through the owner. They require interacting with the contract directly (e.g. Arbiscan “Write Contract”) rather than the app UI.
-
-**Rescue function cannot take deposit collateral.** Token rescue is blocked for the vault’s primary deposit asset (ETH/wBTC), so the owner cannot use “token rescue” as a back door to sweep user collateral.
 
 **Stray tokens only.** Token rescue exists to recover mistakenly sent ERC-20s (not the main deposit asset), sent to a designated recipient.
 

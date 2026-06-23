@@ -20,16 +20,15 @@ KASH uses a **batch system**. Deposits are not processed instantly. Instead:
 2. Once per day, the batch is processed (around **23:40 UTC**)
 3. After processing completes, KASH tokens become **claimable** — use the **Claim KASH** button in the app (or call `claimMint` on-chain with a Merkle proof)
 
-KASH uses a **pull-claim** model (same as redemptions): the batch commits a Merkle root on-chain; KASH is not sent to wallets automatically. The app loads proof JSON from hosted manifests (`/mint-proofs/{eth|btc}-mint-batch-{cycle}.json`) after settlement. Claims must be submitted within **30 days** of batch settlement.
+KASH tokens must be claimed within **30 days** of batch settlement.
 
-This means there is a **waiting period** between request submission and receiving KASH. The wait is at most 24 hours, plus a short claim step after settlement.
 **Minimum deposit:** the minimum deposit size is 10 USDC worth of ETH or wBTC.
 
 ---
 
 ## Batch wallet limit
 
-Each batch cycle accepts at most **400 unique wallet addresses** for deposits through the app. This limit keeps batch processing within safe block gas bounds. The on-chain contract default is **10,000** unique minters per cycle (`maxMintUsers`); direct contract calls may use slots above the app limit.
+Each batch cycle accepts at most **10,000 unique wallet addresses** for deposits through the app though this number is configurable up to a maximum of 100,000 addresses.
 
 - When the limit is reached, **new wallets** cannot submit a mint request for that cycle in the app.
 - A wallet that **already has a pending deposit** in the current cycle may add to its existing request.
@@ -41,7 +40,7 @@ The app shows batch capacity for the current cycle as a status indicator: **Avai
 
 ## Batch timing and capacity
 
-Batch **cycle length** and **processing windows** are configurable on-chain to accommodate demand. The operator can adjust parameters such as `cycleDurationSeconds` and the user vs processing windows.
+Batch **cycle length** and **processing windows** are configurable on-chain to accommodate demand. The operator can adjust parameters such as `cycleDurationSeconds` and batch processing windows.
 
 At launch, the typical schedule is:
 
@@ -82,7 +81,7 @@ If demand grows, cycles may be shortened or scheduling updated so more batches r
 
 ## What happens to funds during the batch?
 
-Deposited ETH or wBTC is held in the smart contract until the batch runs. The protocol deploys the ETH or wBTC received in a yield strategy, then KASH tokens are minted at the latest NAV. After settlement, each depositor must **claim** their KASH allocation using a Merkle proof (the app loads proofs automatically when available).
+Deposited ETH or wBTC is held in the smart contract until the batch runs. The protocol deploys the ETH or wBTC received in a yield strategy, then KASH tokens are minted at the latest NAV. After settlement, each depositor must **claim** their KASH allocation using the claim button in the Mint Kash section.
 
 ---
 
@@ -96,9 +95,9 @@ There is a **0.05% fee (5 basis points)** on deposits and redemptions. This is d
 
 After KASH tokens are claimed, the following are visible in the app:
 
-- **KASH balance** in the stats panel
 - Current **NAV** — the USD value of each KASH token
-- Total deposits in the **Deposits** card
+- Current **APY** (annual yield) of the strategy
+- User's **KASH balance** in the stats panel
 
 ---
 
