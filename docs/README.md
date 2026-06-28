@@ -1,6 +1,6 @@
 # What is KASH?
 
-Kash is an AI-managed, leveraged yield protocol built on Arbitrum, an Ethereum L2. ETH and Bitcoin deposits are posted as collateral on Aave to fund a perpetual futures position on Hyperliquid. The strategy is market-neutral — it earns funding rate premiums without taking directional risk. An AI agent runs the entire operational stack: batch settlement, rebalancing, and NAV pricing, autonomously and continuously. Deposits are segregated by smart contract, and all positions are independently auditable on-chain in real time.
+Kash is an AI-managed, leveraged yield protocol built on Arbitrum, an Ethereum L2. ETH an wrapped Bitcoin deposits are posted as collateral on Aave to fund a perpetual futures position on Hyperliquid. The strategy is market-neutral — it earns funding rate premiums without taking directional risk. An AI agent runs the entire operational stack: batch settlement, rebalancing, and NAV pricing, autonomously and continuously. Deposits are segregated by smart contract, and all positions are independently auditable on-chain in real time.
 
 ---
 
@@ -50,6 +50,6 @@ This makes KASH composable: KASH tokens can be held in a multisig, sent to anoth
 
 ## What KASH is not
 
-- KASH is **not** a stablecoin. KASH-ETH is priced in USD terms and tracks the NAV of the ETH vault.
+- KASH is **not** a stablecoin. KASH-ETH is priced in USDC terms and tracks the NAV of the ETH vault.
 - KASH does **not** guarantee returns. Yield can vary and there are risks (see [Risks](risks.md)).
 - KASH is **not** risk-free. The protocol is deployed on **Arbitrum One** mainnet using real ETH and wBTC; participants should review the [risks](risks.md) before depositing.

@@ -1,6 +1,6 @@
 # Kash - Enhanced Yield Strategy Protocol
 
-Kash is an AI-managed, leveraged yield protocol built on Arbitrum, an Ethereum L2. ETH and Bitcoin deposits are posted as collateral on Aave to fund a perpetual futures position on Hyperliquid. The strategy is market-neutral — it earns funding rate premiums without taking directional risk. An AI agent runs the entire operational stack: batch settlement, rebalancing, and NAV pricing, autonomously and continuously. Deposits are segregated by smart contract, and all positions are independently auditable on-chain in real time.
+Kash is an AI-managed, leveraged yield protocol built on Arbitrum, an Ethereum L2. ETH and wrapped Bitcoin deposits are posted as collateral on Aave to fund a perpetual futures position on Hyperliquid. The strategy is market-neutral — it earns funding rate premiums without taking directional risk. An AI agent runs the entire operational stack: batch settlement, rebalancing, and NAV pricing, autonomously and continuously. Deposits are segregated by smart contract, and all positions are independently auditable on-chain in real time.
 
 ## Key Features
 
@@ -12,7 +12,7 @@ Kash is an AI-managed, leveraged yield protocol built on Arbitrum, an Ethereum L
 - **Perp adapter pattern**: `HyperliquidAdapter` implements `IPerpExchange` and is registered on **ExchangeFacade** (additional adapters can be added via the facade registry).
 - **Spot DEX integration**: An `ISpotDex` adapter (e.g. UniswapV3Adapter) enables on-chain asset ↔ USDC swaps with configurable slippage caps.
 - **24-hour timelock on adapter registration**: On **ExchangeFacade**, the first adapter is immediate; subsequent registrations use proposal + confirmation after the facade timelock.
-- **Batch user caps**: Up to **400** unique wallets per batch cycle for mints and redeems (separate counters), enforced in the app. On-chain defaults are **10,000** per side (`maxMintUsers` / `maxRedeemUsers`), with a ceiling of 100,000.
+- **Batch user caps**: Up to **10,000** unique wallets per batch cycle for mints and redeems (separate counters), enforced in the app. On-chain defaults are **10,000** per side (`maxMintUsers` / `maxRedeemUsers`), with a ceiling of 100,000.
 - **Security**: `ReentrancyGuard` on user-facing functions, two-step ownership transfer, and custom Solidity errors.
 - **Aave**: Lending/borrowing for capital deployment.
 
