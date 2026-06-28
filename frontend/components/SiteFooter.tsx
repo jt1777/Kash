@@ -27,6 +27,9 @@ export function SiteFooter({ className, contractAddress }: SiteFooterProps) {
           <a href="https://discord.gg/FxtyWx6Zw5" target="_blank" rel="noopener noreferrer">
             Discord
           </a>
+          <a href="https://x.com/KASH_TOKEN_0X0" target="_blank" rel="noopener noreferrer">
+            X
+          </a>
           {contractAddress && (
             <a
               href={arbiscanAddressUrl(contractAddress, { code: verified })}
