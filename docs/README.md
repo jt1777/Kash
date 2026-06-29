@@ -1,6 +1,6 @@
 # What is KASH?
 
-Kash is an AI-managed, leveraged yield protocol built on Arbitrum, an Ethereum L2. ETH an wrapped Bitcoin deposits are posted as collateral on Aave to fund a perpetual futures position on Hyperliquid. The strategy is market-neutral — it earns funding rate premiums without taking directional risk. An AI agent runs the entire operational stack: batch settlement, rebalancing, and NAV pricing, autonomously and continuously. Deposits are segregated by smart contract, and all positions are independently auditable on-chain in real time.
+Kash is an AI-managed, leveraged yield protocol built on Arbitrum, an Ethereum L2. ETH and wrapped Bitcoin deposits are posted as collateral on Aave to fund a perpetual futures position on Hyperliquid. The strategy is market-neutral — it earns funding rate premiums without taking directional risk. An AI agent runs the entire operational stack: batch settlement, rebalancing, and NAV pricing, autonomously and continuously. Deposits are segregated by smart contract, and all positions are independently auditable on-chain in real time.
 
 ---
 
@@ -34,7 +34,7 @@ KASH uses **Net Asset Value (NAV)** pricing. Every KASH token is priced at the c
 - Six months later NAV = $1.045 (4.5% yield accrued)
 - Redemption of 1,800 KASH → ETH worth $1,800 × 1.045 = $1,881
 
-NAV is updated hourly so token value can be checked in near real-time. The NAV bot updater does not rely on a private database: it reads portfolio balances and state from the blockchain, including vault balances, Aave positions, on-chain DEX balances, KASH token supply, and Chainlink prices.
+NAV is updated periodically throughout the day so token value can be checked in near real-time. The NAV bot updater does not rely on a private database: it reads portfolio balances and state from the blockchain, including vault balances, Aave positions, on-chain DEX balances, KASH token supply, and Chainlink prices.
 
 After calculating NAV, the bot submits the new value to the KashYield contract in an on-chain transaction. Anyone can verify the latest NAV from the contract’s public state, and can audit each update by checking the transaction, emitted NAV events, and the same public on-chain inputs used by the bot.
 
