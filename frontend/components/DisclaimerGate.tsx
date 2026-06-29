@@ -74,7 +74,7 @@ export function DisclaimerGate({ children, riskDocsUrl }: DisclaimerGateProps) {
                   follows the on-chain batch schedule.
                 </li>
                 <li>
-                  <strong>Operator dependency.</strong> Batch processing and NAV updates rely on
+                  <strong>Operator dependency.</strong> Batch processing and NAV updates are initiated by
                   off-chain infrastructure that can fail or be delayed.
                 </li>
                 <li>
