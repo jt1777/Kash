@@ -17,8 +17,8 @@ const {
   claimRedeemForUser,
   claimMintForUser,
   deployAndWireExchangeFacade,
-  depositToHyperliquidViaFacade,
-  withdrawFromHyperliquidViaFacade,
+  depositToPerpExchangeViaFacade,
+  withdrawFromPerpExchangeViaFacade,
 } = require("./helpers/forkBatchOps");
 
 // Pin to a recent Arbitrum block for reproducibility
@@ -72,7 +72,8 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     kashYieldEth = await KashYieldETH.deploy(
       bot.address,
       WETH_ADDRESS,
-      USDC_ADDRESS
+      USDC_ADDRESS,
+      owner.address
     );
     await kashYieldEth.waitForDeployment();
 
@@ -146,7 +147,7 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
 
     await kashYieldEth.connect(bot).depositToAave(deployTotal);
     await kashYieldEth.connect(bot).borrowFromAave(USDC_ADDRESS, borrowUsdc);
-    await depositToHyperliquidViaFacade(kashYieldEth, bot, borrowUsdc);
+    await depositToPerpExchangeViaFacade(kashYieldEth, bot, borrowUsdc);
 
     await settleMintPhase2({ kashYield: kashYieldEth, bot, batchCycle, nav: NAV_1 });
     await claimMintForUser(kashYieldEth, user1, batchCycle, NAV_1);
@@ -176,7 +177,7 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     const adapterDeposit = await hlAdapter.usdcBalance();
     if (adapterDeposit > 0n) {
       await simulateHlReturnToAdapter(adapterDeposit);
-      await withdrawFromHyperliquidViaFacade(kashYieldEth, bot, adapterDeposit);
+      await withdrawFromPerpExchangeViaFacade(kashYieldEth, bot, adapterDeposit);
     }
 
     const usdcBal = await usdc.balanceOf(await kashYieldEth.getAddress());
@@ -224,7 +225,7 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
 
     await kashYieldEth.connect(bot).depositToAave(deployTotal);
     await kashYieldEth.connect(bot).borrowFromAave(USDC_ADDRESS, borrowUsdc);
-    await depositToHyperliquidViaFacade(kashYieldEth, bot, borrowUsdc);
+    await depositToPerpExchangeViaFacade(kashYieldEth, bot, borrowUsdc);
 
     await settleMintPhase2({ kashYield: kashYieldEth, bot, batchCycle, nav: NAV_1 });
     await claimMintForUser(kashYieldEth, user1, batchCycle, NAV_1);
@@ -507,7 +508,7 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     await usdc.connect(bridgeSigner).transfer(await hlAdapter.getAddress(), hlReturn);
     await hre.network.provider.send("hardhat_stopImpersonatingAccount", [HL_BRIDGE]);
 
-    await withdrawFromHyperliquidViaFacade(kashYieldEth, bot, hlReturn);
+    await withdrawFromPerpExchangeViaFacade(kashYieldEth, bot, hlReturn);
 
     // Repay Aave — pool takes only the actual debt; profit USDC stays in contract.
     const usdcBal = await usdc.balanceOf(await kashYieldEth.getAddress());
@@ -548,7 +549,7 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     await kashYieldEth.connect(bot).depositToAave(ethers.parseEther("1"));
 
     await kashYieldEth.connect(bot).borrowFromAave(USDC_ADDRESS, 500n * 10n ** 6n);
-    await depositToHyperliquidViaFacade(kashYieldEth, bot, 500n * 10n ** 6n);
+    await depositToPerpExchangeViaFacade(kashYieldEth, bot, 500n * 10n ** 6n);
     console.log(`       ✅ Moved 500 USDC from Aave → HL`);
 
     // Move USDC back: simulate HL returning 300 USDC.
@@ -559,7 +560,7 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     await usdc.connect(bridgeSigner).transfer(await hlAdapter.getAddress(), RETURN);
     await hre.network.provider.send("hardhat_stopImpersonatingAccount", [HL_BRIDGE]);
 
-    await withdrawFromHyperliquidViaFacade(kashYieldEth, bot, RETURN);
+    await withdrawFromPerpExchangeViaFacade(kashYieldEth, bot, RETURN);
     await kashYieldEth.connect(bot).repayToAave(USDC_ADDRESS, RETURN);
     console.log(`       ✅ Moved 300 USDC from HL → Aave repay`);
   });

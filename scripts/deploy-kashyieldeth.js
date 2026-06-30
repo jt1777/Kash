@@ -60,9 +60,11 @@ async function main() {
   const wethAddress = process.env.WETH_ADDRESS || networkDefaults.weth;
   const usdcAddress = process.env.USDC_ADDRESS || networkDefaults.usdc;
 
-  console.log(`Deploying KashYieldETH (bot: ${botAddress}, weth: ${wethAddress}, usdc: ${usdcAddress})...`);
+  const feeReceiver = process.env.FEE_RECEIVER_ADDRESS || deployer.address;
+
+  console.log(`Deploying KashYieldETH (bot: ${botAddress}, weth: ${wethAddress}, usdc: ${usdcAddress}, feeReceiver: ${feeReceiver})...`);
   const KashYieldETH = await hre.ethers.getContractFactory("KashYieldETH");
-  const kashYieldEth = await KashYieldETH.deploy(botAddress, wethAddress, usdcAddress);
+  const kashYieldEth = await KashYieldETH.deploy(botAddress, wethAddress, usdcAddress, feeReceiver);
   await kashYieldEth.waitForDeployment();
 
   const kashYieldEthAddress = await kashYieldEth.getAddress();
@@ -122,9 +124,9 @@ async function main() {
   fs.writeFileSync(filepath, JSON.stringify(deploymentInfo, null, 2));
   console.log("💾 Saved:", filepath);
 
-  console.log("\nVerify on Arbiscan (constructor: bot, weth, usdc):");
+  console.log("\nVerify on Arbiscan (constructor: bot, weth, usdc, feeReceiver):");
   console.log(
-    `  npx hardhat verify --network ${network} ${kashYieldEthAddress} ${botAddress} ${wethAddress} ${usdcAddress}`
+    `  npx hardhat verify --network ${network} ${kashYieldEthAddress} ${botAddress} ${wethAddress} ${usdcAddress} ${feeReceiver}`
   );
   console.log("\n✅ Done.");
 }

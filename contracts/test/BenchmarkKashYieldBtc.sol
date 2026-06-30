@@ -4,15 +4,47 @@ pragma solidity ^0.8.28;
 import "../KashYieldBtc.sol";
 
 /// @dev Fork gas-benchmark helper only — not deployed to production.
-/// Registers many minters in one tx (same state as repeated `requestMint` calls).
 contract BenchmarkKashYieldBtc is KashYieldBtc {
-    constructor(address _botAddress, address _wbtc, address _usdc) KashYieldBtc(_botAddress, _wbtc, _usdc) {}
+    constructor(
+        address _botAddress,
+        address _wbtc,
+        address _usdc,
+        address _exchangeFacade,
+        address _spotDex,
+        address _btcOracle,
+        address _keeperRegistry,
+        address _feeReceiver,
+        uint256 _cycleDurationSeconds,
+        uint256 _userWindowEnd,
+        uint256 _processingWindowStart,
+        uint256 _maxSwapSlippageBps,
+        uint256 _feeBps,
+        uint256 _maxMintUsers,
+        uint256 _maxRedeemUsers
+    )
+        KashYieldBtc(
+            _botAddress,
+            _wbtc,
+            _usdc,
+            _exchangeFacade,
+            _spotDex,
+            _btcOracle,
+            _keeperRegistry,
+            _feeReceiver,
+            _cycleDurationSeconds,
+            _userWindowEnd,
+            _processingWindowStart,
+            _maxSwapSlippageBps,
+            _feeBps,
+            _maxMintUsers,
+            _maxRedeemUsers
+        )
+    {}
 
     function benchmarkEnrollMints(address[] calldata users, uint256 amountEach)
         external
-        onlyOwner
+        onlyBotOrKeeper
         onlyUserWindow
-        whenNotPaused
     {
         if (amountEach == 0) revert ZeroAmount();
         uint256 batchCycle = block.timestamp / cycleDurationSeconds;

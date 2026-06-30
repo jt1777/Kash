@@ -142,16 +142,15 @@ npx hardhat run scripts/wire-exchange-facade.js --network arbitrumOne
 
 Typical wiring (also doable manually):
 
-1. **Vault:** `setExchangeFacade(facadeAddress)` — owner only
-2. **Facade:** `setHyperliquid(hlAdapterAddress)` — first registration is immediate
-3. **Facade:** `setActivePerpExchange("HL")`
-4. **HyperliquidAdapter:** `setAuthorizedCaller(facadeAddress)` — so the facade can call deposit/withdraw
+1. **Vault:** `setExchangeFacade(facadeAddress)` — KashYieldETH owner only (KashYieldBtc V3: immutable at deploy)
+2. **Verify:** `facade.perpExchangeAddress()` === HL adapter (immutable on V3 facade)
+3. **HyperliquidAdapter:** `setAuthorizedCaller(facadeAddress)` — so the facade can call deposit/withdraw
 
 Confirm on Arbiscan:
 
 - `KashYieldBtc.exchangeFacade()` → your facade address
 - `ExchangeFacade.kashYieldAddress()` → your vault address
-- `ExchangeFacade.hyperliquidAddress()` → your HL adapter address
+- `ExchangeFacade.perpExchangeAddress()` → your HL adapter address
 
 ---
 

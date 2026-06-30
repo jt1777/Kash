@@ -9,10 +9,17 @@ const { ethers } = require("hardhat");
  * InsufficientWbtcForRedeems even on mint-only batches.
  *
  * Settlement `updateNAV` usdcBalance is a snapshot for events only — after
- * depositToHyperliquid the contract's ERC-20 USDC is 0, so pass 0n not borrowUsdc.
+ * depositToPerpExchange the contract's ERC-20 USDC is 0, so pass 0n not borrowUsdc.
  */
 
 const USDC_ADDRESS = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831";
+const BTC_ORACLE = "0x6ce185860a4963106506C203335A2910413708e9";
+const HL_BRIDGE = "0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7";
+
+async function predictContractAddress(deployer, offset = 0) {
+  const nonce = await ethers.provider.getTransactionCount(deployer.address);
+  return ethers.getCreateAddress({ from: deployer.address, nonce: nonce + offset });
+}
 
 async function deployAndWireExchangeFacade({
   kashYield,
@@ -21,24 +28,112 @@ async function deployAndWireExchangeFacade({
   usdcAddress,
   primaryAsset,
   hlAdapter,
+  exchangeName = "HL",
+  keeperRegistry = ethers.ZeroAddress,
 }) {
   const ExchangeFacade = await ethers.getContractFactory("ExchangeFacade");
   const facade = await ExchangeFacade.deploy(
-    owner.address,
     bot.address,
+    keeperRegistry,
     usdcAddress,
     primaryAsset,
     await kashYield.getAddress(),
+    exchangeName,
+    await hlAdapter.getAddress(),
   );
   await facade.waitForDeployment();
   const facadeAddr = await facade.getAddress();
-  await kashYield.setExchangeFacade(facadeAddr);
-  await facade.setHyperliquid(await hlAdapter.getAddress());
-  await facade.setActivePerpExchange("HL");
+  if (typeof kashYield.setExchangeFacade === "function") {
+    const current = await kashYield.exchangeFacade();
+    if (current === ethers.ZeroAddress) {
+      await kashYield.setExchangeFacade(facadeAddr);
+    }
+  }
   if (typeof hlAdapter.setAuthorizedCaller === "function") {
     await hlAdapter.connect(owner).setAuthorizedCaller(facadeAddr);
   }
   return facade;
+}
+
+/**
+ * Deploy KashYieldBtc V3 stack: facade + HL adapter + vault with immutable wiring.
+ * uniAdapter must already be deployed.
+ */
+async function deployKashYieldBtcStack({
+  deployer,
+  bot,
+  owner,
+  wbtcAddress,
+  usdcAddress,
+  uniAdapter,
+  cycleDurationSeconds = 3600n,
+  userWindowEnd = 3600n,
+  processingWindowStart = 0n,
+  btcOracle = BTC_ORACLE,
+  keeperRegistry = ethers.ZeroAddress,
+  feeReceiver,
+  feeBps = 3n,
+  maxSwapSlippageBps = 100n,
+  maxMintUsers = 10_000n,
+  maxRedeemUsers = 10_000n,
+  useBenchmark = false,
+}) {
+  if (!feeReceiver) throw new Error("feeReceiver required");
+  const predictedKashYield = await predictContractAddress(deployer, 2);
+
+  const HyperliquidAdapter = await ethers.getContractFactory("HyperliquidAdapter");
+  const hlAdapter = await HyperliquidAdapter.deploy(
+    HL_BRIDGE,
+    usdcAddress,
+    wbtcAddress,
+    false,
+    predictedKashYield,
+  );
+  await hlAdapter.waitForDeployment();
+
+  const ExchangeFacade = await ethers.getContractFactory("ExchangeFacade");
+  const facade = await ExchangeFacade.deploy(
+    bot.address,
+    keeperRegistry,
+    usdcAddress,
+    wbtcAddress,
+    predictedKashYield,
+    "HL",
+    await hlAdapter.getAddress(),
+  );
+  await facade.waitForDeployment();
+  const facadeAddr = await facade.getAddress();
+
+  const factoryName = useBenchmark ? "BenchmarkKashYieldBtc" : "KashYieldBtc";
+  const KashYieldBtc = await ethers.getContractFactory(factoryName);
+  const kashYieldBtc = await KashYieldBtc.deploy(
+    bot.address,
+    wbtcAddress,
+    usdcAddress,
+    facadeAddr,
+    await uniAdapter.getAddress(),
+    btcOracle,
+    keeperRegistry,
+    feeReceiver,
+    cycleDurationSeconds,
+    userWindowEnd,
+    processingWindowStart,
+    maxSwapSlippageBps,
+    feeBps,
+    maxMintUsers,
+    maxRedeemUsers,
+  );
+  await kashYieldBtc.waitForDeployment();
+
+  if ((await kashYieldBtc.getAddress()).toLowerCase() !== predictedKashYield.toLowerCase()) {
+    throw new Error("KashYieldBtc address prediction mismatch");
+  }
+
+  if (typeof hlAdapter.setAuthorizedCaller === "function") {
+    await hlAdapter.connect(owner).setAuthorizedCaller(facadeAddr);
+  }
+
+  return { kashYieldBtc, hlAdapter, facade, uniAdapter };
 }
 
 async function hlOpsTarget(kashYield, bot) {
@@ -81,7 +176,7 @@ async function manualEthMintOps({
   await kashYield.connect(bot).borrowFromAave(USDC_ADDRESS, borrowUsdc);
   const { target: ex, viaFacade } = await hlOpsTarget(kashYield, bot);
   if (viaFacade) await kashYield.connect(bot).approveExchangeFacadeUsdc(borrowUsdc);
-  await ex.depositToHyperliquid(borrowUsdc);
+  await ex.depositToPerpExchange(borrowUsdc);
 
   const shortSizeUSD = (deployUsd * shortLeveragePct) / 100n;
   const shortSizeAsset = (shortSizeUSD * 10n ** 18n) / ethPrice;
@@ -113,7 +208,7 @@ async function manualBtcMintOps({
   await kashYield.connect(bot).borrowFromAave(USDC_ADDRESS, borrowUsdc);
   const { target: ex, viaFacade } = await hlOpsTarget(kashYield, bot);
   if (viaFacade) await kashYield.connect(bot).approveExchangeFacadeUsdc(borrowUsdc);
-  await ex.depositToHyperliquid(borrowUsdc);
+  await ex.depositToPerpExchange(borrowUsdc);
 
   const shortSizeUSD = (deployUsd * shortLeveragePct) / 100n;
   const shortSizeAsset = (shortSizeUSD * 10n ** 18n) / btcPrice;
@@ -264,15 +359,15 @@ async function claimRedeemForUser(kashYield, user, batchCycle) {
   return leaf.amount;
 }
 
-async function depositToHyperliquidViaFacade(kashYield, bot, amount) {
+async function depositToPerpExchangeViaFacade(kashYield, bot, amount) {
   const { target: ex, viaFacade } = await hlOpsTarget(kashYield, bot);
   if (viaFacade) await kashYield.connect(bot).approveExchangeFacadeUsdc(amount);
-  await ex.depositToHyperliquid(amount);
+  await ex.depositToPerpExchange(amount);
 }
 
-async function withdrawFromHyperliquidViaFacade(kashYield, bot, amount) {
+async function withdrawFromPerpExchangeViaFacade(kashYield, bot, amount) {
   const { target: ex } = await hlOpsTarget(kashYield, bot);
-  await ex.withdrawFromHyperliquid(amount);
+  await ex.withdrawFromPerpExchange(amount);
 }
 
 async function closeShortViaFacade(kashYield, bot, symbol) {
@@ -282,12 +377,15 @@ async function closeShortViaFacade(kashYield, bot, symbol) {
 
 module.exports = {
   USDC_ADDRESS,
+  BTC_ORACLE,
   mintProtocolFee,
   usdcBorrowForAssetUsd,
   deployAndWireExchangeFacade,
+  deployKashYieldBtcStack,
+  predictContractAddress,
   hlOpsTarget,
-  depositToHyperliquidViaFacade,
-  withdrawFromHyperliquidViaFacade,
+  depositToPerpExchangeViaFacade,
+  withdrawFromPerpExchangeViaFacade,
   closeShortViaFacade,
   manualEthMintOps,
   manualBtcMintOps,

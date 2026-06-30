@@ -319,7 +319,7 @@ contract HyperliquidAdapter is IPerpExchange {
     // ── Bot state-sync functions ──────────────────────────────────────────────
     //
     // After every HL API operation the bot calls these to keep on-chain state
-    // accurate. KashYield view calls (getHyperliquidSpotBalance etc.) read these.
+    // accurate. KashYield view calls (getPerpExchangeSpotBalance etc.) read these.
 
     /**
      * @notice Update USDC and asset balances after any HL trade or transfer.

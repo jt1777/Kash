@@ -43,30 +43,19 @@ async function deployKashYieldBtcBenchmark(owner, bot) {
   const uniAdapter = await UniswapV3Adapter.deploy(UNISWAP_ROUTER_V2, WETH_ADDRESS);
   await uniAdapter.waitForDeployment();
 
-  const BenchmarkKashYieldBtc = await ethers.getContractFactory("BenchmarkKashYieldBtc");
-  const kashYieldBtc = await BenchmarkKashYieldBtc.deploy(bot.address, WBTC_ADDRESS, USDC_ADDRESS);
-  await kashYieldBtc.setSpotDex(await uniAdapter.getAddress());
-  await kashYieldBtc.setCycleDurationSeconds(CYCLE_SECS);
-  await kashYieldBtc.setUserWindowEnd(CYCLE_SECS);
-  await kashYieldBtc.setProcessingWindowStart(0n);
-
-  const HyperliquidAdapter = await ethers.getContractFactory("HyperliquidAdapter");
-  const hlAdapter = await HyperliquidAdapter.deploy(
-    HL_BRIDGE,
-    USDC_ADDRESS,
-    WBTC_ADDRESS,
-    false,
-    await kashYieldBtc.getAddress(),
-  );
-
-  const { deployAndWireExchangeFacade } = require("./forkBatchOps");
-  await deployAndWireExchangeFacade({
-    kashYield: kashYieldBtc,
-    owner,
+  const { deployKashYieldBtcStack } = require("./forkBatchOps");
+  const { kashYieldBtc, hlAdapter } = await deployKashYieldBtcStack({
+    deployer: owner,
     bot,
+    owner,
+    wbtcAddress: WBTC_ADDRESS,
     usdcAddress: USDC_ADDRESS,
-    primaryAsset: WBTC_ADDRESS,
-    hlAdapter,
+    uniAdapter,
+    feeReceiver: owner.address,
+    cycleDurationSeconds: CYCLE_SECS,
+    userWindowEnd: CYCLE_SECS,
+    processingWindowStart: 0n,
+    useBenchmark: true,
   });
 
   return { kashYieldBtc, uniAdapter, hlAdapter };
@@ -96,7 +85,7 @@ async function benchmarkEnrollMints({
   let completed = 0;
   for (let i = 0; i < wallets.length; i += chunkSize) {
     const chunk = wallets.slice(i, i + chunkSize).map((w) => w.address);
-    await (await kashYieldBtc.connect(owner).benchmarkEnrollMints(chunk, mintAmountEach)).wait();
+    await (await kashYieldBtc.connect(bot).benchmarkEnrollMints(chunk, mintAmountEach)).wait();
     completed += chunk.length;
     if (completed % 50 === 0 || completed === wallets.length) {
       console.log(`       … enrolled ${completed}/${wallets.length} minters`);

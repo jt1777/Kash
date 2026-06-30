@@ -11,7 +11,6 @@ import "./libraries/MerkleVerify.sol";
 import "./libraries/ProtocolActionCodes.sol";
 import "./interfaces/ISpotDex.sol";
 
-// ─── Aave V3 Pool interface ───────────────────────────────────────────────────
 interface IPool {
     function supply(address asset, uint256 amount, address onBehalfOf, uint16 referralCode) external;
     function withdraw(address asset, uint256 amount, address to) external returns (uint256);
@@ -20,12 +19,9 @@ interface IPool {
     function repay(address asset, uint256 amount, uint256 rateMode, address onBehalfOf) external returns (uint256);
 }
 
-// ─── Custom errors (4-byte selectors replace string literals → smaller bytecode) ──
-error OnlyOwner();
 error OnlyBotOrKeeper();
 error UserWindowClosed();
 error NotInProcessingWindow();
-error ContractPaused();
 error ZeroAmount();
 error AlreadyProcessed();
 error NoRequest();
@@ -35,21 +31,15 @@ error WrongPhase();
 error OpsNotDone();
 error UsePerformUpkeep();
 error InsufficientWbtcForRedeems();
-error InsufficientExcessWbtc();
-error InsufficientOwnerWbtcReserve();
-error InsufficientOwnerUsdcReserve();
 error ExceedsMintWbtcForCycle();
 error NoUsersProvided();
-error NotPaused();
 error InvalidRequest();
 error InvalidNAV();
 error InvalidPrice();
 error FeeTooHigh();
 error SpotDexNotSet();
-error NotPendingOwner();
 error MinCycleDuration();
 error InvalidAddress();
-error NoPendingRedeemRequest();
 error MintCapReached();
 error RedeemCapReached();
 error UseBotPhase2();
@@ -59,79 +49,55 @@ error ClaimExpired();
 error InvalidProof();
 error ClaimsNotExpired();
 
-// ─── Events ───────────────────────────────────────────────────────────────────
 event MintRequested(address indexed user, uint256 amountIn, uint256 batchCycle);
 event RedeemRequested(address indexed user, uint256 kashAmount, uint256 batchCycle);
 event BatchPhaseUpdated(uint256 indexed batchCycle, uint8 phase, uint256 indicativeNAV);
 event BatchProcessed(uint256 indexed batchCycle, uint256 totalMintValueUSD, uint256 totalRedeemValueUSD, uint256 exactNAV);
 event TokensClaimed(address indexed user, address indexed token, uint256 amount, bool isMint);
 event NAVUpdateExecuted(uint256 newNAV, uint256 timestamp);
-    event NAVProposedAndUpdated(uint256 newNAV, uint256 usdcBalance, uint256 assetBalance, uint256 perpPnL, uint256 timestamp);
+event NAVProposedAndUpdated(uint256 newNAV, uint256 usdcBalance, uint256 assetBalance, uint256 perpPnL, uint256 timestamp);
 event ProtocolInteraction(uint8 indexed action, address indexed asset, uint256 amount);
-event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
 event RedeemMerkleRootCommitted(uint256 indexed batchCycle, bytes32 root, uint256 totalNetClaimable, uint256 claimDeadline);
-event RedeemMerkleRootOverridden(uint256 indexed batchCycle, bytes32 oldRoot, bytes32 newRoot);
 event MintMerkleRootCommitted(uint256 indexed batchCycle, bytes32 root, uint256 totalMintClaimable, uint256 claimDeadline);
-event MintMerkleRootOverridden(uint256 indexed batchCycle, bytes32 oldRoot, bytes32 newRoot);
 event ExpiredClaimsSwept(uint256 indexed batchCycle, uint256 amountSwept);
 event ExpiredMintClaimsSwept(uint256 indexed batchCycle, uint256 amountSwept);
-event MaxMintUsersUpdated(uint256 newMax);
-event MaxRedeemUsersUpdated(uint256 newMax);
-event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
-event FeeUpdated(uint256 newFeeBps);
-event OracleUpdated(address indexed newOracle);
 
 /**
  * @title KashYieldBtc
- * @dev wBTC yield product: daily batch settlement on Arbitrum. Deposits in wBTC receive KASH_BTC.
- * Integrates Aave V3 for collateral/borrowing and any IPerpExchange adapter for hedging.
- *
- * EXCHANGE REGISTRY: perpExchanges maps string names ("HL", "GMX", "ASTER", ...) to adapter
- * addresses.  activePerpExchange selects which one is used.  Registering a new adapter requires
- * a 24-hour timelock (propose → confirm).  Switching the active exchange is immediate once the
- * adapter is confirmed.  Adding a new exchange never requires redeploying this contract.
+ * @dev V3 wBTC yield vault — ownerless, immutable config for bug-bounty deployment.
+ *      Merkle roots are committed once by the bot; no admin can override claims or drain reserves.
  */
 contract KashYieldBtc is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     uint256 public constant WBTC_DECIMALS = 8;
-    string public constant VERSION = "2.0.0";
+    string public constant VERSION = "3.0.0";
 
-    // ── Core state ────────────────────────────────────────────────────────
-    address payable public owner;
-    address public pendingOwner;
     KashTokenBtc public kashTokenBtc;
     uint256 public currentNAV = 1e18;
 
-    // ── Protocol addresses ────────────────────────────────────────────────
-    address public immutable aavePoolAddress; // Aave V3 Pool — hardcoded in constructor
-    address public keeperRegistry = address(0); // set via setKeeperRegistry() if using Chainlink Automation
-    address public botAddress;
-
-    address public immutable wbtcAddress; // wBTC — Arbitrum One
+    address public immutable aavePoolAddress;
+    address public immutable botAddress;
+    address public immutable keeperRegistry;
+    address public immutable wbtcAddress;
     address public immutable usdcAddress;
-    address public exchangeFacade;
-    address public spotDexAddress;
-    uint256 public maxSwapSlippageBps = 100;
-    address public btcOracle    = 0x6ce185860a4963106506C203335A2910413708e9; // Chainlink BTC/USD — Arbitrum One
-    uint8   public btcDecimals  = 8;
+    address public immutable exchangeFacade;
+    address public immutable spotDexAddress;
+    address public immutable btcOracle;
+    address public immutable feeReceiver;
+    uint8   public immutable btcDecimals;
 
-    uint256 private constant REDEEM_PAYOUT_TOLERANCE = 30; // wBTC satoshis — rounding vs locked G
-    uint256 public constant MAX_MINT_USERS_CEILING = 100_000;
-    uint256 public constant MAX_REDEEM_USERS_CEILING = 100_000;
-    uint256 public maxMintUsers = 10_000;
-    uint256 public maxRedeemUsers = 10_000;
+    uint256 public immutable maxSwapSlippageBps;
+    uint256 public immutable maxMintUsers;
+    uint256 public immutable maxRedeemUsers;
+    uint256 public immutable feeBps;
+    uint256 public immutable cycleDurationSeconds;
+    uint256 public immutable userWindowEnd;
+    uint256 public immutable processingWindowStart;
+
+    uint256 private constant REDEEM_PAYOUT_TOLERANCE = 30;
     uint256 public constant CLAIM_EXPIRY_SECONDS = 30 days;
 
-    // ── Fee config ────────────────────────────────────────────────────────
-    uint256 public feeBps = 3;
-    uint256 public constant MAX_FEE_BPS = 100;
-
-    bool public paused;
-
-    uint256 public ownerUsdcReserve;
-    uint256 public ownerWbtcReserve;
-    uint256 public protocolFeeWbtcReserve;
     uint256 public lockedClaimWbtc;
     uint256 public lockedClaimKash;
 
@@ -150,7 +116,6 @@ contract KashYieldBtc is ReentrancyGuard {
     mapping(uint256 => uint256) public activeMintUsers;
     mapping(uint256 => uint256) public activeRedeemUsers;
 
-    // ── Batch state ───────────────────────────────────────────────────────
     mapping(uint256 => bool)    public batchProcessed;
     mapping(uint256 => uint256) public batchIndicativeNAV;
     mapping(uint256 => uint8)   public batchPhase;
@@ -183,19 +148,6 @@ contract KashYieldBtc is ReentrancyGuard {
     mapping(address => uint256) public totalDepositedBtcByUser;
     mapping(address => uint256) public totalRedeemedBtcByUser;
 
-    // Time-window boundaries (seconds into the cycle).
-    // Default: users can request mints/redeems for the first 23h 45m of each cycle,
-    // then a 15-minute processing window closes user submissions so the bot can settle.
-    // Set userWindowEnd = cycleDurationSeconds and processingWindowStart = 0 to disable windowing.
-    uint256 public userWindowEnd         = 23 * 3600 + 45 * 60; // 85500 s = 23 h 45 m
-    uint256 public processingWindowStart = 23 * 3600 + 45 * 60; // 85500 s = 23 h 45 m
-    uint256 public cycleDurationSeconds  = 86400;
-
-    // ── Modifiers ─────────────────────────────────────────────────────────
-    modifier onlyOwner() {
-        if (msg.sender != owner) revert OnlyOwner();
-        _;
-    }
     modifier onlyUserWindow() {
         if (block.timestamp % cycleDurationSeconds >= userWindowEnd) revert UserWindowClosed();
         _;
@@ -205,138 +157,91 @@ contract KashYieldBtc is ReentrancyGuard {
         if (t < processingWindowStart || t >= cycleDurationSeconds) revert NotInProcessingWindow();
         _;
     }
-    modifier whenNotPaused() {
-        if (paused) revert ContractPaused();
-        _;
-    }
     modifier onlyBotOrKeeper() {
         if (msg.sender != botAddress && msg.sender != keeperRegistry) revert OnlyBotOrKeeper();
         _;
     }
 
-    constructor(address _botAddress, address _wbtc, address _usdc) payable {
-        owner = payable(msg.sender);
+    constructor(
+        address _botAddress,
+        address _wbtc,
+        address _usdc,
+        address _exchangeFacade,
+        address _spotDex,
+        address _btcOracle,
+        address _keeperRegistry,
+        address _feeReceiver,
+        uint256 _cycleDurationSeconds,
+        uint256 _userWindowEnd,
+        uint256 _processingWindowStart,
+        uint256 _maxSwapSlippageBps,
+        uint256 _feeBps,
+        uint256 _maxMintUsers,
+        uint256 _maxRedeemUsers
+    ) payable {
+        if (_botAddress == address(0)) revert InvalidAddress();
+        if (_wbtc == address(0) || _usdc == address(0)) revert InvalidAddress();
+        if (_exchangeFacade == address(0) || _spotDex == address(0) || _btcOracle == address(0)) revert InvalidAddress();
+        if (_feeReceiver == address(0)) revert InvalidAddress();
+        if (_cycleDurationSeconds < 60) revert MinCycleDuration();
+        if (_userWindowEnd > _cycleDurationSeconds) revert InvalidRequest();
+        if (_processingWindowStart > _cycleDurationSeconds) revert InvalidRequest();
+        if (_maxSwapSlippageBps > 500) revert FeeTooHigh();
+        if (_feeBps > 100) revert FeeTooHigh();
+        if (_maxMintUsers == 0 || _maxMintUsers > 100_000) revert InvalidRequest();
+        if (_maxRedeemUsers == 0 || _maxRedeemUsers > 100_000) revert InvalidRequest();
+
         botAddress = _botAddress;
+        wbtcAddress = _wbtc;
+        usdcAddress = _usdc;
+        exchangeFacade = _exchangeFacade;
+        spotDexAddress = _spotDex;
+        btcOracle = _btcOracle;
+        keeperRegistry = _keeperRegistry;
+        feeReceiver = _feeReceiver;
+        cycleDurationSeconds = _cycleDurationSeconds;
+        userWindowEnd = _userWindowEnd;
+        processingWindowStart = _processingWindowStart;
+        maxSwapSlippageBps = _maxSwapSlippageBps;
+        feeBps = _feeBps;
+        maxMintUsers = _maxMintUsers;
+        maxRedeemUsers = _maxRedeemUsers;
+        btcDecimals = AggregatorV3Interface(_btcOracle).decimals();
+
+        aavePoolAddress = 0x794a61358D6845594F94dc1DB02A252b5b4814aD;
+
         kashTokenBtc = new KashTokenBtc();
         kashTokenBtc.transferOwnership(address(this));
-
-        // Hard-coded mainnet addresses
-        aavePoolAddress = 0x794a61358D6845594F94dc1DB02A252b5b4814aD;
-        wbtcAddress     = _wbtc;
-        usdcAddress     = _usdc;
-
-    }
-
-    function setExchangeFacade(address _facade) external onlyOwner {
-        if (_facade == address(0)) revert InvalidAddress();
-        exchangeFacade = _facade;
     }
 
     function approveExchangeFacadeUsdc(uint256 amount) external onlyBotOrKeeper {
-        if (exchangeFacade == address(0)) revert InvalidAddress();
         IERC20(usdcAddress).forceApprove(exchangeFacade, amount);
     }
 
-    function setSpotDex(address _spotDex) external onlyOwner {
-        if (_spotDex == address(0)) revert InvalidAddress();
-        spotDexAddress = _spotDex;
+    function perpExchangeAddress() external view returns (address) {
+        return ExchangeFacade(exchangeFacade).perpExchangeAddress();
     }
 
-    function setMaxSwapSlippageBps(uint256 _bps) external onlyOwner {
-        if (_bps > 500) revert FeeTooHigh();
-        maxSwapSlippageBps = _bps;
-    }
-
-    function hyperliquidAddress() external view returns (address) {
-        return exchangeFacade == address(0) ? address(0) : ExchangeFacade(exchangeFacade).hyperliquidAddress();
-    }
-
-    function getHyperliquidSpotBalance() external view returns (uint256) {
-        return exchangeFacade == address(0) ? 0 : ExchangeFacade(exchangeFacade).getHyperliquidSpotBalance();
+    function getPerpExchangeSpotBalance() external view returns (uint256) {
+        return ExchangeFacade(exchangeFacade).getPerpExchangeSpotBalance();
     }
 
     function getExchangeAssetBalance() external view returns (uint256) {
-        return exchangeFacade == address(0) ? 0 : ExchangeFacade(exchangeFacade).getExchangeAssetBalance();
+        return ExchangeFacade(exchangeFacade).getExchangeAssetBalance();
     }
 
-    function getHyperliquidPosition(string calldata symbol) external view returns (
+    function getPerpExchangePosition(string calldata symbol) external view returns (
         uint256 size, uint256 collateral, uint256 entryPrice, bool isLong, bool isActive
     ) {
-        if (exchangeFacade == address(0)) return (0, 0, 0, false, false);
-        return ExchangeFacade(exchangeFacade).getHyperliquidPosition(symbol);
+        return ExchangeFacade(exchangeFacade).getPerpExchangePosition(symbol);
     }
 
-    // ── Ownership (two-step) ──────────────────────────────────────────────
-
-    function transferOwnership(address newOwner) external onlyOwner {
-        pendingOwner = newOwner;
-        emit OwnershipTransferStarted(owner, newOwner);
-    }
-
-    function acceptOwnership() external {
-        if (msg.sender != pendingOwner) revert NotPendingOwner();
-        emit OwnershipTransferred(owner, pendingOwner);
-        owner = payable(pendingOwner);
-        pendingOwner = address(0);
-    }
-
-    // ── Admin setters ─────────────────────────────────────────────────────
-
-    function setBotAddress(address _botAddress) external onlyOwner {
-        botAddress = _botAddress;
-    }
-    function setCycleDurationSeconds(uint256 _seconds) external onlyOwner {
-        if (_seconds < 60) revert MinCycleDuration();
-        cycleDurationSeconds = _seconds;
-    }
-    /// @notice Set when user submissions close within a cycle.
-    ///         Use cycleDurationSeconds to disable (keeps window open the entire cycle).
-    function setUserWindowEnd(uint256 _seconds) external onlyOwner {
-        require(_seconds <= cycleDurationSeconds, "userWindowEnd > cycleDurationSeconds");
-        userWindowEnd = _seconds;
-    }
-    /// @notice Set when the bot's processing window opens within a cycle.
-    ///         Use 0 to disable (bot can always process). Must equal userWindowEnd in production.
-    function setProcessingWindowStart(uint256 _seconds) external onlyOwner {
-        require(_seconds <= cycleDurationSeconds, "processingWindowStart > cycleDurationSeconds");
-        processingWindowStart = _seconds;
-    }
-    function setKeeperRegistry(address _keeperRegistry) external onlyOwner {
-        keeperRegistry = _keeperRegistry;
-    }
-    function setBtcOracle(address _oracle) external onlyOwner {
-        if (_oracle == address(0)) revert InvalidAddress();
-        btcOracle = _oracle;
-        emit OracleUpdated(_oracle);
-    }
-    function setFeeBps(uint256 newFee) external onlyOwner {
-        if (newFee > MAX_FEE_BPS) revert FeeTooHigh();
-        feeBps = newFee;
-        emit FeeUpdated(newFee);
-    }
-    function setMaxMintUsers(uint256 newMax) external onlyOwner {
-        if (newMax == 0 || newMax > MAX_MINT_USERS_CEILING) revert InvalidRequest();
-        maxMintUsers = newMax;
-        emit MaxMintUsersUpdated(newMax);
-    }
-    function setMaxRedeemUsers(uint256 newMax) external onlyOwner {
-        if (newMax == 0 || newMax > MAX_REDEEM_USERS_CEILING) revert InvalidRequest();
-        maxRedeemUsers = newMax;
-        emit MaxRedeemUsersUpdated(newMax);
-    }
-    function pause()   external onlyOwner { paused = true; }
-    function unpause() external onlyOwner { paused = false; }
-
-    // ── User-facing: mint / redeem ────────────────────────────────────────
-
-    function requestMint(uint256 amount) external onlyUserWindow whenNotPaused {
+    function requestMint(uint256 amount) external onlyUserWindow {
         if (amount == 0) revert ZeroAmount();
         uint256 batchCycle = block.timestamp / cycleDurationSeconds;
         if (batchPhase[batchCycle] != 0) revert WrongPhase();
         if (batchProcessed[batchCycle]) revert AlreadyProcessed();
         IERC20(wbtcAddress).safeTransferFrom(msg.sender, address(this), amount);
-        // Accumulate into the existing request so multiple deposits in the same window
-        // are treated as one combined request.
         MintRequest storage req = userMintRequests[msg.sender][batchCycle];
         bool wasActive = req.amountIn > 0;
         req.user = msg.sender;
@@ -358,15 +263,13 @@ contract KashYieldBtc is ReentrancyGuard {
         emit MintRequested(msg.sender, amount, batchCycle);
     }
 
-    function requestRedeem(uint256 kashAmount) external onlyUserWindow whenNotPaused {
+    function requestRedeem(uint256 kashAmount) external onlyUserWindow {
         if (kashAmount == 0) revert ZeroAmount();
         if (kashTokenBtc.balanceOf(msg.sender) < kashAmount) revert InsufficientKashBtc();
         uint256 batchCycle = block.timestamp / cycleDurationSeconds;
         if (batchPhase[batchCycle] != 0) revert WrongPhase();
         if (batchProcessed[batchCycle]) revert AlreadyProcessed();
         kashTokenBtc.transferFrom(msg.sender, address(this), kashAmount);
-        // Accumulate into the existing request so multiple redeems in the same window
-        // are treated as one combined request.
         RedeemRequest storage req = userRedeemRequests[msg.sender][batchCycle];
         bool wasActive = req.kashAmount > 0;
         req.user = msg.sender;
@@ -387,7 +290,7 @@ contract KashYieldBtc is ReentrancyGuard {
         emit RedeemRequested(msg.sender, kashAmount, batchCycle);
     }
 
-    function cancelMintRequest(uint256 batchCycle) external whenNotPaused {
+    function cancelMintRequest(uint256 batchCycle) external {
         if (batchProcessed[batchCycle]) revert AlreadyProcessed();
         if (batchPhase[batchCycle] != 0) revert WrongPhase();
         MintRequest storage req = userMintRequests[msg.sender][batchCycle];
@@ -402,7 +305,7 @@ contract KashYieldBtc is ReentrancyGuard {
         emit ProtocolInteraction(ProtocolActionCodes.CANCEL_MINT, wbtcAddress, amount);
     }
 
-    function cancelRedeemRequest(uint256 batchCycle) external whenNotPaused {
+    function cancelRedeemRequest(uint256 batchCycle) external {
         if (batchProcessed[batchCycle]) revert AlreadyProcessed();
         if (batchPhase[batchCycle] != 0) revert WrongPhase();
         RedeemRequest storage req = userRedeemRequests[msg.sender][batchCycle];
@@ -416,8 +319,6 @@ contract KashYieldBtc is ReentrancyGuard {
         kashTokenBtc.transfer(msg.sender, kashAmount);
         emit ProtocolInteraction(ProtocolActionCodes.CANCEL_REDEEM, address(kashTokenBtc), kashAmount);
     }
-
-    // ── Chainlink Upkeep ──────────────────────────────────────────────────
 
     function checkUpkeep(bytes calldata) external view returns (bool upkeepNeeded, bytes memory performData) {
         uint256 batchCycle = block.timestamp / cycleDurationSeconds;
@@ -435,8 +336,6 @@ contract KashYieldBtc is ReentrancyGuard {
             processBatchPhase2();
         }
     }
-
-    // ── Batch Phase 1 ─────────────────────────────────────────────────────
 
     function processBatchPhase1() internal onlyProcessingWindow {
         uint256 batchCycle = block.timestamp / cycleDurationSeconds;
@@ -464,8 +363,6 @@ contract KashYieldBtc is ReentrancyGuard {
         batchPhase[batchCycle] = 2;
         emit BatchPhaseUpdated(batchCycle, 2, currentNAV);
     }
-
-    // ── Batch Phase 2 ─────────────────────────────────────────────────────
 
     function processBatchPhase2() internal onlyProcessingWindow {
         uint256 batchCycle = block.timestamp / cycleDurationSeconds;
@@ -525,9 +422,10 @@ contract KashYieldBtc is ReentrancyGuard {
         (, uint256 totalRedeemBtcNeeded, uint256 totalRedeemFeeBtc) =
             _allocRedeemWbtc(batchCycle, redeemers, totalRedeemKash, batchTotalRedeemValueUSD[batchCycle]);
         uint256 totalProtocolFeeBtc = totalMintFeeBtc + totalRedeemFeeBtc;
-        if (IERC20(wbtcAddress).balanceOf(address(this)) + REDEEM_PAYOUT_TOLERANCE < ownerWbtcReserve + totalProtocolFeeBtc + totalRedeemBtcNeeded + lockedClaimWbtc) revert InsufficientWbtcForRedeems();
-        ownerWbtcReserve += totalProtocolFeeBtc;
-        protocolFeeWbtcReserve += totalProtocolFeeBtc;
+        if (IERC20(wbtcAddress).balanceOf(address(this)) + REDEEM_PAYOUT_TOLERANCE < totalRedeemBtcNeeded + lockedClaimWbtc) revert InsufficientWbtcForRedeems();
+        if (totalProtocolFeeBtc > 0) {
+            IERC20(wbtcAddress).safeTransfer(feeReceiver, totalProtocolFeeBtc);
+        }
 
         BatchClaimInfo storage info = batchClaimInfo[batchCycle];
         uint256 claimDeadline = block.timestamp + CLAIM_EXPIRY_SECONDS;
@@ -557,7 +455,7 @@ contract KashYieldBtc is ReentrancyGuard {
         else if (netKash < 0) kashTokenBtc.burn(address(this), uint256(-netKash));
     }
 
-    function claimMint(uint256 batchCycle, uint256 kashAmount, bytes32[] calldata proof) external nonReentrant whenNotPaused {
+    function claimMint(uint256 batchCycle, uint256 kashAmount, bytes32[] calldata proof) external nonReentrant {
         if (!batchProcessed[batchCycle]) revert WrongPhase();
         BatchClaimInfo storage info = batchClaimInfo[batchCycle];
         if (info.mintMerkleRoot == bytes32(0)) revert InvalidMerkleRoot();
@@ -578,7 +476,7 @@ contract KashYieldBtc is ReentrancyGuard {
         emit TokensClaimed(msg.sender, address(kashTokenBtc), kashAmount, true);
     }
 
-    function claimRedeem(uint256 batchCycle, uint256 wbtcAmount, bytes32[] calldata proof) external nonReentrant whenNotPaused {
+    function claimRedeem(uint256 batchCycle, uint256 wbtcAmount, bytes32[] calldata proof) external nonReentrant {
         if (!batchProcessed[batchCycle]) revert WrongPhase();
         BatchClaimInfo storage info = batchClaimInfo[batchCycle];
         if (info.redeemMerkleRoot == bytes32(0)) revert InvalidMerkleRoot();
@@ -596,26 +494,6 @@ contract KashYieldBtc is ReentrancyGuard {
         emit TokensClaimed(msg.sender, wbtcAddress, wbtcAmount, false);
     }
 
-    function overrideRedeemMerkleRoot(uint256 batchCycle, bytes32 newRoot) external onlyOwner {
-        BatchClaimInfo storage info = batchClaimInfo[batchCycle];
-        if (!batchProcessed[batchCycle] || info.totalNetClaimable == 0) revert WrongPhase();
-        if (info.claimedAmount > 0) revert AlreadyClaimed();
-        if (newRoot == bytes32(0)) revert InvalidMerkleRoot();
-        bytes32 oldRoot = info.redeemMerkleRoot;
-        info.redeemMerkleRoot = newRoot;
-        emit RedeemMerkleRootOverridden(batchCycle, oldRoot, newRoot);
-    }
-
-    function overrideMintMerkleRoot(uint256 batchCycle, bytes32 newRoot) external onlyOwner {
-        BatchClaimInfo storage info = batchClaimInfo[batchCycle];
-        if (!batchProcessed[batchCycle] || info.totalMintClaimable == 0) revert WrongPhase();
-        if (info.mintClaimedAmount > 0) revert AlreadyClaimed();
-        if (newRoot == bytes32(0)) revert InvalidMerkleRoot();
-        bytes32 oldRoot = info.mintMerkleRoot;
-        info.mintMerkleRoot = newRoot;
-        emit MintMerkleRootOverridden(batchCycle, oldRoot, newRoot);
-    }
-
     function sweepExpiredClaims(uint256 batchCycle) external onlyBotOrKeeper {
         BatchClaimInfo storage info = batchClaimInfo[batchCycle];
         if (!batchProcessed[batchCycle]) revert WrongPhase();
@@ -624,8 +502,7 @@ contract KashYieldBtc is ReentrancyGuard {
         if (unclaimed == 0) revert ZeroAmount();
         info.claimedAmount = info.totalNetClaimable;
         lockedClaimWbtc -= unclaimed;
-        ownerWbtcReserve += unclaimed;
-        protocolFeeWbtcReserve += unclaimed;
+        IERC20(wbtcAddress).safeTransfer(feeReceiver, unclaimed);
         emit ExpiredClaimsSwept(batchCycle, unclaimed);
     }
 
@@ -640,8 +517,6 @@ contract KashYieldBtc is ReentrancyGuard {
         kashTokenBtc.burn(address(this), unclaimed);
         emit ExpiredMintClaimsSwept(batchCycle, unclaimed);
     }
-
-    // ── Aave (unchanged) ──────────────────────────────────────────────────
 
     function depositToAave(uint256 amount) external onlyBotOrKeeper nonReentrant {
         IERC20(wbtcAddress).forceApprove(aavePoolAddress, amount);
@@ -671,9 +546,7 @@ contract KashYieldBtc is ReentrancyGuard {
         emit ProtocolInteraction(ProtocolActionCodes.AAVE_ADD_COLLATERAL, wbtcAddress, amount);
     }
 
-    /// @notice Swap wBTC → USDC via the registered spot DEX. Bot supplies minOut from a live DEX quote.
     function swapForUsdc(uint256 wbtcAmount, uint256 minOut) external onlyBotOrKeeper nonReentrant {
-        if (spotDexAddress == address(0)) revert SpotDexNotSet();
         IERC20(wbtcAddress).forceApprove(spotDexAddress, wbtcAmount);
         uint256 usdcOut = ISpotDex(spotDexAddress).swapExactIn(
             wbtcAddress, usdcAddress, wbtcAmount, minOut, address(this)
@@ -681,9 +554,7 @@ contract KashYieldBtc is ReentrancyGuard {
         emit ProtocolInteraction(ProtocolActionCodes.DEX_SWAP_FOR_USDC, usdcAddress, usdcOut);
     }
 
-    /// @notice Swap USDC → wBTC via the registered spot DEX. Bot supplies minOut from a live DEX quote.
     function swapFromUsdc(uint256 usdcAmount, uint256 minOut) external onlyBotOrKeeper nonReentrant {
-        if (spotDexAddress == address(0)) revert SpotDexNotSet();
         IERC20(usdcAddress).forceApprove(spotDexAddress, usdcAmount);
         uint256 wbtcOut = ISpotDex(spotDexAddress).swapExactIn(
             usdcAddress, wbtcAddress, usdcAmount, minOut, address(this)
@@ -756,73 +627,4 @@ contract KashYieldBtc is ReentrancyGuard {
         batchMintBtcDeployedToAave[batchCycle] += amount;
         emit ProtocolInteraction(ProtocolActionCodes.MINT_BTC_DEPLOYED, wbtcAddress, amount);
     }
-
-    /// @notice Pull owner-marked wBTC from the vault (protocol fees credit `ownerWbtcReserve` on phase 2).
-    ///         Does not withdraw unreserved vault wBTC that backs user NAV.
-    function ownerWithdrawWbtc(uint256 amount) external onlyOwner {
-        if (amount > ownerWbtcReserve) revert InsufficientOwnerWbtcReserve();
-        uint256 bal = IERC20(wbtcAddress).balanceOf(address(this));
-        uint256 available = bal > lockedClaimWbtc ? bal - lockedClaimWbtc : 0;
-        if (amount > available) revert InsufficientExcessWbtc();
-        unchecked {
-            ownerWbtcReserve -= amount;
-        }
-        uint256 protocolFeeConsumed = amount < protocolFeeWbtcReserve ? amount : protocolFeeWbtcReserve;
-        unchecked {
-            protocolFeeWbtcReserve -= protocolFeeConsumed;
-        }
-        IERC20(wbtcAddress).safeTransfer(owner, amount);
-        emit ProtocolInteraction(ProtocolActionCodes.OWNER_WITHDRAW_WBTC, wbtcAddress, amount);
-    }
-
-    function rescueERC20(address token, uint256 amount, address recipient) external onlyOwner {
-        if (token == wbtcAddress) revert InvalidAddress();
-        if (recipient == address(0)) revert InvalidAddress();
-        IERC20(token).safeTransfer(recipient, amount);
-        emit ProtocolInteraction(ProtocolActionCodes.RESCUE_ERC20, token, amount);
-    }
-
-    /// @notice Pull USDC from the owner and credit owner reserve (excluded from user NAV).
-    function markOwnerUsdcDeposit(uint256 amount) external onlyOwner {
-        IERC20(usdcAddress).safeTransferFrom(owner, address(this), amount);
-        ownerUsdcReserve += amount;
-        emit ProtocolInteraction(ProtocolActionCodes.OWNER_USDC_DEPOSIT, usdcAddress, amount);
-    }
-
-    /// @notice Pull wBTC from the owner and credit owner reserve (excluded from user NAV).
-    function markOwnerWbtcDeposit(uint256 amount) external onlyOwner {
-        IERC20(wbtcAddress).safeTransferFrom(owner, address(this), amount);
-        ownerWbtcReserve += amount;
-        emit ProtocolInteraction(ProtocolActionCodes.OWNER_WBTC_DEPOSIT, wbtcAddress, amount);
-    }
-
-    function coverUsdcShortfall(uint256 amount) external onlyBotOrKeeper {
-        if (amount == 0) revert ZeroAmount();
-        if (amount > ownerUsdcReserve) revert InsufficientOwnerUsdcReserve();
-        ownerUsdcReserve -= amount;
-        emit ProtocolInteraction(ProtocolActionCodes.OWNER_USDC_COVER_SHORTFALL, usdcAddress, amount);
-    }
-
-    function emergencyWithdrawMint(uint256 batchCycle) external {
-        if (!paused) revert NotPaused();
-        if (batchPhase[batchCycle] != 0) revert WrongPhase();
-        MintRequest storage req = userMintRequests[msg.sender][batchCycle];
-        if (req.user != msg.sender || req.amountIn == 0) revert InvalidRequest();
-        uint256 amount = req.amountIn;
-        uint256 usdAmount = req.amountInUSD;
-        batchTotalMintBtc[batchCycle] -= amount;
-        batchTotalMintValueUSD[batchCycle] -= usdAmount;
-        unchecked { activeMintUsers[batchCycle]--; }
-        delete userMintRequests[msg.sender][batchCycle];
-        IERC20(wbtcAddress).safeTransfer(msg.sender, amount);
-    }
-
-    function emergencyWithdrawRedeem(uint256 batchCycle) external {
-        if (!paused) revert NotPaused();
-        RedeemRequest storage req = userRedeemRequests[msg.sender][batchCycle];
-        if (req.user != msg.sender || req.kashAmount == 0) revert InvalidRequest();
-        kashTokenBtc.transfer(msg.sender, req.kashAmount);
-        delete userRedeemRequests[msg.sender][batchCycle];
-    }
-
 }

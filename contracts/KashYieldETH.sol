@@ -42,9 +42,6 @@ error OpsNotDone();
 error UsePerformUpkeep();
 error InsufficientEthForRedeems();
 error InsufficientEthInContract();
-error InsufficientExcessEth();
-error InsufficientOwnerEthReserve();
-error InsufficientOwnerUsdcReserve();
 error ExceedsMintEthForCycle();
 error NoUsersProvided();
 error NotPaused();
@@ -122,6 +119,7 @@ contract KashYieldETH is ReentrancyGuard {
     address public spotDexAddress;
     uint256 public maxSwapSlippageBps = 100;
     address public ethOracle = 0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612; // Chainlink ETH/USD — Arbitrum One
+    address public immutable feeReceiver;
     uint8   public ethDecimals = 18;
 
     uint256 private constant REDEEM_PAYOUT_TOLERANCE = 1e13; // wei — rounding vs locked G
@@ -137,12 +135,6 @@ contract KashYieldETH is ReentrancyGuard {
 
     bool public paused;
 
-    /// @notice Owner / treasury USDC credited on-chain but excluded from user NAV accounting (see markOwnerUsdcDeposit).
-    uint256 public ownerUsdcReserve;
-    /// @notice Owner ETH buffer (gas, HL fees, profit) excluded from user NAV accounting (see markOwnerEthDeposit).
-    uint256 public ownerEthReserve;
-    /// @notice Current owner ETH reserve that came from protocol mint/redeem fees.
-    uint256 public protocolFeeEthReserve;
     uint256 public lockedClaimEth;
     uint256 public lockedClaimKash;
 
@@ -225,9 +217,11 @@ contract KashYieldETH is ReentrancyGuard {
         _;
     }
 
-    constructor(address _botAddress, address _weth, address _usdc) payable {
+    constructor(address _botAddress, address _weth, address _usdc, address _feeReceiver) payable {
+        if (_feeReceiver == address(0)) revert InvalidAddress();
         owner = payable(msg.sender);
         botAddress = _botAddress;
+        feeReceiver = _feeReceiver;
         kashTokenEth = new KashTokenEth();
         kashTokenEth.transferOwnership(address(this));
 
@@ -258,23 +252,23 @@ contract KashYieldETH is ReentrancyGuard {
         maxSwapSlippageBps = _bps;
     }
 
-    function hyperliquidAddress() external view returns (address) {
-        return exchangeFacade == address(0) ? address(0) : ExchangeFacade(exchangeFacade).hyperliquidAddress();
+    function perpExchangeAddress() external view returns (address) {
+        return exchangeFacade == address(0) ? address(0) : ExchangeFacade(exchangeFacade).perpExchangeAddress();
     }
 
-    function getHyperliquidSpotBalance() external view returns (uint256) {
-        return exchangeFacade == address(0) ? 0 : ExchangeFacade(exchangeFacade).getHyperliquidSpotBalance();
+    function getPerpExchangeSpotBalance() external view returns (uint256) {
+        return exchangeFacade == address(0) ? 0 : ExchangeFacade(exchangeFacade).getPerpExchangeSpotBalance();
     }
 
     function getExchangeAssetBalance() external view returns (uint256) {
         return exchangeFacade == address(0) ? 0 : ExchangeFacade(exchangeFacade).getExchangeAssetBalance();
     }
 
-    function getHyperliquidPosition(string calldata symbol) external view returns (
+    function getPerpExchangePosition(string calldata symbol) external view returns (
         uint256 size, uint256 collateral, uint256 entryPrice, bool isLong, bool isActive
     ) {
         if (exchangeFacade == address(0)) return (0, 0, 0, false, false);
-        return ExchangeFacade(exchangeFacade).getHyperliquidPosition(symbol);
+        return ExchangeFacade(exchangeFacade).getPerpExchangePosition(symbol);
     }
 
     receive() external payable {}
@@ -541,9 +535,11 @@ contract KashYieldETH is ReentrancyGuard {
         (, uint256 totalRedeemEthNeeded, uint256 totalRedeemFeeEth) =
             _allocRedeemEth(batchCycle, redeemers, totalRedeemKash, batchTotalRedeemValueUSD[batchCycle]);
         uint256 totalProtocolFeeEth = totalMintFeeEth + totalRedeemFeeEth;
-        if (address(this).balance + REDEEM_PAYOUT_TOLERANCE < ownerEthReserve + totalProtocolFeeEth + totalRedeemEthNeeded + lockedClaimEth) revert InsufficientEthForRedeems();
-        ownerEthReserve += totalProtocolFeeEth;
-        protocolFeeEthReserve += totalProtocolFeeEth;
+        if (address(this).balance + REDEEM_PAYOUT_TOLERANCE < totalRedeemEthNeeded + lockedClaimEth) revert InsufficientEthForRedeems();
+        if (totalProtocolFeeEth > 0) {
+            (bool success, ) = payable(feeReceiver).call{value: totalProtocolFeeEth}("");
+            if (!success) revert InsufficientEthInContract();
+        }
 
         BatchClaimInfo storage info = batchClaimInfo[batchCycle];
         uint256 claimDeadline = block.timestamp + CLAIM_EXPIRY_SECONDS;
@@ -641,8 +637,8 @@ contract KashYieldETH is ReentrancyGuard {
         if (unclaimed == 0) revert ZeroAmount();
         info.claimedAmount = info.totalNetClaimable;
         lockedClaimEth -= unclaimed;
-        ownerEthReserve += unclaimed;
-        protocolFeeEthReserve += unclaimed;
+        (bool success, ) = payable(feeReceiver).call{value: unclaimed}("");
+        if (!success) revert InsufficientEthInContract();
         emit ExpiredClaimsSwept(batchCycle, unclaimed);
     }
 
@@ -776,50 +772,11 @@ contract KashYieldETH is ReentrancyGuard {
         emit ProtocolInteraction(ProtocolActionCodes.MINT_ETH_DEPLOYED, ETH_ADDRESS, amount);
     }
 
-    /// @notice Pull owner-marked ETH from the vault (protocol fees credit `ownerEthReserve` on phase 2).
-    ///         Does not withdraw unreserved vault ETH that backs user NAV.
-    function ownerWithdrawEth(uint256 amount) external onlyOwner {
-        if (amount > ownerEthReserve) revert InsufficientOwnerEthReserve();
-        uint256 bal = address(this).balance;
-        uint256 available = bal > lockedClaimEth ? bal - lockedClaimEth : 0;
-        if (amount > available) revert InsufficientExcessEth();
-        unchecked {
-            ownerEthReserve -= amount;
-        }
-        uint256 protocolFeeConsumed = amount < protocolFeeEthReserve ? amount : protocolFeeEthReserve;
-        unchecked {
-            protocolFeeEthReserve -= protocolFeeConsumed;
-        }
-        payable(owner).transfer(amount);
-        emit ProtocolInteraction(ProtocolActionCodes.OWNER_WITHDRAW_ETH, ETH_ADDRESS, amount);
-    }
-
     function rescueERC20(address token, uint256 amount, address recipient) external onlyOwner {
         if (token == ETH_ADDRESS) revert InvalidAddress();
         if (recipient == address(0)) revert InvalidAddress();
         IERC20(token).safeTransfer(recipient, amount);
         emit ProtocolInteraction(ProtocolActionCodes.RESCUE_ERC20, token, amount);
-    }
-
-    /// @notice Pull USDC from the owner and credit owner reserve (excluded from user NAV).
-    function markOwnerUsdcDeposit(uint256 amount) external onlyOwner {
-        IERC20(usdcAddress).safeTransferFrom(owner, address(this), amount);
-        ownerUsdcReserve += amount;
-        emit ProtocolInteraction(ProtocolActionCodes.OWNER_USDC_DEPOSIT, usdcAddress, amount);
-    }
-
-    /// @notice Credit owner ETH reserve (msg.value) — excluded from user NAV / ops balance views.
-    function markOwnerEthDeposit() external payable onlyOwner {
-        ownerEthReserve += msg.value;
-        emit ProtocolInteraction(ProtocolActionCodes.OWNER_ETH_DEPOSIT, ETH_ADDRESS, msg.value);
-    }
-
-    /// @notice Bot draws down owner USDC reserve to label a shortfall cover (accounting only).
-    function coverUsdcShortfall(uint256 amount) external onlyBotOrKeeper {
-        if (amount == 0) revert ZeroAmount();
-        if (amount > ownerUsdcReserve) revert InsufficientOwnerUsdcReserve();
-        ownerUsdcReserve -= amount;
-        emit ProtocolInteraction(ProtocolActionCodes.OWNER_USDC_COVER_SHORTFALL, usdcAddress, amount);
     }
 
     function emergencyWithdrawMint(uint256 batchCycle) external {
