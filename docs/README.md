@@ -12,6 +12,8 @@ KASH tokens are worth more over time because the protocol is continuously earnin
 
 Agent developers and autonomous integrators should refer to the [Agent Quickstart](agent-quickstart.md) for addresses, ABI pointers, preflight checks, mint/redeem claims & requests, events, and risk gates.
 
+Protocol operators (deploy, wiring, batch bot) use the private **kash-ops** repository for runbooks and tooling — not covered in this public docs tree.
+
 ---
 
 ## Two products

@@ -2,7 +2,7 @@
 
 This guide covers compiling and deploying the KashYield smart contracts on **Arbitrum One**.
 
-For post-deploy wiring and operational setup, see the private **kash-ops** repository.
+**Post-deploy wiring, batch bot setup, and operator runbooks** live in the private **kash-ops** repository (`docs/DEPLOYMENT.md` there has the full sequence).
 
 ## Prerequisites
 
@@ -23,10 +23,9 @@ Each product (KASH-ETH or KASH-BTC) is a **separate stack**. Deploy in this orde
 ```text
 1. KashYield vault + KASH token     (deploy-kashyieldeth.js / deploy-kashyieldbtc.js)
 2. HyperliquidAdapter               (deploy-hyperliquid-adapter.js — one per vault)
-3. ExchangeFacade                   (deploy-exchange-facade.js — one per vault)
+3. ExchangeFacade                   (deploy-exchange-facade.js — one per vault; adapter fixed at deploy)
 4. UniswapV3Adapter                 (optional; deploy-uniswap-adapter.js)
 5. Wire facade + adapters           (kash-ops: wire-exchange-facade.js)
-6. Owner: vault.setExchangeFacade   (if not done in step 5)
 ```
 
 ### What each contract does
@@ -36,7 +35,7 @@ Each product (KASH-ETH or KASH-BTC) is a **separate stack**. Deploy in this orde
 | **KashYieldBtc / KashYieldETH** | User mint/redeem, batch phases, Aave, spot swaps, NAV |
 | **KashTokenBtc / KashTokenEth** | ERC-20 KASH; created in the vault constructor |
 | **HyperliquidAdapter** | `IPerpExchange` wrapper around HL Bridge2; HL REST signing when adapter is master |
-| **ExchangeFacade** | Perp registry + HL write ops (deposit/withdraw USDC, open/close perp). Pulls USDC from the **bound vault** only. Deployed separately for bytecode headroom. |
+| **ExchangeFacade** | Immutable perp routing + write ops (deposit/withdraw USDC, open/close perp). Adapter and vault are bound at construction. Deployed separately for bytecode headroom. |
 | **UniswapV3Adapter** | On-chain spot swaps (optional) |
 
 **ExchangeFacade is not shared** between ETH and BTC. Each vault gets its own facade deployment, bound at construction to that vault’s address and primary asset (native ETH = `0x0`, BTC = wBTC).
@@ -89,32 +88,21 @@ Record `HL_ADAPTER_ADDRESS_BTC`. Saved under `deployments/hl-adapter-btc-arbitru
 
 ### Step 3 — Deploy ExchangeFacade (one per vault)
 
-The facade constructor binds permanently to one vault:
-
-```solidity
-constructor(address _owner, address _bot, address _usdc, address _primaryAsset, address _kashYield)
-```
-
-**BTC product:**
+Deploy **after** the vault and perp adapter exist. The facade constructor binds permanently to the vault, bot, and adapter:
 
 ```bash
 KASH_YIELD_ADDRESS=0x... \
+EXCHANGE_ADAPTER_ADDRESS=0x... \
+EXCHANGE_NAME=HL \
 PRIMARY_ASSET=0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f \
 BOT_ADDRESS=0x... \
 USDC_ADDRESS=0xaf88d065e77c8cC2239327C5EDb3A432268e5831 \
 npx hardhat run scripts/deploy-exchange-facade.js --network arbitrumOne
 ```
 
-(`KASH_YIELD_ADDRESS` = your `KASH_YIELD_BTC_ADDRESS`.)
+(`KASH_YIELD_ADDRESS` = your vault address. `PRIMARY_ASSET` = wBTC for BTC product, or `0x0` for ETH.)
 
-**ETH product:**
-
-```bash
-KASH_YIELD_ADDRESS=0x... \
-PRIMARY_ASSET=0x0000000000000000000000000000000000000000 \
-BOT_ADDRESS=0x... \
-npx hardhat run scripts/deploy-exchange-facade.js --network arbitrumOne
-```
+**ETH product:** same command with `PRIMARY_ASSET=0x0000000000000000000000000000000000000000` and `KASH_YIELD_ETH_ADDRESS` as `KASH_YIELD_ADDRESS`.
 
 Record **`EXCHANGE_FACADE_BTC_ADDRESS`** or **`EXCHANGE_FACADE_ETH_ADDRESS`** from script output. Also saved under `deployments/exchange-facade-*-arbitrumOne-*.json`.
 
@@ -134,23 +122,19 @@ npx hardhat run scripts/deploy-uniswap-adapter.js --network arbitrumOne
 
 ### Step 5 — Wire facade (kash-ops)
 
-Owner wiring connects vault ↔ facade ↔ HL adapter. Run from **kash-ops**:
+Owner wiring connects vault ↔ facade ↔ adapter. Run from **kash-ops** (see `docs/DEPLOYMENT.md` in that repo for env vars and verification):
 
 ```bash
 npx hardhat run scripts/wire-exchange-facade.js --network arbitrumOne
 ```
 
-Typical wiring (also doable manually):
-
-1. **Vault:** `setExchangeFacade(facadeAddress)` — KashYieldETH owner only (KashYieldBtc V3: immutable at deploy)
-2. **Verify:** `facade.perpExchangeAddress()` === HL adapter (immutable on V3 facade)
-3. **HyperliquidAdapter:** `setAuthorizedCaller(facadeAddress)` — so the facade can call deposit/withdraw
+At a high level, wiring confirms the facade points at your adapter, sets `exchangeFacade` on the vault where applicable, and authorizes the facade on the adapter.
 
 Confirm on Arbiscan:
 
-- `KashYieldBtc.exchangeFacade()` → your facade address
+- `KashYield*.exchangeFacade()` → your facade address
 - `ExchangeFacade.kashYieldAddress()` → your vault address
-- `ExchangeFacade.perpExchangeAddress()` → your HL adapter address
+- `ExchangeFacade.perpExchangeAddress()` → your adapter address
 
 ---
 
@@ -217,14 +201,14 @@ Upload that JSON on Arbiscan. **Contract name** examples:
 
 ### ExchangeFacade constructor args (ABI-encoded, one line)
 
-Five addresses: `_owner`, `_bot`, `_usdc`, `_primaryAsset`, `_kashYield`.
+Seven values: `_bot`, `_keeper`, `_usdc`, `_primaryAsset`, `_kashYield`, `_exchangeName`, `_adapterAddress`.
 
 ```bash
 node -e "
 const { AbiCoder } = require('ethers');
 console.log(AbiCoder.defaultAbiCoder().encode(
-  ['address','address','address','address','address'],
-  ['OWNER', 'BOT', '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', 'PRIMARY_ASSET', 'KASH_YIELD']
+  ['address','address','address','address','address','string','address'],
+  ['BOT', 'KEEPER_OR_ZERO', '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', 'PRIMARY_ASSET', 'KASH_YIELD', 'HL', 'ADAPTER']
 ).slice(2));
 "
 ```
@@ -245,7 +229,9 @@ Copy `.env.example` to `.env` and fill in:
 
 ## Post-deploy
 
-- Verify `owner()` and `botAddress()` on vault and facade
-- Confirm `exchangeFacade` is set on the vault and `kashYieldAddress` matches on the facade
+- Verify `owner()` and `botAddress()` on the vault
+- Confirm `exchangeFacade` is set on the vault and matches the facade’s `kashYieldAddress`
+- Confirm `facade.perpExchangeAddress()` matches your adapter
 - Verify contracts on Arbiscan
 - Update frontend env and redeploy app
+- Complete batch bot and operator setup in **kash-ops**

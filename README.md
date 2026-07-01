@@ -7,11 +7,10 @@ Kash is an AI-managed, leveraged yield protocol built on Arbitrum, an Ethereum L
 - **Two products**: `KashYieldETH` (ETH/wETH deposits → KASH-ETH) and `KashYieldBtc` (wBTC deposits → KASH-BTC). Both run on Arbitrum.
 - **NAV-based pricing**: KASH priced at current Net Asset Value, updated after each settlement cycle.
 - **Configurable batch cycle**: Default 24-hour cycle. Owner can adjust duration for testing or production.
-- **ExchangeFacade**: Perp exchange registry and Hyperliquid write ops live in a separate `ExchangeFacade` contract (bytecode headroom). The vault holds `exchangeFacade` and forwards HL view calls.
+- **ExchangeFacade**: Perp exchange routing and write ops live in a separate immutable `ExchangeFacade` contract (bytecode headroom). The vault holds `exchangeFacade` and forwards perp balance/position views.
 - **Merkle pull claims (mints and redeems)**: After settlement, users call `claimMint(batchCycle, amount, proof)` to receive KASH or `claimRedeem(batchCycle, amount, proof)` to receive ETH/wBTC. Proofs are published in hosted manifests.
-- **Perp adapter pattern**: `HyperliquidAdapter` implements `IPerpExchange` and is registered on **ExchangeFacade** (additional adapters can be added via the facade registry).
+- **Perp adapter pattern**: `HyperliquidAdapter` (and future adapters) implement `IPerpExchange`. The adapter address is set when the facade is deployed.
 - **Spot DEX integration**: An `ISpotDex` adapter (e.g. UniswapV3Adapter) enables on-chain asset ↔ USDC swaps with configurable slippage caps.
-- **24-hour timelock on adapter registration**: On **ExchangeFacade**, the first adapter is immediate; subsequent registrations use proposal + confirmation after the facade timelock.
 - **Batch user caps**: Up to **10,000** unique wallets per batch cycle for mints and redeems (separate counters), enforced in the app. On-chain defaults are **10,000** per side (`maxMintUsers` / `maxRedeemUsers`), with a ceiling of 100,000.
 - **Security**: `ReentrancyGuard` on user-facing functions, two-step ownership transfer, and custom Solidity errors.
 - **Aave**: Lending/borrowing for capital deployment.
@@ -23,7 +22,7 @@ Kash is an AI-managed, leveraged yield protocol built on Arbitrum, an Ethereum L
 | Contract | Role |
 |----------|------|
 | `KashYieldETH.sol` / `KashYieldBtc.sol` | Main vaults: mint/redeem requests, batch phases, Aave, spot swaps, `claimMint`, `claimRedeem` |
-| `ExchangeFacade.sol` | Perp registry + HL write ops; pulls USDC from vault |
+| `ExchangeFacade.sol` | Immutable perp routing + write ops; bound to one vault and adapter at deploy |
 | `KashTokenEth` / `KashTokenBtc` | ERC-20 KASH tokens, minted/burned by the respective KashYield contract only |
 | `libraries/MerkleVerify.sol` | Sorted-pair Merkle verification for mint and redeem claim proofs |
 | `interfaces/IPerpExchange.sol` | Common interface for all perp exchange adapters |
@@ -38,12 +37,11 @@ Kash is an AI-managed, leveraged yield protocol built on Arbitrum, an Ethereum L
 | NAV | Updated before settlement; Phase 2 mint uses settlement NAV |
 | Mint distribution | Phase 2 commits Merkle root; users **`claimMint`** (pull model) |
 | Redeem distribution | Phase 2 commits Merkle root; users **`claimRedeem`** (pull model) |
-| Exchange registry | On **ExchangeFacade**: `perpExchanges`, `activePerpExchange` |
-| Adapter registration | On facade: first HL adapter immediate; later changes timelocked |
+| Perp exchange | **ExchangeFacade** routes bot/keeper calls to the configured `IPerpExchange` adapter |
 | Spot swaps | `swapForUsdc` / `swapFromUsdc` via `spotDexAddress` with `minOut` |
 | Ownership | Two-step: `transferOwnership()` + `acceptOwnership()` |
 
-**Owner config (no redeploy):** `setExchangeFacade`, `setAavePool`, `setCycleDurationSeconds`, `setFeeBps`, `setSpotDex`, `setMaxSwapSlippageBps`, `pause`/`unpause`; perp registry on **ExchangeFacade**.
+**Owner config (no redeploy):** `setExchangeFacade` (where supported), `setAavePool`, `setCycleDurationSeconds`, `setFeeBps`, `setSpotDex`, `setMaxSwapSlippageBps`, `pause`/`unpause`.
 
 ### Off-chain operator
 
@@ -86,9 +84,10 @@ npx hardhat run scripts/deploy-kashyieldeth.js --network arbitrumOne
 BOT_ADDRESS=<bot_wallet> \
 npx hardhat run scripts/deploy-kashyieldbtc.js --network arbitrumOne
 
-# Adapters + facade (see docs/DEPLOYMENT.md)
+# Adapters + facade (see docs/DEPLOYMENT.md; post-deploy wiring in kash-ops)
 npx hardhat run scripts/deploy-hyperliquid-adapter.js --network arbitrumOne
 KASH_YIELD_ADDRESS=<vault> BOT_ADDRESS=<bot> \
+EXCHANGE_ADAPTER_ADDRESS=<adapter> EXCHANGE_NAME=HL \
 npx hardhat run scripts/deploy-exchange-facade.js --network arbitrumOne
 ```
 
@@ -122,7 +121,6 @@ Open http://localhost:3000. Root `/` is the landing page; `/app` is the mint/red
 
 - **ReentrancyGuard** on user-facing state-changing functions
 - **Two-step ownership** — new owner must explicitly accept
-- **24-hour timelock** on new perp/spot adapter registration (first adapter immediate)
 - **Claim-reserve accounting** — redeem assets reserved for Merkle claims cannot be swept by owner withdrawals
 - **Bot/keeper protocol interactions** — Aave, spot swaps, and HL writes are `onlyBotOrKeeper`
 - **Configurable slippage** — `maxSwapSlippageBps` caps Uniswap swap price impact
@@ -139,7 +137,7 @@ Kash/
 ├── contracts/
 │   ├── KashYieldETH.sol            # Main ETH product
 │   ├── KashYieldBtc.sol            # Main BTC product
-│   ├── ExchangeFacade.sol          # Perp registry + HL write ops
+│   ├── ExchangeFacade.sol          # Immutable perp routing + write ops
 │   ├── libraries/MerkleVerify.sol
 │   ├── interfaces/
 │   ├── adapters/
