@@ -32,8 +32,8 @@ const {
   settleRedeemPhase2,
   claimRedeemForUser,
   claimMintForUser,
-  deployAndWireExchangeFacade,
   deployKashYieldBtcStack,
+  deployKashYieldEthStack,
   closeShortViaFacade,
   withdrawFromPerpExchangeViaFacade,
 } = require("./helpers/forkBatchOps");
@@ -114,47 +114,23 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
       await uniAdapter.waitForDeployment();
       console.log("    ✅ UniswapV3Adapter:", await uniAdapter.getAddress());
 
-      // ── Deploy KashYieldETH ──────────────────────────────────────────────
+      // ── Deploy KashYieldETH V3 stack (facade + HL adapter + vault) ────────
       // Aave pool address is hardcoded in the constructor to the real Arbitrum One
       // address (0x794a...), so no need to pass it — works perfectly on the fork.
-      const KashYieldETH = await ethers.getContractFactory("KashYieldETH");
-      kashYieldEth = await KashYieldETH.deploy(
-        bot.address,
-        WETH_ADDRESS,
-        USDC_ADDRESS,
-        owner.address
-      );
-      await kashYieldEth.waitForDeployment();
-      console.log("    ✅ KashYieldETH:", await kashYieldEth.getAddress());
-
-      // ── Configure KashYieldETH ───────────────────────────────────────────
-      // (oracle addresses already default to mainnet values in the constructor)
-      await kashYieldEth.setSpotDex(await uniAdapter.getAddress());
-      await kashYieldEth.setCycleDurationSeconds(CYCLE_SECS);
-      await kashYieldEth.setUserWindowEnd(CYCLE_SECS);
-      await kashYieldEth.setProcessingWindowStart(0n);
-
-      // ── Deploy HyperliquidAdapter ────────────────────────────────────────
-      const HyperliquidAdapter = await ethers.getContractFactory("HyperliquidAdapter");
-      hlAdapter = await HyperliquidAdapter.deploy(
-        HL_BRIDGE,
-        USDC_ADDRESS,
-        ethers.ZeroAddress, // ETH product — no separate asset token
-        true,               // isEthAsset
-        await kashYieldEth.getAddress()
-      );
-      await hlAdapter.waitForDeployment();
-      console.log("    ✅ HyperliquidAdapter (ETH):", await hlAdapter.getAddress());
-
-      // ── ExchangeFacade + HL adapter ─────────────────────────────────────
-      await deployAndWireExchangeFacade({
-        kashYield: kashYieldEth,
-        owner,
+      ({ kashYieldEth, hlAdapter } = await deployKashYieldEthStack({
+        deployer: owner,
         bot,
+        owner,
+        wethAddress: WETH_ADDRESS,
         usdcAddress: USDC_ADDRESS,
-        primaryAsset: ethers.ZeroAddress,
-        hlAdapter,
-      });
+        uniAdapter,
+        feeReceiver: owner.address,
+        cycleDurationSeconds: CYCLE_SECS,
+        userWindowEnd: CYCLE_SECS,
+        processingWindowStart: 0n,
+      }));
+      console.log("    ✅ KashYieldETH:", await kashYieldEth.getAddress());
+      console.log("    ✅ HyperliquidAdapter (ETH):", await hlAdapter.getAddress());
 
       // ── Resolve KashTokenEth ─────────────────────────────────────────────
       const kashTokenAddr = await kashYieldEth.kashTokenEth();

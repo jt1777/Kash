@@ -11,7 +11,8 @@
     "test:advanced": "npx hardhat test test/mainnet-fork-advanced.e2e.test.js",
     "test:gas-batch": "npx hardhat test test/batch-gas-benchmark.fork.test.js",
     "test:gas-batch:quick": "MINT_USER_COUNT=50 npx hardhat test test/batch-gas-benchmark.fork.test.js",
-    "deploy:btc-aster": "hardhat run scripts/deploy-kash-btc-aster-stack.js --network arbitrumOne"
+    "deploy:btc-aster": "hardhat run scripts/deploy-kash-btc-aster-stack.js --network arbitrumOne",
+    "deploy:eth-aster": "hardhat run scripts/deploy-kash-eth-aster-stack.js --network arbitrumOne"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "6.0.0",

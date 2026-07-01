@@ -14,6 +14,7 @@ const { ethers } = require("hardhat");
 
 const USDC_ADDRESS = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831";
 const BTC_ORACLE = "0x6ce185860a4963106506C203335A2910413708e9";
+const ETH_ORACLE = "0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612";
 const HL_BRIDGE = "0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7";
 
 async function predictContractAddress(deployer, offset = 0) {
@@ -134,6 +135,85 @@ async function deployKashYieldBtcStack({
   }
 
   return { kashYieldBtc, hlAdapter, facade, uniAdapter };
+}
+
+/**
+ * Deploy KashYieldETH V3 stack: facade + HL adapter + vault with immutable wiring.
+ * uniAdapter must already be deployed.
+ */
+async function deployKashYieldEthStack({
+  deployer,
+  bot,
+  owner,
+  wethAddress,
+  usdcAddress,
+  uniAdapter,
+  cycleDurationSeconds = 3600n,
+  userWindowEnd = 3600n,
+  processingWindowStart = 0n,
+  ethOracle = ETH_ORACLE,
+  keeperRegistry = ethers.ZeroAddress,
+  feeReceiver,
+  feeBps = 3n,
+  maxSwapSlippageBps = 100n,
+  maxMintUsers = 10_000n,
+  maxRedeemUsers = 10_000n,
+}) {
+  if (!feeReceiver) throw new Error("feeReceiver required");
+  const predictedKashYield = await predictContractAddress(deployer, 2);
+
+  const HyperliquidAdapter = await ethers.getContractFactory("HyperliquidAdapter");
+  const hlAdapter = await HyperliquidAdapter.deploy(
+    HL_BRIDGE,
+    usdcAddress,
+    ethers.ZeroAddress,
+    true,
+    predictedKashYield,
+  );
+  await hlAdapter.waitForDeployment();
+
+  const ExchangeFacade = await ethers.getContractFactory("ExchangeFacade");
+  const facade = await ExchangeFacade.deploy(
+    bot.address,
+    keeperRegistry,
+    usdcAddress,
+    wethAddress,
+    predictedKashYield,
+    "HL",
+    await hlAdapter.getAddress(),
+  );
+  await facade.waitForDeployment();
+  const facadeAddr = await facade.getAddress();
+
+  const KashYieldETH = await ethers.getContractFactory("KashYieldETH");
+  const kashYieldEth = await KashYieldETH.deploy(
+    bot.address,
+    wethAddress,
+    usdcAddress,
+    facadeAddr,
+    await uniAdapter.getAddress(),
+    ethOracle,
+    keeperRegistry,
+    feeReceiver,
+    cycleDurationSeconds,
+    userWindowEnd,
+    processingWindowStart,
+    maxSwapSlippageBps,
+    feeBps,
+    maxMintUsers,
+    maxRedeemUsers,
+  );
+  await kashYieldEth.waitForDeployment();
+
+  if ((await kashYieldEth.getAddress()).toLowerCase() !== predictedKashYield.toLowerCase()) {
+    throw new Error("KashYieldETH address prediction mismatch");
+  }
+
+  if (typeof hlAdapter.setAuthorizedCaller === "function") {
+    await hlAdapter.connect(owner).setAuthorizedCaller(facadeAddr);
+  }
+
+  return { kashYieldEth, hlAdapter, facade, uniAdapter };
 }
 
 async function hlOpsTarget(kashYield, bot) {
@@ -259,8 +339,8 @@ async function buildMintMerkleRoot(kashYield, batchCycle, nav) {
   const rows = await Promise.all(
     Array.from({ length: mintCount }, async (_, i) => {
       const addr = await kashYield.batchMintUsers(batchCycle, i);
-      const req = await kashYield.getPendingMintRequest(addr, batchCycle);
-      return { addr, amountInUSD: BigInt(req.amountInUSD.toString()) };
+      const usd = await kashYield.getMintRequestUSD(addr, batchCycle);
+      return { addr, amountInUSD: BigInt(usd.toString()) };
     }),
   );
   const minters = rows.map((r) => r.addr);
@@ -320,9 +400,9 @@ async function claimMintForUser(kashYield, user, batchCycle, nav) {
   const amountInUSD = [];
   for (let i = 0; i < mintCount; i++) {
     const addr = await kashYield.batchMintUsers(batchCycle, i);
-    const req = await kashYield.getPendingMintRequest(addr, batchCycle);
+    const usd = await kashYield.getMintRequestUSD(addr, batchCycle);
     minters.push(addr);
-    amountInUSD.push(BigInt(req.amountInUSD.toString()));
+    amountInUSD.push(BigInt(usd.toString()));
   }
   const entries = allocMintKashAmounts(minters, amountInUSD, totalMintUSD, totalMintKash);
   const { proofs } = buildMintMerkleTree(batchCycle, entries);
@@ -378,10 +458,12 @@ async function closeShortViaFacade(kashYield, bot, symbol) {
 module.exports = {
   USDC_ADDRESS,
   BTC_ORACLE,
+  ETH_ORACLE,
   mintProtocolFee,
   usdcBorrowForAssetUsd,
   deployAndWireExchangeFacade,
   deployKashYieldBtcStack,
+  deployKashYieldEthStack,
   predictContractAddress,
   hlOpsTarget,
   depositToPerpExchangeViaFacade,

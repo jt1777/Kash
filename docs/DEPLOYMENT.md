@@ -18,14 +18,18 @@ npx hardhat compile
 
 ## Deployment order (per product)
 
-Each product (KASH-ETH or KASH-BTC) is a **separate stack**. Deploy in this order:
+Each product (KASH-ETH or KASH-BTC) is a **separate stack**. On this branch both `KashYieldETH` and `KashYieldBtc` are **V3**: ownerless, with bot, `exchangeFacade`, spot DEX, oracle, fees, and cycle timing all fixed in the constructor. There is no post-deploy `owner()`, `pause()`, or setter — changing any of these means redeploying the stack.
+
+| | **KASH-ETH V3** | **KASH-BTC V3** |
+|--|-------------------|-------------------|
+| Governance | Ownerless; facade + spot DEX + oracle fixed in constructor | Ownerless; facade + spot DEX + oracle fixed in constructor |
+| Typical flow | Uniswap → (HL adapter with predicted vault addr) → facade+vault **or** Aster atomic stack | Uniswap → (adapter with predicted vault addr) → facade+vault **or** Aster atomic stack |
+
+Full operator sequencing (including Path A/HL vs Path B/Aster) lives in the private **kash-ops** repo.
 
 ```text
-1. KashYield vault + KASH token     (deploy-kashyieldeth.js / deploy-kashyieldbtc.js)
-2. HyperliquidAdapter               (deploy-hyperliquid-adapter.js — one per vault)
-3. ExchangeFacade                   (deploy-exchange-facade.js — one per vault; adapter fixed at deploy)
-4. UniswapV3Adapter                 (optional; deploy-uniswap-adapter.js)
-5. Wire facade + adapters           (kash-ops: wire-exchange-facade.js)
+ETH:  spot DEX → perp adapter → deploy-kashyieldeth.js (facade+vault) OR deploy-kash-eth-aster-stack.js
+BTC:  spot DEX → perp adapter → deploy-kashyieldbtc.js (facade+vault) OR deploy-kash-btc-aster-stack.js
 ```
 
 ### What each contract does
@@ -44,37 +48,24 @@ Each product (KASH-ETH or KASH-BTC) is a **separate stack**. Deploy in this orde
 
 ## Deploy
 
-All commands use `--network arbitrumOne`.
+All commands use `--network arbitrumOne`. Both vaults are V3: `exchangeFacade` and `spotDexAddress` are **immutable**, so the spot DEX and perp adapter must exist (or their addresses be predicted) **before** the vault deploys.
 
-### Step 1 — Deploy vault
-
-**KashYieldBtc:**
+### Step 1 — Deploy UniswapV3Adapter (spot DEX)
 
 ```bash
-BOT_ADDRESS=0x... npx hardhat run scripts/deploy-kashyieldbtc.js --network arbitrumOne
+npx hardhat run scripts/deploy-uniswap-adapter.js --network arbitrumOne
 ```
 
-Record from script output:
-
-- `KASH_YIELD_BTC_ADDRESS`
-- `KASH_TOKEN_BTC`
-
-Also saved under `deployments/kashyieldbtc-arbitrumOne-*.json`.
-
-**KashYieldETH:**
-
-```bash
-BOT_ADDRESS=0x... npx hardhat run scripts/deploy-kashyieldeth.js --network arbitrumOne
-```
-
-Record `KASH_YIELD_ETH_ADDRESS` and `KASH_TOKEN_ETH`.
+Record `UNISWAP_ADAPTER_ADDRESS` — used as `SPOT_DEX_ADDRESS` below. One adapter is shared by both products.
 
 ### Step 2 — Deploy HyperliquidAdapter (one per vault)
+
+The adapter constructor needs the vault address, which does not exist yet — pass the **predicted** vault address (see `scripts/lib/predictAddress.js`; account for deployer nonce order: adapter tx, then facade, then vault).
 
 **BTC product:**
 
 ```bash
-KASH_YIELD_BTC_ADDRESS=0x... \
+KASH_YIELD_ADDRESS=<predicted KashYieldBtc address> \
 WBTC_ADDRESS=0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f \
 USDC_ADDRESS=0xaf88d065e77c8cC2239327C5EDb3A432268e5831 \
 HL_BRIDGE_ADDRESS=0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7 \
@@ -84,27 +75,44 @@ npx hardhat run scripts/deploy-hyperliquid-adapter.js --network arbitrumOne
 
 Record `HL_ADAPTER_ADDRESS_BTC`. Saved under `deployments/hl-adapter-btc-arbitrumOne-*.json`.
 
-**ETH product** (when deployed): same script with `IS_ETH_ASSET=true` and `KASH_YIELD_ETH_ADDRESS` and remove `WBTC_ADDRESS`.
+**ETH product:** same script with `IS_ETH_ASSET=true`, `KASH_YIELD_ADDRESS=<predicted KashYieldETH address>`, and no `WBTC_ADDRESS`.
 
-### Step 3 — Deploy ExchangeFacade (one per vault)
+> **Deploying on Aster instead of HL?** Skip this step — `deploy-kash-eth-aster-stack.js` / `deploy-kash-btc-aster-stack.js` (Step 3) deploy the `AsterAdapter` themselves using nonce-predicted addresses.
 
-Deploy **after** the vault and perp adapter exist. The facade constructor binds permanently to the vault, bot, and adapter:
+### Step 3 — Deploy ExchangeFacade + vault
+
+`deploy-kashyieldbtc.js` / `deploy-kashyieldeth.js` deploy **ExchangeFacade and the vault together** in one script, resolving the circular dependency (facade needs the vault address; vault needs the facade address) via the same nonce-prediction as Step 2:
 
 ```bash
-KASH_YIELD_ADDRESS=0x... \
-EXCHANGE_ADAPTER_ADDRESS=0x... \
-EXCHANGE_NAME=HL \
-PRIMARY_ASSET=0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f \
+# BTC (HL adapter already deployed in Step 2)
 BOT_ADDRESS=0x... \
+SPOT_DEX_ADDRESS=<UNISWAP_ADAPTER_ADDRESS> \
+EXCHANGE_ADAPTER_ADDRESS=<HL_ADAPTER_ADDRESS_BTC> \
+EXCHANGE_NAME=HL \
+WBTC_ADDRESS=0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f \
 USDC_ADDRESS=0xaf88d065e77c8cC2239327C5EDb3A432268e5831 \
-npx hardhat run scripts/deploy-exchange-facade.js --network arbitrumOne
+BTC_ORACLE_ADDRESS=0x6ce185860a4963106506C203335A2910413708e9 \
+npx hardhat run scripts/deploy-kashyieldbtc.js --network arbitrumOne
+
+# ETH (HL adapter already deployed in Step 2)
+BOT_ADDRESS=0x... \
+SPOT_DEX_ADDRESS=<UNISWAP_ADAPTER_ADDRESS> \
+EXCHANGE_ADAPTER_ADDRESS=<HL_ADAPTER_ADDRESS_ETH> \
+EXCHANGE_NAME=HL \
+WETH_ADDRESS=0x82aF49447D8a07e3bd95BD0d56f35241523fBab1 \
+USDC_ADDRESS=0xaf88d065e77c8cC2239327C5EDb3A432268e5831 \
+ETH_ORACLE_ADDRESS=0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612 \
+npx hardhat run scripts/deploy-kashyieldeth.js --network arbitrumOne
 ```
 
-(`KASH_YIELD_ADDRESS` = your vault address. `PRIMARY_ASSET` = wBTC for BTC product, or `0x0` for ETH.)
+Record **`KASH_YIELD_BTC_ADDRESS`** / **`KASH_YIELD_ETH_ADDRESS`**, **`KASH_TOKEN_BTC`** / **`KASH_TOKEN_ETH`**, and **`EXCHANGE_FACADE_BTC_ADDRESS`** / **`EXCHANGE_FACADE_ETH_ADDRESS`** from script output. Also saved under `deployments/`.
 
-**ETH product:** same command with `PRIMARY_ASSET=0x0000000000000000000000000000000000000000` and `KASH_YIELD_ETH_ADDRESS` as `KASH_YIELD_ADDRESS`.
+**Deploying on Aster instead of HL?** Use the atomic stack script per product — it deploys the adapter, facade, and vault together in one run via three consecutive nonce-predicted addresses:
 
-Record **`EXCHANGE_FACADE_BTC_ADDRESS`** or **`EXCHANGE_FACADE_ETH_ADDRESS`** from script output. Also saved under `deployments/exchange-facade-*-arbitrumOne-*.json`.
+```bash
+npx hardhat run scripts/deploy-kash-eth-aster-stack.js --network arbitrumOne   # or npm run deploy:eth-aster
+npx hardhat run scripts/deploy-kash-btc-aster-stack.js --network arbitrumOne   # or npm run deploy:btc-aster
+```
 
 Add to `.env`:
 
@@ -114,13 +122,7 @@ HL_ADAPTER_ADDRESS_BTC=0x...
 KASH_YIELD_BTC_ADDRESS=0x...
 ```
 
-### Step 4 — UniswapV3Adapter (optional)
-
-```bash
-npx hardhat run scripts/deploy-uniswap-adapter.js --network arbitrumOne
-```
-
-### Step 5 — Wire facade (kash-ops)
+### Step 4 — Wire facade (kash-ops)
 
 Owner wiring connects vault ↔ facade ↔ adapter. Run from **kash-ops** (see `docs/DEPLOYMENT.md` in that repo for env vars and verification):
 
@@ -229,7 +231,7 @@ Copy `.env.example` to `.env` and fill in:
 
 ## Post-deploy
 
-- Verify `owner()` and `botAddress()` on the vault
+- Verify `botAddress()` on the vault matches your intended bot wallet (immutable — redeploy to change)
 - Confirm `exchangeFacade` is set on the vault and matches the facade’s `kashYieldAddress`
 - Confirm `facade.perpExchangeAddress()` matches your adapter
 - Verify contracts on Arbiscan

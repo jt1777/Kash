@@ -51,9 +51,6 @@ contract BenchmarkKashYieldBtc is KashYieldBtc {
         if (batchPhase[batchCycle] != 0) revert WrongPhase();
         if (batchProcessed[batchCycle]) revert AlreadyProcessed();
 
-        uint256 btcPrice = getBtcPrice();
-        uint256 usdIncrement = (amountEach * btcPrice) / (10 ** WBTC_DECIMALS);
-
         for (uint256 i = 0; i < users.length; i++) {
             address user = users[i];
             MintRequest storage req = userMintRequests[user][batchCycle];
@@ -61,8 +58,6 @@ contract BenchmarkKashYieldBtc is KashYieldBtc {
             req.user = user;
             req.amountIn += amountEach;
             req.batchCycle = batchCycle;
-            req.amountInUSD += usdIncrement;
-            batchTotalMintValueUSD[batchCycle] += usdIncrement;
             batchTotalMintBtc[batchCycle] += amountEach;
             if (!wasActive) {
                 if (activeMintUsers[batchCycle] >= maxMintUsers) revert MintCapReached();

@@ -5,8 +5,9 @@ Kash is an AI-managed, leveraged yield protocol built on Arbitrum, an Ethereum L
 ## Key Features
 
 - **Two products**: `KashYieldETH` (ETH/wETH deposits → KASH-ETH) and `KashYieldBtc` (wBTC deposits → KASH-BTC). Both run on Arbitrum.
+- **Ownerless V3 (this branch)**: Bot address, `ExchangeFacade`/adapter, oracle, spot DEX, fees, and cycle timing are all **immutable**, fixed at deploy via the constructor — no `owner()`, no pause, no post-deploy setters. Changing any of these requires redeploying the vault.
 - **NAV-based pricing**: KASH priced at current Net Asset Value, updated after each settlement cycle.
-- **Configurable batch cycle**: Default 24-hour cycle. Owner can adjust duration for testing or production.
+- **Configurable batch cycle**: Default 24-hour cycle, fixed at deploy on V3.
 - **ExchangeFacade**: Perp exchange routing and write ops live in a separate immutable `ExchangeFacade` contract (bytecode headroom). The vault holds `exchangeFacade` and forwards perp balance/position views.
 - **Merkle pull claims (mints and redeems)**: After settlement, users call `claimMint(batchCycle, amount, proof)` to receive KASH or `claimRedeem(batchCycle, amount, proof)` to receive ETH/wBTC. Proofs are published in hosted manifests.
 - **Perp adapter pattern**: `HyperliquidAdapter` (and future adapters) implement `IPerpExchange`. The adapter address is set when the facade is deployed.
@@ -120,11 +121,10 @@ Open http://localhost:3000. Root `/` is the landing page; `/app` is the mint/red
 ## Security Features
 
 - **ReentrancyGuard** on user-facing state-changing functions
-- **Two-step ownership** — new owner must explicitly accept
-- **Claim-reserve accounting** — redeem assets reserved for Merkle claims cannot be swept by owner withdrawals
+- **Ownerless (V3)** — no `owner()`, no two-step ownership transfer, no pause; all config is immutable at deploy
+- **Claim-reserve accounting** — redeem assets reserved for Merkle claims cannot be swept
 - **Bot/keeper protocol interactions** — Aave, spot swaps, and HL writes are `onlyBotOrKeeper`
-- **Configurable slippage** — `maxSwapSlippageBps` caps Uniswap swap price impact
-- **Emergency pause** — `pause()`/`unpause()` halts user activity
+- **Configurable slippage** — `maxSwapSlippageBps` (fixed at deploy) caps Uniswap swap price impact
 - **Custom errors** — smaller bytecode and cheaper reverts
 - **EIP-170 compliant** — contracts compile under the 24,576-byte limit
 

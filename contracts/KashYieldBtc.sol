@@ -118,12 +118,12 @@ contract KashYieldBtc is ReentrancyGuard {
 
     mapping(uint256 => bool)    public batchProcessed;
     mapping(uint256 => uint256) public batchIndicativeNAV;
+    mapping(uint256 => uint256) public batchMintBtcPrice;
     mapping(uint256 => uint8)   public batchPhase;
 
     struct MintRequest {
         address user;
         uint256 amountIn;
-        uint256 amountInUSD;
         uint256 batchCycle;
     }
     struct RedeemRequest {
@@ -247,10 +247,6 @@ contract KashYieldBtc is ReentrancyGuard {
         req.user = msg.sender;
         req.amountIn += amount;
         req.batchCycle = batchCycle;
-        uint256 btcPrice = getBtcPrice();
-        uint256 usdIncrement = (amount * btcPrice) / (10 ** WBTC_DECIMALS);
-        req.amountInUSD += usdIncrement;
-        batchTotalMintValueUSD[batchCycle] += usdIncrement;
         batchTotalMintBtc[batchCycle] += amount;
         if (!wasActive) {
             if (activeMintUsers[batchCycle] >= maxMintUsers) revert MintCapReached();
@@ -296,9 +292,7 @@ contract KashYieldBtc is ReentrancyGuard {
         MintRequest storage req = userMintRequests[msg.sender][batchCycle];
         if (req.amountIn == 0) revert NoRequest();
         uint256 amount = req.amountIn;
-        uint256 usdAmount = req.amountInUSD;
         batchTotalMintBtc[batchCycle] -= amount;
-        batchTotalMintValueUSD[batchCycle] -= usdAmount;
         unchecked { activeMintUsers[batchCycle]--; }
         delete userMintRequests[msg.sender][batchCycle];
         IERC20(wbtcAddress).safeTransfer(msg.sender, amount);
@@ -342,7 +336,12 @@ contract KashYieldBtc is ReentrancyGuard {
         if (batchPhase[batchCycle] != 0) revert PhaseAlreadyStarted();
 
         uint256 indicativeNAV = currentNAV;
-        uint256 totalMintUSD = batchTotalMintValueUSD[batchCycle];
+        // Single BTC price for the whole batch — every minter in this cycle is valued
+        // at the same price, regardless of when during the user window they deposited.
+        uint256 btcPrice = getBtcPrice();
+        batchMintBtcPrice[batchCycle] = btcPrice;
+        uint256 totalMintUSD = (batchTotalMintBtc[batchCycle] * btcPrice) / (10 ** WBTC_DECIMALS);
+        batchTotalMintValueUSD[batchCycle] = totalMintUSD;
         uint256 totalRedeemUSD = batchTotalRedeemValueUSD[batchCycle];
         batchIndicativeNAV[batchCycle] = indicativeNAV;
 
@@ -594,6 +593,14 @@ contract KashYieldBtc is ReentrancyGuard {
 
     function getPendingMintRequest(address user, uint256 batchCycle) external view returns (MintRequest memory) {
         return userMintRequests[user][batchCycle];
+    }
+
+    /// @notice USD value of a user's mint request, priced at the single settlement price
+    /// captured for the whole batch in Phase 1. Returns 0 before Phase 1 has run.
+    function getMintRequestUSD(address user, uint256 batchCycle) external view returns (uint256) {
+        uint256 price = batchMintBtcPrice[batchCycle];
+        if (price == 0) return 0;
+        return (userMintRequests[user][batchCycle].amountIn * price) / (10 ** WBTC_DECIMALS);
     }
 
     function getPendingRedeemRequest(address user, uint256 batchCycle) external view returns (RedeemRequest memory) {

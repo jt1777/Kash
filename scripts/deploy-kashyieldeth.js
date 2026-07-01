@@ -1,134 +1,173 @@
 // scripts/deploy-kashyieldeth.js
-// Deploys KashYieldETH and KashTokenEth (constructor: botAddress, weth, usdc).
-// Aave pool is immutable (Arbitrum One mainnet pool in contract bytecode).
+// Deploys ExchangeFacade + KashYieldETH V3 when the perp adapter is already deployed.
 //
-// Usage:
-//   npx hardhat run scripts/deploy-kashyieldeth.js --network arbitrumOne
+// ⚠️  KASH-ETH V3 + Aster: use the atomic stack script instead (recommended):
+//   npx hardhat run scripts/deploy-kash-eth-aster-stack.js --network arbitrumOne
+//   npm run deploy:eth-aster
 //
-// Prerequisites:
-//   - Root .env: PRIVATE_KEY; RPC via hardhat.config (ARBITRUM_ONE_RPC_URL / ARBITRUM_SEPOLIA_RPC_URL).
-//   - Funded deployer on the target chain.
-//   - WETH_ADDRESS / USDC_ADDRESS optional — per-network defaults when unset.
+// This script remains for HyperliquidAdapter (post-deploy wiring) or re-deploying
+// facade + vault when EXCHANGE_ADAPTER_ADDRESS is already set.
+//
+// Required env:
+//   WETH_ADDRESS, USDC_ADDRESS, ETH_ORACLE_ADDRESS (or ETH_ORACLE)
+//   BOT_ADDRESS, SPOT_DEX_ADDRESS
+//   EXCHANGE_ADAPTER_ADDRESS — HyperliquidAdapter (must exist before this script)
+//   EXCHANGE_NAME — must be "HL" (Aster uses deploy-kash-eth-aster-stack.js)
+//
+// Optional env:
+//   KEEPER_REGISTRY_ADDRESS — Chainlink Automation registry (default: zero)
+//   CYCLE_DURATION_SECONDS (default: 86400)
+//   USER_WINDOW_END (default: 85500)
+//   PROCESSING_WINDOW_START (default: 85500)
+//   FEE_BPS (default: 3), MAX_SWAP_SLIPPAGE_BPS (default: 100)
 
+require("dotenv").config();
 const hre = require("hardhat");
 const fs = require("fs");
 const path = require("path");
 
+const { predictContractAddress } = require("./lib/predictAddress");
+
 async function main() {
+  const [deployer] = await hre.ethers.getSigners();
   const network = hre.network.name;
-  const isArbitrumOne = network === "arbitrumOne";
-  const isArbitrumSepolia = network === "arbitrumSepolia";
-  if (!isArbitrumOne && !isArbitrumSepolia) {
-    console.warn(`⚠️  Expected arbitrumOne or arbitrumSepolia. You are on: ${network}`);
-  }
 
-  const signers = await hre.ethers.getSigners();
-  const deployer = signers[0];
-  if (!deployer) {
-    throw new Error(
-      "No deployer account. Set PRIVATE_KEY in the project root .env file (not in scripts/). " +
-      "Run this from repo root: npx hardhat run scripts/deploy-kashyieldeth.js --network arbitrumOne"
-    );
-  }
-  console.log("Deploying to", network);
+  console.log("Deploying KashYieldETH V3 to", network);
   console.log("Deployer:", deployer.address);
-  const balance = await hre.ethers.provider.getBalance(deployer.address);
-  console.log("Balance:", hre.ethers.formatEther(balance), "ETH\n");
 
-  if (balance === 0n) {
+  const botAddress = process.env.BOT_ADDRESS;
+  const wethAddress = process.env.WETH_ADDRESS;
+  const usdcAddress = process.env.USDC_ADDRESS;
+  const ethOracleAddress = process.env.ETH_ORACLE_ADDRESS || process.env.ETH_ORACLE;
+  const spotDexAddress = process.env.SPOT_DEX_ADDRESS || process.env.MOCK_SPOT_DEX_ADDRESS;
+  const adapterAddress = process.env.EXCHANGE_ADAPTER_ADDRESS;
+  const exchangeName = process.env.EXCHANGE_NAME || "HL";
+
+  if (exchangeName.toUpperCase() === "ASTER") {
     throw new Error(
-      isArbitrumOne
-        ? "Deployer balance is 0. Fund the wallet with ETH on Arbitrum One."
-        : "Deployer balance is 0. Get testnet ETH for Arbitrum Sepolia (e.g. faucet / bridge)."
+      "Aster V3 must use the atomic stack deploy:\n" +
+        "  npx hardhat run scripts/deploy-kash-eth-aster-stack.js --network arbitrumOne\n" +
+        "  npm run deploy:eth-aster",
     );
   }
 
-  const botAddress = process.env.BOT_ADDRESS || deployer.address;
-
-  const DEFAULTS = {
-    arbitrumOne: {
-      weth: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
-      usdc: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
-    },
-    arbitrumSepolia: {
-      weth: "0x980B62Da83eFf3D4576C647993b0c1D7faf17c73",
-      usdc: "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d",
-    },
-  };
-  const networkDefaults = DEFAULTS[network] || DEFAULTS.arbitrumOne;
-
-  const wethAddress = process.env.WETH_ADDRESS || networkDefaults.weth;
-  const usdcAddress = process.env.USDC_ADDRESS || networkDefaults.usdc;
-
+  const keeperRegistry = process.env.KEEPER_REGISTRY_ADDRESS || hre.ethers.ZeroAddress;
   const feeReceiver = process.env.FEE_RECEIVER_ADDRESS || deployer.address;
 
-  console.log(`Deploying KashYieldETH (bot: ${botAddress}, weth: ${wethAddress}, usdc: ${usdcAddress}, feeReceiver: ${feeReceiver})...`);
-  const KashYieldETH = await hre.ethers.getContractFactory("KashYieldETH");
-  const kashYieldEth = await KashYieldETH.deploy(botAddress, wethAddress, usdcAddress, feeReceiver);
-  await kashYieldEth.waitForDeployment();
+  const cycleDuration = BigInt(process.env.CYCLE_DURATION_SECONDS || "86400");
+  const userWindowEnd = BigInt(process.env.USER_WINDOW_END || "85500");
+  const processingWindowStart = BigInt(process.env.PROCESSING_WINDOW_START || "85500");
+  const feeBps = BigInt(process.env.FEE_BPS || "3");
+  const maxSwapSlippageBps = BigInt(process.env.MAX_SWAP_SLIPPAGE_BPS || "100");
 
+  for (const [label, addr] of [
+    ["BOT_ADDRESS", botAddress],
+    ["WETH_ADDRESS", wethAddress],
+    ["USDC_ADDRESS", usdcAddress],
+    ["ETH_ORACLE", ethOracleAddress],
+    ["SPOT_DEX_ADDRESS", spotDexAddress],
+    ["EXCHANGE_ADAPTER_ADDRESS", adapterAddress],
+  ]) {
+    if (!addr || !hre.ethers.isAddress(addr)) {
+      throw new Error(`Set ${label} in .env`);
+    }
+  }
+
+  const predictedKashYield = await predictContractAddress(deployer, 1);
+
+  console.log("\nDeploy order (HL adapter already deployed):");
+  console.log("  1. ExchangeFacade → predicted KashYield:", predictedKashYield);
+  console.log("  2. KashYieldETH");
+  console.log("  Bot:          ", botAddress);
+  console.log("  Adapter:      ", adapterAddress, `(${exchangeName})`);
+  console.log("  Spot DEX:     ", spotDexAddress);
+  console.log("  ETH oracle:   ", ethOracleAddress);
+  console.log("  Fee receiver: ", feeReceiver);
+  console.log("");
+
+  const ExchangeFacade = await hre.ethers.getContractFactory("ExchangeFacade");
+  const facade = await ExchangeFacade.deploy(
+    botAddress,
+    keeperRegistry,
+    usdcAddress,
+    wethAddress,
+    predictedKashYield,
+    exchangeName,
+    adapterAddress,
+  );
+  await facade.waitForDeployment();
+  const facadeAddr = await facade.getAddress();
+  console.log("✅ ExchangeFacade:", facadeAddr);
+
+  const KashYieldETH = await hre.ethers.getContractFactory("KashYieldETH");
+  const kashYieldEth = await KashYieldETH.deploy(
+    botAddress,
+    wethAddress,
+    usdcAddress,
+    facadeAddr,
+    spotDexAddress,
+    ethOracleAddress,
+    keeperRegistry,
+    feeReceiver,
+    cycleDuration,
+    userWindowEnd,
+    processingWindowStart,
+    maxSwapSlippageBps,
+    feeBps,
+    10_000n,
+    10_000n,
+  );
+  await kashYieldEth.waitForDeployment();
   const kashYieldEthAddress = await kashYieldEth.getAddress();
+
+  if (kashYieldEthAddress.toLowerCase() !== predictedKashYield.toLowerCase()) {
+    throw new Error(`Address prediction failed: got ${kashYieldEthAddress}, expected ${predictedKashYield}`);
+  }
+
   const kashTokenEthAddress = await kashYieldEth.kashTokenEth();
   console.log("✅ KashYieldETH:", kashYieldEthAddress);
   console.log("✅ KashTokenEth:", kashTokenEthAddress);
-  console.log("   Aave pool:  ", await kashYieldEth.aavePoolAddress(), "(hardcoded mainnet)");
 
-  const fundAmount = process.env.FUND_KASHYIELD_ETH || "0";
-  if (fundAmount !== "0") {
-    const wei = hre.ethers.parseEther(fundAmount);
-    const tx = await deployer.sendTransaction({ to: kashYieldEthAddress, value: wei });
-    await tx.wait();
-    console.log("✅ Funded KashYieldETH with", fundAmount, "ETH");
-  }
-
-  const deploymentTitle = isArbitrumOne ? "ARBITRUM ONE (MAINNET)" : network.toUpperCase();
   console.log("\n====================================");
-  console.log("📋 KASHYIELD ETH —", deploymentTitle);
+  console.log("📋 KASHYIELDETH V3 (ownerless)");
   console.log("====================================");
-  console.log("  KashYieldETH:", kashYieldEthAddress);
-  console.log("  KashTokenEth:", kashTokenEthAddress);
-  console.log("  Aave pool:   ", await kashYieldEth.aavePoolAddress());
-  console.log("  USDC:        ", await kashYieldEth.usdcAddress());
-  console.log("  Initial NAV: ", hre.ethers.formatEther(await kashYieldEth.currentNAV()), "USD");
-  console.log("  Fee (bps):   ", await kashYieldEth.feeBps());
-  console.log("  Paused:      ", await kashYieldEth.paused());
+  console.log("  KashYieldETH:   ", kashYieldEthAddress);
+  console.log("  KashTokenEth:   ", kashTokenEthAddress);
+  console.log("  ExchangeFacade: ", facadeAddr);
+  console.log("  Perp adapter:   ", adapterAddress);
   console.log("====================================\n");
-  console.log("Add to .env, frontend/.env.local, and private kash-ops repo .env:");
+
+  console.log("Add to .env:");
   console.log(`  KASH_YIELD_ETH_ADDRESS=${kashYieldEthAddress}`);
   console.log(`  KASH_TOKEN_ETH=${kashTokenEthAddress}`);
-  console.log("\nNext: deploy HyperliquidAdapter + ExchangeFacade, then wire via kash-ops scripts/wire-exchange-facade.js");
+  console.log(`  EXCHANGE_FACADE_ETH_ADDRESS=${facadeAddr}`);
+  console.log("\nNext: verify on Arbiscan, publish deployer key.");
 
   const deploymentsDir = path.join(__dirname, "..", "deployments");
-  if (!fs.existsSync(deploymentsDir)) {
-    fs.mkdirSync(deploymentsDir, { recursive: true });
-  }
-
-  const deploymentInfo = {
+  if (!fs.existsSync(deploymentsDir)) fs.mkdirSync(deploymentsDir, { recursive: true });
+  const info = {
     network,
-    chainId: (await hre.ethers.provider.getNetwork()).chainId.toString(),
+    version: "3.0.0",
     timestamp: new Date().toISOString(),
     deployer: deployer.address,
     contracts: {
       kashYieldEth: kashYieldEthAddress,
       kashTokenEth: kashTokenEthAddress,
-    },
-    builtInAddresses: {
-      aavePool: await kashYieldEth.aavePoolAddress(),
-      weth: await kashYieldEth.wethAddress(),
-      usdc: await kashYieldEth.usdcAddress(),
+      exchangeFacade: facadeAddr,
+      perpAdapter: adapterAddress,
+      exchangeName,
+      spotDex: spotDexAddress,
+      weth: wethAddress,
+      usdc: usdcAddress,
+      ethOracle: ethOracleAddress,
+      bot: botAddress,
+      keeperRegistry,
+      feeReceiver,
     },
   };
-
-  const filename = `deployment-${network}-${Date.now()}.json`;
-  const filepath = path.join(deploymentsDir, filename);
-  fs.writeFileSync(filepath, JSON.stringify(deploymentInfo, null, 2));
+  const filepath = path.join(deploymentsDir, `kashyieldeth-v3-${network}-${Date.now()}.json`);
+  fs.writeFileSync(filepath, JSON.stringify(info, null, 2));
   console.log("💾 Saved:", filepath);
-
-  console.log("\nVerify on Arbiscan (constructor: bot, weth, usdc, feeReceiver):");
-  console.log(
-    `  npx hardhat verify --network ${network} ${kashYieldEthAddress} ${botAddress} ${wethAddress} ${usdcAddress} ${feeReceiver}`
-  );
-  console.log("\n✅ Done.");
 }
 
 main()

@@ -16,7 +16,7 @@ const {
   settleRedeemPhase2,
   claimRedeemForUser,
   claimMintForUser,
-  deployAndWireExchangeFacade,
+  deployKashYieldEthStack,
   depositToPerpExchangeViaFacade,
   withdrawFromPerpExchangeViaFacade,
 } = require("./helpers/forkBatchOps");
@@ -29,6 +29,7 @@ const FORK_BLOCK = process.env.FORK_BLOCK_NUMBER
 const USDC_ADDRESS = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831";
 const WETH_ADDRESS = "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1";
 const WBTC_ADDRESS = "0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f";
+const ETH_ORACLE_ADDRESS = "0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612";
 const HL_BRIDGE   = "0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7";
 const CYCLE_SECS  = 3600n;
 const NAV_1       = 10n ** 18n;
@@ -39,6 +40,7 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
   let owner, bot, user1, user2, user3;
   let kashYieldEth, kashTokenEth;
   let uniAdapter, hlAdapter;
+  let mockEthOracle;
   let usdc, weth, wbtc;
 
   before(async function () {
@@ -67,41 +69,34 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     );
     await uniAdapter.waitForDeployment();
 
-    // Deploy KashYieldETH
-    const KashYieldETH = await ethers.getContractFactory("KashYieldETH");
-    kashYieldEth = await KashYieldETH.deploy(
-      bot.address,
-      WETH_ADDRESS,
-      USDC_ADDRESS,
-      owner.address
+    // Seed a mock oracle with the real Chainlink ETH/USD price so this suite can
+    // later move the price (setMockEthPrice) without redeploying the immutable
+    // V3 vault — its oracle address is fixed at construction time.
+    const realOracle = await ethers.getContractAt(
+      ["function latestRoundData() view returns (uint80,int256,uint256,uint256,uint80)",
+       "function decimals() view returns (uint8)"],
+      ETH_ORACLE_ADDRESS
     );
-    await kashYieldEth.waitForDeployment();
+    const [, realAnswer] = await realOracle.latestRoundData();
+    const realDecimals = await realOracle.decimals();
+    const MockChainlinkOracle = await ethers.getContractFactory("MockChainlinkOracle");
+    mockEthOracle = await MockChainlinkOracle.deploy(realAnswer, realDecimals);
+    await mockEthOracle.waitForDeployment();
 
-    // Configure
-    await kashYieldEth.setSpotDex(await uniAdapter.getAddress());
-    await kashYieldEth.setCycleDurationSeconds(CYCLE_SECS);
-    await kashYieldEth.setUserWindowEnd(CYCLE_SECS);
-    await kashYieldEth.setProcessingWindowStart(0n);
-
-    // Deploy HyperliquidAdapter (ETH product)
-    const HyperliquidAdapter = await ethers.getContractFactory("HyperliquidAdapter");
-    hlAdapter = await HyperliquidAdapter.deploy(
-      HL_BRIDGE,
-      USDC_ADDRESS,
-      ethers.ZeroAddress,
-      true,
-      await kashYieldEth.getAddress()
-    );
-    await hlAdapter.waitForDeployment();
-
-    await deployAndWireExchangeFacade({
-      kashYield: kashYieldEth,
-      owner,
+    // Deploy KashYieldETH V3 stack (facade + HL adapter + vault)
+    ({ kashYieldEth, hlAdapter } = await deployKashYieldEthStack({
+      deployer: owner,
       bot,
+      owner,
+      wethAddress: WETH_ADDRESS,
       usdcAddress: USDC_ADDRESS,
-      primaryAsset: ethers.ZeroAddress,
-      hlAdapter,
-    });
+      uniAdapter,
+      ethOracle: await mockEthOracle.getAddress(),
+      feeReceiver: owner.address,
+      cycleDurationSeconds: CYCLE_SECS,
+      userWindowEnd: CYCLE_SECS,
+      processingWindowStart: 0n,
+    }));
 
     const kashTokenAddr = await kashYieldEth.kashTokenEth();
     kashTokenEth = await ethers.getContractAt("IERC20", kashTokenAddr);
@@ -196,13 +191,12 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
   }
 
   async function setMockEthPrice(price18) {
-    const MockChainlinkOracle = await ethers.getContractFactory("MockChainlinkOracle");
+    // KashYieldETH V3's oracle address is immutable, so the mock deployed in
+    // before() stays wired — just update its answer.
     // KashYieldETH normalizes oracle answers by `10 ** (18 - decimals)`.
-    // Use an 8-decimal Chainlink-style answer for parity with Arbitrum ETH/USD.
-    const mockOracle = await MockChainlinkOracle.deploy(price18 / (10n ** 10n), 8);
-    await mockOracle.waitForDeployment();
-    await kashYieldEth.setEthOracle(await mockOracle.getAddress());
-    return mockOracle;
+    // The mock uses an 8-decimal Chainlink-style answer for parity with Arbitrum ETH/USD.
+    await mockEthOracle.setAnswer(price18 / (10n ** 10n));
+    return mockEthOracle;
   }
 
   it("Multiple users mint in the same batch — both receive KashTokens", async function () {

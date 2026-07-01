@@ -81,13 +81,22 @@ export const kashYieldABI = [
         components: [
           { name: "user", type: "address" },
           { name: "amountIn", type: "uint256" },
-          { name: "amountInUSD", type: "uint256" },
           { name: "batchCycle", type: "uint256" },
         ],
         name: "",
         type: "tuple",
       },
     ],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [
+      { name: "user", type: "address" },
+      { name: "batchCycle", type: "uint256" },
+    ],
+    name: "getMintRequestUSD",
+    outputs: [{ name: "", type: "uint256" }],
     stateMutability: "view",
     type: "function",
   },

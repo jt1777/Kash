@@ -32,8 +32,8 @@ The only supported deposit path is the frontend **Mint KASH** section (or an equ
 The protocol is governed entirely by smart contracts. If there is a bug in the code, funds could be lost or locked. Mitigations in place:
 
 - All user-facing functions are protected against reentrancy attacks
-- New exchanges that KASH may interact with require a **24-hour waiting period** before they can be activated (preventing a compromised key from instantly routing funds to a malicious contract)
-- An emergency pause function exists that can halt all user activity
+- Each vault is ownerless: the exchange adapter, spot DEX, oracle, and fees are fixed permanently at deploy, so there is no privileged key that could redirect funds to a malicious contract after launch
+- There is no emergency pause — see [Safeguards](#safeguards) for the tradeoffs of the ownerless design
 
 **Verification steps:** The Contract Address link in the app footer leads to the verified contract page on Arbiscan.
 
@@ -88,7 +88,7 @@ In the planned production configuration, the adapter *contract* would be the HL 
 
 The upgrade to non-direct deposit mode is blocked by the inability to call `approveAgent` for a smart-contract HL account (the adapter contract cannot sign EIP-712 messages). This is expected to be resolved by deploying an EIP-1271-capable adapter, or by integrating **Aster** (an Arbitrum-native perp DEX) as an alternative exchange. Because Aster runs natively on Arbitrum, its adapter contract can directly control positions without any cross-chain custody or agent-approval step — eliminating this risk class entirely.
 
-**Mitigations in the interim:** The bot address is distinct from the contract owner address on-chain, limiting what a single-key compromise can do. Continuous monitoring and automated batch operations reduce the need for manual intervention.
+**Mitigations in the interim:** The bot address is the only privileged address on-chain (there is no separate owner key), and it is fixed at deploy — it cannot be rotated to attacker control after launch. Continuous monitoring and automated batch operations reduce the need for manual intervention.
 
 ---
 
@@ -108,42 +108,36 @@ Funds deposited in KASH are not insured. There is no protocol-level insurance fu
 
 KASH is designed with layered protections against **external exploits** (hacks, malicious contracts, reentrancy) and **privileged-key misuse** (rugpulls by owner or operator). No set of safeguards eliminates all risk — see the sections above — but the following are built into the live contracts.
 
+**Both KASH-ETH and KASH-BTC vaults are ownerless.** There is no contract owner, no pause, and no post-deploy setters — the bot address, exchange adapter, spot DEX, oracle, fees, and cycle timing are all fixed permanently at deploy time. This removes owner-key-misuse risk entirely (there is no owner key to compromise), but it also means there is no emergency pause switch: an incident can only be mitigated by the bot stopping operations and, if needed, migrating users to a redeployed vault.
+
 ### Protections against hacks and external exploits
 
 **Capital deployment is bot-gated.** Moving funds to Aave, Hyperliquid, or spot DEXs — opening or closing shorts, borrowing, repaying, and swapping — can only be called by the configured **bot** or **keeper** addresses. A random attacker who finds a UI bug or phishes users cannot invoke these functions directly; they would need to compromise the bot or keeper key.
 
 **Reentrancy guards on high-risk paths.** Batch settlement and all external protocol interactions (Aave, perp DEX, spot swaps) use reentrancy protection. State is updated before outbound calls where it matters, reducing classic reentrancy drain vectors.
 
-**Whitelisted integrations only.** Spot swaps can only route through **pre-approved DEX adapter contracts**, and only among **allowed tokens**. The owner cannot point the vault at an arbitrary malicious router in a single transaction.
+**Whitelisted integration, fixed at deploy.** Each vault is bound to one exchange adapter and one spot DEX adapter, set permanently in the constructor. There is no owner and no registry — nobody can redirect the vault to a different or malicious router after deployment; changing the integration requires deploying a new vault.
 
-**Timelock before new exchange adapters.** Registering a new perp or spot DEX adapter starts a **24-hour waiting period** on mainnet. A compromised owner key cannot instantly redirect the entire vault to a fake exchange — users and monitors have time to react before the adapter is confirmed and activated. The owner can lengthen this delay if desired.
-
-**Swap slippage cap.** On-chain swaps enforce a maximum slippage bound, limiting how much value can be lost to sandwich attacks or misconfigured routes in a single swap.
+**Bot-supplied swap protection.** Each on-chain swap requires a minimum-output amount, supplied by the bot from a live quote at execution time — protecting against unfavorable fills in normal operation. This is not independently verified on-chain; it relies on the bot behaving correctly (see [Centralisation risk](#centralisation-risk)).
 
 **Safe token handling.** ERC-20 transfers use standard safe-transfer patterns, avoiding non-standard token return-value bugs.
 
 **Batch processing limits flash-loan abuse.** Deposits and redemptions queue for the **next daily batch**; there is no same-block deposit-and-redeem loop to farm NAV or funding in one transaction.
 
-**Emergency pause.** The owner can pause mints and redemptions. While paused, normal user flows stop — limiting damage while an incident is investigated.
-
 **Verified, auditable code.** Contract source is **verified on Arbiscan** and published in the public GitHub repo so anyone can compare deployed bytecode to the intended source.
 
-### Protections against owner misuse
+### No owner misuse is possible
 
-**Pending user funds are ring-fenced.** When a deposit is submitted, ETH or wBTC is tracked in an on-chain **reserved** balance. Owner withdrawal functions can only take assets **above** what is reserved for pending mints and estimated redeems across recent unprocessed batches. Any attempt to withdraw reserved funds **reverts automatically**.
+There is no contract owner on either vault, so the classic risks of privileged-key misuse — rotating to a malicious bot, redirecting to a fake exchange, pausing indefinitely, or withdrawing more than intended — do not apply. The tradeoff is that nothing on-chain can be adjusted or paused after deploy; correcting a misconfiguration or responding to an incident means the bot halting operations and, if necessary, users migrating to a redeployed vault.
 
-**Users can cancel before the batch runs.** While the user window is open and the batch has not entered processing, a pending mint or redeem may be **cancelled** and assets or KASH returned — without owner involvement.
-
-**Users can self-rescue if the contract is paused.** If the contract is paused, dedicated emergency withdrawal paths allow reclamation of a **still-pending** request directly from the contract. These paths do not go through the owner. They require interacting with the contract directly (e.g. Arbiscan “Write Contract”) rather than the app UI.
-
-**Stray tokens only.** Token rescue exists to recover mistakenly sent ERC-20s (not the main deposit asset), sent to a designated recipient.
+**Users can cancel before the batch runs.** While the user window is open and the batch has not entered processing, a pending mint or redeem may be **cancelled** and assets or KASH returned.
 
 ### Operator and NAV transparency
 
-**Separate bot key from owner.** Day-to-day batch ops use a dedicated **bot** address, distinct from the contract **owner**. Compromising one key does not automatically grant the other’s privileges — though either compromise remains serious.
+**Separate bot key; no owner key at all.** Day-to-day batch ops use a dedicated **bot** address — the only privileged address on either vault. There is no owner key whose compromise could compound the impact of a bot compromise.
 
 **NAV updates are recorded on-chain.** Each batch, the bot submits the new NAV used for mint and redeem pricing. The value is not recomputed inside the smart contract; it reflects off-chain portfolio marking from on-chain balances and perp economics. Each update is emitted on-chain for public audit after the fact. A compromised or buggy bot could still post an unfair NAV — **multi-signature** or additional controls for NAV submission remain on the roadmap.
 
-**Planned improvements:** **Chainlink Automation** for decentralised batch triggering, and **multi-sig** owner/operator control — see [Centralisation risk](#centralisation-risk) above.
+**Planned improvements:** **Chainlink Automation** for decentralised batch triggering, and **multi-signature** bot control — see [Centralisation risk](#centralisation-risk) above.
 
 ---

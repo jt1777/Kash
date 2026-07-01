@@ -115,14 +115,14 @@ async function loadBatchMintData(
       functionName: 'batchMintUsers',
       args: [batchCycle, BigInt(i)],
     });
-    const req = await client.readContract({
+    const usd = await client.readContract({
       address: kashYield,
       abi: kashYieldABI,
-      functionName: 'getPendingMintRequest',
+      functionName: 'getMintRequestUSD',
       args: [minter, batchCycle],
     });
     minters.push(minter);
-    amountInUSD.push(req.amountInUSD);
+    amountInUSD.push(usd);
   }
 
   return { minters, amountInUSD, totalMintUSD, totalMintClaimable, mintRoot: claimInfo[1] as Hex };
