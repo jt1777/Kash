@@ -86,6 +86,8 @@ async function main() {
     usdcAddress,
     baseToken,
     predictedFacade,
+    predictedKashYield,
+    8,
   );
   await adapter.waitForDeployment();
   const adapterAddr = await adapter.getAddress();

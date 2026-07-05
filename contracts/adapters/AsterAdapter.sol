@@ -48,6 +48,11 @@ interface IAsterAccountBalance {
     function getOpenNotional(address trader, address baseToken) external view returns (int256 openNotional);
 }
 
+interface IKashYieldOracle {
+    function getEthPrice() external view returns (uint256);
+    function getBtcPrice() external view returns (uint256);
+}
+
 error OnlyFacade();
 error InvalidAddress();
 
@@ -67,8 +72,14 @@ contract AsterAdapter is IPerpExchange {
     address public immutable usdcAddress;
     address public immutable baseToken;
     address public immutable exchangeFacade;
+    /// @notice KashYield vault for Chainlink-backed asset USD price (18-dec).
+    address public immutable kashYieldOracle;
+    /// @notice Base token decimals (8 wBTC, 18 ETH) for notional / slippage bounds.
+    uint8 public immutable assetTokenDecimals;
 
     uint256 public constant DEFAULT_DEADLINE_OFFSET = 60;
+    /// @notice IOC-style limit padding (300 = 3%, matches HL batch relay).
+    uint16 public constant SLIPPAGE_BPS = 300;
 
     event AdapterCall(string action, uint256 amount);
 
@@ -83,15 +94,46 @@ contract AsterAdapter is IPerpExchange {
         address _accountBalance,
         address _usdcAddress,
         address _baseToken,
-        address _exchangeFacade
+        address _exchangeFacade,
+        address _kashYieldOracle,
+        uint8 _assetTokenDecimals
     ) {
-        if (_exchangeFacade == address(0)) revert InvalidAddress();
+        if (_exchangeFacade == address(0) || _kashYieldOracle == address(0)) revert InvalidAddress();
+        if (_assetTokenDecimals == 0) revert InvalidAddress();
         clearingHouse  = _clearingHouse;
         vault          = _vault;
         accountBalance = _accountBalance;
         usdcAddress    = _usdcAddress;
         baseToken      = _baseToken;
         exchangeFacade = _exchangeFacade;
+        kashYieldOracle = _kashYieldOracle;
+        assetTokenDecimals = _assetTokenDecimals;
+    }
+
+    function _assetPriceUsd18() internal view returns (uint256) {
+        if (assetTokenDecimals <= 8) {
+            return IKashYieldOracle(kashYieldOracle).getBtcPrice();
+        }
+        return IKashYieldOracle(kashYieldOracle).getEthPrice();
+    }
+
+    /// @dev USDC 6-dec min quote when selling `assetAmount` base (short open / extend).
+    function _minQuoteUsdc6ForSell(uint256 assetAmount) internal view returns (uint256) {
+        if (assetAmount == 0) return 0;
+        uint256 price = _assetPriceUsd18();
+        uint256 notional18 = assetAmount * price / (10 ** uint256(assetTokenDecimals));
+        uint256 min18 = notional18 * (10000 - SLIPPAGE_BPS) / 10000;
+        return min18 / 1e12;
+    }
+
+    /// @dev USDC 6-dec max quote when buying `assetAmount` base (close short).
+    function _maxQuoteUsdc6ForBuy(uint256 assetAmount) internal view returns (uint256) {
+        if (assetAmount == 0) return type(uint256).max;
+        uint256 price = _assetPriceUsd18();
+        uint256 notional18 = assetAmount * price / (10 ** uint256(assetTokenDecimals));
+        uint256 max18 = notional18 * (10000 + SLIPPAGE_BPS) / 10000;
+        uint256 usdc6 = max18 / 1e12;
+        return usdc6 > 0 ? usdc6 : 1;
     }
 
     function depositCollateral(address token, uint256 amount) external override onlyFacade {
@@ -122,7 +164,7 @@ contract AsterAdapter is IPerpExchange {
             isBaseToQuote: true,
             isExactInput: true,
             amount: size,
-            oppositeAmountBound: 0,
+            oppositeAmountBound: _minQuoteUsdc6ForSell(size),
             deadline: block.timestamp + DEFAULT_DEADLINE_OFFSET,
             sqrtPriceLimitX96: 0,
             referralCode: bytes32(0)
@@ -144,7 +186,7 @@ contract AsterAdapter is IPerpExchange {
             isBaseToQuote: false,
             isExactInput: false,
             amount: closeSize,
-            oppositeAmountBound: type(uint256).max,
+            oppositeAmountBound: _maxQuoteUsdc6ForBuy(closeSize),
             deadline: block.timestamp + DEFAULT_DEADLINE_OFFSET,
             sqrtPriceLimitX96: 0,
             referralCode: bytes32(0)
