@@ -4,13 +4,17 @@ KASH is being rolled out in three phases. Each phase adds new **Plays** to the o
 
 ---
 
-## Phase 1 — Positive funding (live testing now)
+## Phase 1 — Positive funding (pre-audit beta, live on Arbitrum)
 
-**Status:** Deployed on Arbitrum One (KASH-ETH and KASH-BTC).
+**Status:** Deployed on Arbitrum One (KASH-ETH and KASH-BTC). **Pre-audit — test amounts only.**
+
+Phase 1 runs on what we call the **Hyperliquid contracts** — the current deployment that executes the strategy through Hyperliquid's perpetual futures exchange. These contracts are live, processing real batches, but have not yet undergone a full third-party audit. Users should treat this as a beta and limit deposits accordingly.
+
+A second deployment — the **Aster contracts** — is in development. Aster is an Arbitrum-native perpetuals exchange, which means the entire execution loop (collateral pool → borrow → short → settle) stays on Arbitrum without any cross-chain custody step. This removes a significant class of security risk present in the Hyperliquid deployment and includes additional security improvements over the current architecture. The Aster contracts will become the recommended deployment once testing is complete.
 
 Phase 1 implements a single Play designed for **positive funding rates** — the common case in bull markets where longs pay shorts on perpetuals exchanges.
 
-**The Play (delta-neutral short):**
+**The Play (market-neutral short):**
 
 1. User deposits **ETH** or **wBTC** into the vault during the daily user window
 2. At batch time, the bot deposits collateral to **Aave**, borrows **USDC**, posts margin on **Hyperliquid**, and opens a **short** perp position sized to hedge the collateral
