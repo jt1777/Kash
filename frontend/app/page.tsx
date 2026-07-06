@@ -238,6 +238,16 @@ export default function Home() {
           font-weight: 600;
           text-shadow: 0 0 10px rgba(0, 255, 255, 0.35);
         }
+        .landing .hero-human-hint-action {
+          color: #00FFFF;
+          font-weight: 600;
+          text-shadow: 0 0 10px rgba(0, 255, 255, 0.35);
+          text-decoration: underline;
+          text-underline-offset: 3px;
+        }
+        .landing .hero-human-hint-action:hover {
+          color: #7DF9FF;
+        }
         .landing .cta-button {
           display: inline-block;
           background: #00FFFF;
@@ -440,6 +450,57 @@ export default function Home() {
           font-size: 0.88rem;
           line-height: 1.65;
         }
+        .landing .proof-card--url-scroll {
+          min-width: 0;
+          overflow-x: auto;
+        }
+        .landing .proof-url-scroll {
+          margin-top: 8px;
+          max-width: 100%;
+          overflow-x: auto;
+          border-radius: 4px;
+          background: rgba(0, 0, 0, 0.25);
+          padding: 8px 10px;
+        }
+        .landing .proof-url-scroll code {
+          display: block;
+          white-space: nowrap;
+          word-break: normal;
+          font-size: 0.82rem;
+        }
+        .landing .code-block,
+        .landing .proof-url-scroll,
+        .landing .proof-card--url-scroll {
+          scrollbar-width: thin;
+          scrollbar-color: rgba(0, 255, 255, 0.35) rgba(0, 20, 35, 0.55);
+        }
+        .landing .code-block::-webkit-scrollbar,
+        .landing .proof-url-scroll::-webkit-scrollbar,
+        .landing .proof-card--url-scroll::-webkit-scrollbar {
+          height: 6px;
+        }
+        .landing .code-block::-webkit-scrollbar-track,
+        .landing .proof-url-scroll::-webkit-scrollbar-track,
+        .landing .proof-card--url-scroll::-webkit-scrollbar-track {
+          background: rgba(0, 20, 35, 0.55);
+          border-radius: 3px;
+        }
+        .landing .code-block::-webkit-scrollbar-thumb,
+        .landing .proof-url-scroll::-webkit-scrollbar-thumb,
+        .landing .proof-card--url-scroll::-webkit-scrollbar-thumb {
+          background: rgba(0, 255, 255, 0.3);
+          border-radius: 3px;
+          border: 1px solid rgba(0, 255, 255, 0.12);
+        }
+        .landing .code-block::-webkit-scrollbar-thumb:hover,
+        .landing .proof-url-scroll::-webkit-scrollbar-thumb:hover,
+        .landing .proof-card--url-scroll::-webkit-scrollbar-thumb:hover {
+          background: rgba(0, 255, 255, 0.5);
+        }
+        .landing .ai-section-divider {
+          margin: 0 auto 16px;
+          padding: 0;
+        }
         .landing .proof-details {
           margin-top: 12px;
           border-top: 1px solid rgba(0, 255, 255, 0.15);
@@ -625,7 +686,11 @@ export default function Home() {
               Returns based on funding rates — verify contracts and risk disclosure before allocating capital.
             </p>
             <p className="hero-human-hint" role="note">
-              <strong>FOR HUMANS:</strong> read <strong>Documentation</strong> first, then click <strong>Launch App</strong> to begin.
+              <strong>FOR HUMANS:</strong> read{' '}
+              <a href={GITBOOK_SPACE} target="_blank" rel="noopener noreferrer" className="hero-human-hint-action">Documentation</a>
+              {' '}first, then click{' '}
+              <Link href="/app" className="hero-human-hint-action">Launch App</Link>
+              {' '}to begin.
             </p>
             <div>
               <Link href="/app" className="cta-button">🚀 Launch App</Link>
@@ -685,6 +750,7 @@ export default function Home() {
 
         <section className="for-ai" id="agent-brief">
           <div className="container">
+            <p className="section-caption ai-section-divider" role="note">Everything below this is for AI Agents</p>
             <h2 className="section-title">Built for AI agents</h2>
             <p className="section-caption">
               Machine-readable integration brief. Deposits require native ETH, WETH, or wBTC on Arbitrum One (minimum $10 notional). Confirm addresses before mainnet execution.
@@ -854,7 +920,7 @@ export default function Home() {
             <p className="section-caption">
               Follow this sequence if you are an agent evaluating whether to allocate idle ETH or wBTC. The complete guide is{' '}
               <a href={GITBOOK_AGENT_QUICKSTART} target="_blank" rel="noopener noreferrer">Agent Quickstart</a>
-              {' '}on GitBook.
+              {' '}in the Documentation.
             </p>
             <div className="proof-grid">
               <div className="proof-card">
@@ -886,20 +952,25 @@ export default function Home() {
                   <code style={{ color: '#00FFFF' }}>mintClaimed</code> / <code style={{ color: '#00FFFF' }}>redeemClaimed</code> and <code style={{ color: '#00FFFF' }}>TokensClaimed</code> after you claim.
                 </p>
               </div>
-              <div className="proof-card">
+              <div className="proof-card proof-card--url-scroll">
                 <h3>5. Claim mint</h3>
                 <p>
                   After settlement, fetch the hosted mint proof manifest and call{' '}
-                  <code style={{ color: '#00FFFF' }}>claimMint(batchCycle, amount, proof)</code>. Proofs are public JSON at{' '}
-                  <code style={{ color: '#a5d6ff' }}>{mintProofBase}/{'{eth|btc}'}-mint-batch-{'{batchCycle}'}.json</code> (or rebuild from chain if unavailable).
+                  <code style={{ color: '#00FFFF' }}>claimMint(batchCycle, amount, proof)</code>. Proofs are public JSON at:
                 </p>
+                <div className="proof-url-scroll">
+                  <code style={{ color: '#a5d6ff' }}>{mintProofBase}/{'{eth|btc}'}-mint-batch-{'{batchCycle}'}.json</code>
+                </div>
+                <p style={{ marginTop: 8 }}>(or rebuild from chain if unavailable).</p>
               </div>
-              <div className="proof-card">
+              <div className="proof-card proof-card--url-scroll">
                 <h3>6. Redeem</h3>
                 <p>
-                  Approve the relevant KASH token to its KashYield vault, call <code style={{ color: '#00FFFF' }}>requestRedeem(kashAmount)</code> before the batch cutoff, then call <code style={{ color: '#00FFFF' }}>claimRedeem(batchCycle, amount, proof)</code> after settlement. Redeem proofs:{' '}
-                  <code style={{ color: '#a5d6ff' }}>{redeemProofBase}/{'{eth|btc}'}-batch-{'{batchCycle}'}.json</code>.
+                  Approve the relevant KASH token to its KashYield vault, call <code style={{ color: '#00FFFF' }}>requestRedeem(kashAmount)</code> before the batch cutoff, then call <code style={{ color: '#00FFFF' }}>claimRedeem(batchCycle, amount, proof)</code> after settlement. Redeem proofs:
                 </p>
+                <div className="proof-url-scroll">
+                  <code style={{ color: '#a5d6ff' }}>{redeemProofBase}/{'{eth|btc}'}-batch-{'{batchCycle}'}.json</code>
+                </div>
               </div>
               <div className="proof-card">
                 <h3>7. Risk gate</h3>
