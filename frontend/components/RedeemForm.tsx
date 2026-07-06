@@ -206,13 +206,6 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
     stuckRedeem?.batchCycle ??
     currentBatchCycle;
 
-  const { data: paused } = useReadContract({
-    address: kashYield,
-    abi: kashYieldABI,
-    functionName: 'paused',
-    query: { refetchInterval: 15_000 },
-  });
-
   const { data: pendingRedeemRequest, refetch: refetchPendingRedeem } = useReadContract({
     address: kashYield,
     abi: kashYieldABI,
@@ -617,9 +610,7 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
             Redeem in progress (batch cycle {stuckRedeem.batchCycle.toString()})
           </p>
           <p className="text-sm text-gray-600">
-            {paused
-              ? 'The protocol is paused — you can recover your KASH via emergencyWithdrawRedeem on the contract.'
-              : `Your ${isBtc ? 'wBTC' : 'ETH'} will be sent to your wallet when the batch finishes. After settlement, claim from this form. If this stays stuck, contact the operator.`}
+            {`Your ${isBtc ? 'wBTC' : 'ETH'} will be sent to your wallet when the batch finishes. After settlement, claim from this form. If this stays stuck, contact the operator.`}
           </p>
           <p className="text-sm text-orange-800">
             {Number(formatEther(stuckRedeem.amount)).toFixed(4)} {redeemSymbol} is locked on the vault while the batch

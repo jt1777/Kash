@@ -8,71 +8,78 @@ KASH earns yield through a **delta-neutral funding rate strategy**. This page ex
 
 When ETH is deposited into KASH:
 
-1. ETH is deposited into a **lending protocol** as collateral
+1. ETH is deposited into **Aave** as collateral
 2. The protocol borrows **USDC** against that collateral
-3. The USDC is sent to a **perpetuals exchange (perp DEX)**
-4. On the perp DEX, the protocol opens a **short ETH position** of equivalent size
+3. Collateral and margin are managed on **Aster**, an Arbitrum-native perp DEX
+4. The protocol opens a **short ETH position** sized to hedge the collateral
 
-The result: the protocol holds ETH (long) and simultaneously holds a short ETH position of the same size. The two positions cancel out — no directional exposure to ETH price. This is what "delta-neutral" means.
+The result: the protocol holds ETH (long via Aave collateral) and a short on Aster of equivalent economic exposure. The two sides largely cancel out — limited directional exposure to ETH price. This is what “delta-neutral” means.
 
-**The yield comes from funding rates.** On perpetuals exchanges, when the futures price is greater than the oracle price (or spot market price) traders who are long pay a fee to traders who are short (funding rate is positive). If the futures price is below the oracle price, then traders who are short pay a fee to traders who are long (funding rate is negative). When longs dominate the market — which is historically common in bull markets — shorts earn a continuous funding rate income. That income accrues to the protocol and flows back to token holders through an increasing NAV.
+**The yield comes from funding rates.** On perpetuals exchanges, when the futures price is above the oracle price, longs often pay shorts (positive funding). When funding is positive, the short leg earns income that accrues to the vault and flows to token holders through a rising **NAV**. Funding can turn negative — then shorts pay longs and NAV can stagnate or fall.
 
 ---
 
 ## Net Asset Value (NAV)
 
-Every KASH token is priced at the current **NAV — Net Asset Value**. NAV represents the total value of everything the protocol holds, divided by the total number of KASH tokens in circulation.
+Every KASH token is priced at the current **NAV — Net Asset Value**:
 
 ```
 NAV = Total Portfolio Value (USD) ÷ Total KASH Supply
 ```
 
-**What's in the portfolio:**
-- ETH / wBTC held in the lending protocol
-- USDC in the perp DEX trading account
-- Accrued funding fees and interest
-- Value of open perpetual positions
+**What's in the portfolio (typical):**
+- ETH / wBTC in Aave collateral
+- USDC and position value on **Aster**
+- Accrued funding and lending interest
+- Vault cash and spot balances
 
 **What's subtracted:**
-- USDC borrowed from the lending protocol
-- Interest owed on borrowings
-- Any unrealised losses on positions
+- USDC borrowed from Aave
+- Borrow interest owed
+- Unrealised losses on hedges (if any)
 
-NAV starts at $1.00 when the protocol launches. As yield accrues, NAV increases. On redemption, assets worth KASH × current NAV are returned.
+NAV starts at **$1.00** per KASH at launch (`1e18` wei). As yield accrues, NAV increases.
 
 ---
 
 ## When is NAV updated?
 
-NAV is updated **once per day** during batch processing (around 23:40–23:59 UTC). The operator calculates the true portfolio value off-chain, then submits the new NAV to the contract before distributing tokens. This means the NAV displayed in the app reflects the previous day's closing value.
+NAV is updated **during daily batch processing** (typically in the processing window before settlement). The operator bot:
 
-The contract does not automatically calculate NAV from the portfolio — the operator calculates portfolio value externally and submits it each day. On-chain price feeds are used to value deposits at batch time, but the complete portfolio valuation (collateral positions, perp position values, accrued funding) is computed by the operator and then written to the contract. All NAV submissions are recorded on-chain and publicly verifiable.
+1. Marks the portfolio to market from on-chain reads (Aave, Aster, vault, Chainlink)
+2. Runs batch ops (Aave + Aster + swaps as needed)
+3. Submits **`updateNAV`** and settles the batch (Merkle claims for mints and redeems)
 
-> **Roadmap — automated on-chain NAV:** All portfolio balances (lending protocol collateral, borrowed stablecoin, perp DEX spot balance and position value) are readable from on-chain contracts in the current deployment. A planned upgrade will compute NAV directly on-chain from those balances, combined with automated daily execution via Chainlink Automation. This will remove the need for any manual NAV submission and eliminate the operator trust assumption entirely. On mainnet with a cross-chain perp exchange, a compatible cross-chain data solution would also be required for the perp side.
+The contract does **not** auto-compute NAV from all legs in one on-chain function — the bot submits the value. Submissions are emitted on-chain for audit.
+
+> **Roadmap:** Tighter on-chain NAV checks and **Chainlink Automation** for upkeep are planned to reduce operator trust assumptions further.
 
 ---
 
 ## The daily batch cycle
 
-Every 24 hours:
+Every **24 hours** (cycle length is **fixed at deploy** on V3 — confirm live times in the app):
 
-| Time (UTC) | What happens |
-|-----------|--------------|
-| 00:00 – 23:39 | User window: deposits and redemptions may be submitted |
-| 23:40 – 23:59 | Processing window: batch runs, no new requests accepted |
-| After 23:59 | Batch complete: KASH tokens become claimable via `claimMint`; redeem assets become claimable via `claimRedeem` |
+| Phase | Typical time (UTC) | What happens |
+|-------|-------------------|--------------|
+| User window | Start of cycle → ~23:40 | `requestMint` / `requestRedeem` accepted |
+| Processing window | ~23:40 → end of cycle | Batch ops + settlement; new requests **rejected** |
+| After settlement | Same cycle | **`claimMint`** / **`claimRedeem`** with Merkle proofs |
 
-A deposit or redemption submitted on a given day is included in that day's batch, provided it is submitted before **23:40 UTC**.
+Submit before the processing window cutoff to be included in that day's batch.
+
+**V3 note:** Phase 1 for cycle **N+1** **reverts** if cycle **N** is still in Phase 1 (batch overlap guard).
 
 ---
 
-
 ## What determines yield?
 
-The main driver is the **funding rate** on perpetuals markets:
+The main driver is the **funding rate** on Aster perps:
 
-- In sustained bull markets, funding rates for shorts are typically positive — the vault earns
-- In bear markets or sideways conditions, funding rates can turn negative — the vault pays
-- The lending protocol also earns interest on the ETH collateral, which adds a small base return
+- Bull markets: funding is often positive — shorts earn
+- Bear or sideways: funding can flip negative — vault pays
+- Aave supply interest on collateral adds a smaller base return
 
-Historical funding rates on perpetuals have generally been positive over bull cycles, however this is not guaranteed for future periods.
+Historical funding has often been positive in bull cycles; **future funding is not guaranteed**.
+
+The app’s **P.A. Yield** is an **indicative** annualised figure computed in the browser from live **Aster funding** and **Aave** rates plus documented strategy multipliers — not a promise of realised NAV growth.

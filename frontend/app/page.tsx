@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { DisclaimerGate } from '@/components/DisclaimerGate';
+import { LandingMetrics } from '@/components/LandingMetrics';
 import { SiteFooter } from '@/components/SiteFooter';
 import {
   ARBITRUM_ONE_BLOCK_EXPLORER,
@@ -30,11 +31,40 @@ function shortenAddress(address: string): string {
   return `${address.slice(0, 6)}…${address.slice(-4)}`;
 }
 
+function resolvePublicAppUrl(): string {
+  return (
+    process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/+$/, '') ||
+    'https://www.kash-token.io'
+  );
+}
+
+function resolveProofBaseUrl(envValue: string | undefined, path: string): string {
+  const trimmed = envValue?.trim().replace(/\/+$/, '');
+  if (trimmed) {
+    return trimmed.startsWith('http') ? trimmed : `${resolvePublicAppUrl()}${trimmed.startsWith('/') ? trimmed : `/${trimmed}`}`;
+  }
+  return `${resolvePublicAppUrl()}${path}`;
+}
+
 export default function Home() {
+  const appUrl = resolvePublicAppUrl();
+  const mintProofBase = resolveProofBaseUrl(process.env.NEXT_PUBLIC_MINT_PROOF_BASE_URL, '/mint-proofs');
+  const redeemProofBase = resolveProofBaseUrl(process.env.NEXT_PUBLIC_REDEEM_PROOF_BASE_URL, '/redeem-proofs');
+
   const agentBrief = {
     chainId: ARBITRUM_ONE_CHAIN_ID,
     network: 'Arbitrum One',
     explorerBase: ARBITRUM_ONE_BLOCK_EXPLORER,
+    appUrl,
+    depositAssets: {
+      kashEth: 'Native ETH or WETH on Arbitrum One only — not USDC or other ERC-20',
+      kashBtc: 'wBTC on Arbitrum One only (8 decimals) — not USDC or other assets',
+    },
+    minimums: {
+      mintUsd: '$10 minimum deposit notional (Chainlink oracle USD at request time)',
+      redeemUsd: 'No minimum redeem size',
+      minHoldingPeriod: 'One day — deposit in batch N, redeem earliest in batch N+1',
+    },
     products: {
       kashEth: {
         kashYield: CONTRACTS.kashYieldEth,
@@ -74,10 +104,10 @@ export default function Home() {
       'BatchProcessed',
       'TokensClaimed',
     ],
-    redeemClaimProofs:
-      process.env.NEXT_PUBLIC_REDEEM_PROOF_BASE_URL || '/redeem-proofs',
-    mintClaimProofs:
-      process.env.NEXT_PUBLIC_MINT_PROOF_BASE_URL || '/mint-proofs',
+    redeemClaimProofs: redeemProofBase,
+    redeemClaimProofPattern: `${redeemProofBase}/{eth|btc}-batch-{batchCycle}.json`,
+    mintClaimProofs: mintProofBase,
+    mintClaimProofPattern: `${mintProofBase}/{eth|btc}-mint-batch-{batchCycle}.json`,
     quickstartDocs: GITBOOK_AGENT_QUICKSTART,
     riskDocs: GITBOOK_RISKS,
     mechanicsDocs: GITBOOK_HOW_YIELD_WORKS,
@@ -304,26 +334,6 @@ export default function Home() {
         .landing .feature-icon { font-size: 2rem; margin-bottom: 15px; filter: drop-shadow(0 0 6px rgba(0, 255, 255, 0.4)); }
         .landing .feature-title { font-size: 1.2rem; margin-bottom: 10px; color: #00FFFF; text-shadow: 0 0 10px rgba(0, 255, 255, 0.4); }
         .landing .feature-desc { color: rgba(255, 255, 255, 0.8); font-size: 0.95rem; }
-        .landing .stats {
-          background: linear-gradient(180deg, #0A0A1E 0%, rgba(0, 20, 40, 0.5) 100%);
-          padding: clamp(50px, 8vw, 80px) 0;
-          border-top: 1px solid rgba(0, 255, 255, 0.15);
-          position: relative;
-          z-index: 1;
-        }
-        .landing .stats-grid {
-          display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-          gap: 32px;
-          text-align: center;
-        }
-        .landing .stat-value {
-          font-size: clamp(2rem, 5vw, 3rem);
-          font-weight: 700;
-          color: #00FFFF;
-          text-shadow: 0 0 15px rgba(0, 255, 255, 0.6);
-        }
-        .landing .stat-label { color: rgba(255, 255, 255, 0.7); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 2px; }
         .landing .section-caption {
           max-width: 720px;
           margin: -36px auto 40px;
@@ -331,6 +341,69 @@ export default function Home() {
           color: rgba(255, 255, 255, 0.72);
           font-size: clamp(0.9rem, 2vw, 1rem);
           line-height: 1.65;
+        }
+        .landing .metrics {
+          padding: clamp(60px, 10vw, 100px) 0;
+          position: relative;
+          z-index: 1;
+        }
+        .landing .metrics-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+          gap: 24px;
+          margin-top: 24px;
+        }
+        .landing .metric-card {
+          background: rgba(0, 255, 255, 0.04);
+          border: 1px solid rgba(0, 255, 255, 0.2);
+          border-radius: 8px;
+          padding: 28px;
+          transition: all 0.3s ease;
+        }
+        .landing .metric-card:hover {
+          border-color: #00FFFF;
+          box-shadow: 0 0 20px rgba(0, 255, 255, 0.2), inset 0 0 20px rgba(0, 255, 255, 0.03);
+          transform: translateY(-4px);
+        }
+        .landing .metric-product {
+          font-size: 1.2rem;
+          margin-bottom: 18px;
+          color: #00FFFF;
+          text-shadow: 0 0 10px rgba(0, 255, 255, 0.4);
+          font-weight: 600;
+        }
+        .landing .metric-rows {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+          gap: 16px;
+        }
+        .landing .metric-block {
+          padding: 12px 0;
+        }
+        .landing .metric-label {
+          color: rgba(255, 255, 255, 0.7);
+          font-size: 0.75rem;
+          text-transform: uppercase;
+          letter-spacing: 1.5px;
+          margin-bottom: 6px;
+        }
+        .landing .metric-value {
+          font-size: clamp(1.15rem, 3vw, 1.45rem);
+          font-weight: 700;
+          color: #FFFFFF;
+          text-shadow: 0 0 10px rgba(0, 255, 255, 0.3);
+        }
+        .landing .metric-positive { color: #00FF9D; text-shadow: 0 0 10px rgba(0, 255, 157, 0.3); }
+        .landing .metric-negative { color: #FF5F56; text-shadow: 0 0 10px rgba(255, 95, 86, 0.3); }
+        .landing .metric-error {
+          margin-top: 12px;
+          padding: 8px 12px;
+          border-radius: 6px;
+          border: 1px dashed rgba(255, 189, 46, 0.5);
+          background: rgba(255, 189, 46, 0.08);
+          color: rgba(255, 255, 255, 0.85);
+          font-size: 0.8rem;
+          line-height: 1.5;
         }
         .landing .proof-section {
           padding: clamp(60px, 10vw, 100px) 0;
@@ -357,14 +430,48 @@ export default function Home() {
           margin-bottom: 10px;
           text-shadow: 0 0 8px rgba(0, 255, 255, 0.35);
         }
+        .landing .proof-card a {
+          color: #7DF9FF;
+          word-break: break-all;
+        }
+        .landing .proof-card-body p,
         .landing .proof-card p {
           color: rgba(255, 255, 255, 0.82);
           font-size: 0.88rem;
           line-height: 1.65;
         }
-        .landing .proof-card a {
+        .landing .proof-details {
+          margin-top: 12px;
+          border-top: 1px solid rgba(0, 255, 255, 0.15);
+          padding-top: 12px;
+        }
+        .landing .proof-details summary {
           color: #7DF9FF;
-          word-break: break-all;
+          font-size: 0.85rem;
+          cursor: pointer;
+          list-style: none;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }
+        .landing .proof-details summary::before {
+          content: '▶';
+          font-size: 0.7rem;
+          color: #00FFFF;
+          transition: transform 0.2s ease;
+        }
+        .landing .proof-details[open] summary::before {
+          transform: rotate(90deg);
+        }
+        .landing .proof-details ol {
+          margin: 12px 0 0 0;
+          padding-left: 18px;
+          color: rgba(255, 255, 255, 0.78);
+          font-size: 0.82rem;
+          line-height: 1.65;
+        }
+        .landing .proof-details li {
+          margin-bottom: 8px;
         }
         .landing .verify-note {
           margin-top: 28px;
@@ -528,15 +635,7 @@ export default function Home() {
           </div>
         </section>
 
-        <section className="stats">
-          <div className="container">
-            <div className="stats-grid">
-              <div><div className="stat-value">On-Chain</div><div className="stat-label">NAV published on-chain; mints and settlements verifiable</div></div>
-              <div><div className="stat-value">Δ</div><div className="stat-label">Market-neutral at all times</div></div>
-              <div><div className="stat-value">AI</div><div className="stat-label">Batch Ops managed by AI Agent</div></div>
-            </div>
-          </div>
-        </section>
+        <LandingMetrics />
 
         <section className="features" id="features">
           <div className="container">
@@ -588,7 +687,7 @@ export default function Home() {
           <div className="container">
             <h2 className="section-title">Built for AI agents</h2>
             <p className="section-caption">
-              Machine-readable integration brief (addresses come from app env defaults — confirm before mainnet execution).
+              Machine-readable integration brief. Deposits require native ETH, WETH, or wBTC on Arbitrum One (minimum $10 notional). Confirm addresses before mainnet execution.
             </p>
             <p className="agent-json-caption">Copy as JSON for tools / planners</p>
             <div className="code-block" style={{ marginBottom: 48 }}>
@@ -598,6 +697,8 @@ export default function Home() {
               <pre>{JSON.stringify(agentBrief, null, 2)}</pre>
             </div>
             <ul className="ai-list">
+              <li><strong>Deposit assets</strong> — KASH-ETH accepts native ETH or WETH; KASH-BTC accepts wBTC. USDC and other tokens are not supported — swap first if needed.</li>
+              <li><strong>Minimums</strong> — Mint requests below ~$10 oracle USD are rejected by the frontend and skipped by batch ops; redeems have no minimum.</li>
               <li><strong>Contract-first</strong> — Integrate via KashYield + ERC-20 KASH; optional UI is unrelated to execution.</li>
               <li><strong>Deterministic scheduling</strong> — Poll <code style={{ color: '#00FFFF' }}>isUserWindow</code>, submit before batch cutoff, await <code style={{ color: '#00FFFF' }}>BatchProcessed</code>.</li>
               <li><strong>Bounded surface area</strong> — Primary flows: mint, redeem, cancel; approvals only where ERC-20 pulls apply.</li>
@@ -617,13 +718,31 @@ export default function Home() {
             <div className="proof-grid">
               <div className="proof-card">
                 <h3>NAV</h3>
-                <p>
-                  Call <code style={{ color: '#00FFFF' }}>currentNAV()</code> / <code style={{ color: '#00FFFF' }}>getNAV()</code> on KashYield (ETH vault{' '}
-                  <a href={ethVaultHref} target="_blank" rel="noopener noreferrer">{CONTRACTS.kashYieldEth}</a>
-                  , BTC vault{' '}
-                  <a href={btcVaultHref} target="_blank" rel="noopener noreferrer">{CONTRACTS.kashYieldBtc}</a>
-                  ). Compare reads across blocks with docs on update cadence.
-                </p>
+                <div className="proof-card-body">
+                  <p>
+                    Read <code style={{ color: '#00FFFF' }}>getNAV()</code> on each KashYield vault and <code style={{ color: '#00FFFF' }}>totalSupply()</code> on the matching KASH token. Multiply: <code style={{ color: '#00FFFF' }}>totalNAV = nav × supply / 10^18</code>.
+                  </p>
+                  <details className="proof-details">
+                    <summary>Audit every NAV component</summary>
+                    <ol>
+                      <li>
+                        <strong>Arbitrum vault balances:</strong> read <code style={{ color: '#00FFFF' }}>provider.getBalance(vault)</code> for ETH and <code style={{ color: '#00FFFF' }}>balanceOf(vault)</code> for WETH, wBTC, and USDC.
+                      </li>
+                      <li>
+                        <strong>Aave positions:</strong> read the vault&apos;s aToken balances (aWETH / awBTC) and variable debt token balance (USDC borrow) on Aave V3 Pool.
+                      </li>
+                      <li>
+                        <strong>Chainlink prices:</strong> call <code style={{ color: '#00FFFF' }}>latestRoundData()</code> on the ETH/USD and BTC/USD price feeds to value the collateral.
+                      </li>
+                      <li>
+                        <strong>Aster perp exposure (on Arbitrum):</strong> read <code style={{ color: '#00FFFF' }}>exchangeFacade()</code> on the vault, then <code style={{ color: '#00FFFF' }}>perpExchangeAddress()</code> on the facade (AsterAdapter). Call <code style={{ color: '#00FFFF' }}>getPerpExchangeSpotBalance()</code>, <code style={{ color: '#00FFFF' }}>getExchangeAssetBalance()</code>, and <code style={{ color: '#00FFFF' }}>getPerpExchangePosition(symbol)</code> on the vault for USDC margin, collateral, and short size.
+                      </li>
+                      <li>
+                        <strong>Recompute:</strong> total portfolio USD = vault assets + Aave collateral − USDC debt + Aster spot + perp position value. NAV = portfolio USD / KASH totalSupply.
+                      </li>
+                    </ol>
+                  </details>
+                </div>
               </div>
               <div className="proof-card">
                 <h3>Fee</h3>
@@ -634,15 +753,33 @@ export default function Home() {
               <div className="proof-card">
                 <h3>Batches &amp; settlement</h3>
                 <p>
-                  Use <code style={{ color: '#00FFFF' }}>isUserWindow()</code> / <code style={{ color: '#00FFFF' }}>isProcessingWindow()</code> and subscribe to{' '}
-                  <code style={{ color: '#00FFFF' }}>BatchProcessed</code> events to anchor automation — cutoff time is documented (~23:40 UTC); validate against deployment.
+                  Poll <code style={{ color: '#00FFFF' }}>isUserWindow()</code> frequently (e.g. every 60s) and submit mint/redeem requests well before the window closes. The cutoff is around 23:40 UTC — validate against the deployed contract. After submission, watch for <code style={{ color: '#00FFFF' }}>BatchProcessed</code> and the corresponding <code style={{ color: '#00FFFF' }}>TokensClaimed</code> event after claiming.
                 </p>
               </div>
               <div className="proof-card">
-                <h3>TVL &amp; historical performance</h3>
-                <p>
-                  Not displayed on this page. Derive exposure from total KASH supply × NAV, protocol holdings, and your own dashboards — do not infer APY from marketing copy alone.
-                </p>
+                <h3>TVL</h3>
+                <div className="proof-card-body">
+                  <p>
+                    TVL equals the total NAV of each vault. Verify it directly on-chain: for each product, read <code style={{ color: '#00FFFF' }}>getNAV()</code> from KashYield and <code style={{ color: '#00FFFF' }}>totalSupply()</code> from the KASH token, then compute <code style={{ color: '#00FFFF' }}>totalNAV = nav × supply / 10^18</code>.
+                  </p>
+                  <details className="proof-details">
+                    <summary>Step-by-step TVL verification</summary>
+                    <ol>
+                      <li>
+                        KASH-ETH: <code style={{ color: '#00FFFF' }}>getNAV()</code> on <a href={ethVaultHref} target="_blank" rel="noopener noreferrer">{shortenAddress(CONTRACTS.kashYieldEth)}</a> × <code style={{ color: '#00FFFF' }}>totalSupply()</code> on <a href={ethTokenHref} target="_blank" rel="noopener noreferrer">{shortenAddress(CONTRACTS.kashTokenEth)}</a>.
+                      </li>
+                      <li>
+                        KASH-BTC: <code style={{ color: '#00FFFF' }}>getNAV()</code> on <a href={btcVaultHref} target="_blank" rel="noopener noreferrer">{shortenAddress(CONTRACTS.kashYieldBtc)}</a> × <code style={{ color: '#00FFFF' }}>totalSupply()</code> on <a href={btcTokenHref} target="_blank" rel="noopener noreferrer">{shortenAddress(CONTRACTS.kashTokenBtc)}</a>.
+                      </li>
+                      <li>
+                        Cross-check the sum by adding the Arbitrum vault balances, Aave positions, and Aster perp exposure via the vault&apos;s <code style={{ color: '#00FFFF' }}>exchangeFacade()</code> reads.
+                      </li>
+                      <li>
+                        Do not infer yield from marketing copy. Use only on-chain NAV and your own price feeds for TVL.
+                      </li>
+                    </ol>
+                  </details>
+                </div>
               </div>
               <div className="proof-card">
                 <h3>Verified source code</h3>
@@ -727,15 +864,16 @@ export default function Home() {
               <div className="proof-card">
                 <h3>2. Preflight reads</h3>
                 <p>
-                  Before signing, read <code style={{ color: '#00FFFF' }}>paused()</code>, <code style={{ color: '#00FFFF' }}>isUserWindow()</code>,{' '}
+                  Before signing, read <code style={{ color: '#00FFFF' }}>isUserWindow()</code>,{' '}
                   <code style={{ color: '#00FFFF' }}>currentNAV()</code>, <code style={{ color: '#00FFFF' }}>feeBps()</code>, and <code style={{ color: '#00FFFF' }}>getCurrentBatchCycle()</code>.
                 </p>
               </div>
               <div className="proof-card">
                 <h3>3. Mint</h3>
                 <p>
-                  ETH: call <code style={{ color: '#00FFFF' }}>requestMint(0)</code> with <code style={{ color: '#00FFFF' }}>msg.value</code>. BTC: approve wBTC to the BTC vault, then call{' '}
-                  <code style={{ color: '#00FFFF' }}>requestMint(wbtcAmount)</code>.
+                  Hold the correct asset on Arbitrum One: native ETH or WETH (KASH-ETH), or wBTC (KASH-BTC). Minimum ~$10 oracle USD per mint. ETH: call{' '}
+                  <code style={{ color: '#00FFFF' }}>requestMint(0)</code> with <code style={{ color: '#00FFFF' }}>msg.value</code>. wBTC: approve the BTC vault, then call{' '}
+                  <code style={{ color: '#00FFFF' }}>requestMint(wbtcAmount)</code> (8 decimals).
                 </p>
               </div>
               <div className="proof-card">
@@ -748,14 +886,16 @@ export default function Home() {
               <div className="proof-card">
                 <h3>5. Claim mint</h3>
                 <p>
-                  After settlement, load the hosted mint proof for the batch and call{' '}
-                  <code style={{ color: '#00FFFF' }}>claimMint(batchCycle, amount, proof)</code> to receive KASH (same pull-claim model as redeems).
+                  After settlement, fetch the hosted mint proof manifest and call{' '}
+                  <code style={{ color: '#00FFFF' }}>claimMint(batchCycle, amount, proof)</code>. Proofs are public JSON at{' '}
+                  <code style={{ color: '#a5d6ff' }}>{mintProofBase}/{'{eth|btc}'}-mint-batch-{'{batchCycle}'}.json</code> (or rebuild from chain if unavailable).
                 </p>
               </div>
               <div className="proof-card">
                 <h3>6. Redeem</h3>
                 <p>
-                  Approve the relevant KASH token to its KashYield vault, call <code style={{ color: '#00FFFF' }}>requestRedeem(kashAmount)</code> before the batch cutoff, then call <code style={{ color: '#00FFFF' }}>claimRedeem(batchCycle, amount, proof)</code> after settlement.
+                  Approve the relevant KASH token to its KashYield vault, call <code style={{ color: '#00FFFF' }}>requestRedeem(kashAmount)</code> before the batch cutoff, then call <code style={{ color: '#00FFFF' }}>claimRedeem(batchCycle, amount, proof)</code> after settlement. Redeem proofs:{' '}
+                  <code style={{ color: '#a5d6ff' }}>{redeemProofBase}/{'{eth|btc}'}-batch-{'{batchCycle}'}.json</code>.
                 </p>
               </div>
               <div className="proof-card">

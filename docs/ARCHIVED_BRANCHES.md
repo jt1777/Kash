@@ -21,4 +21,4 @@ git checkout archive/repo-split   # detached HEAD at that branch tip
 | `archive/Nova-update` | `Nova-update` | Early project history (not merged to `main`) |
 | `archive/tests` | `tests` | Test/docs branch (2 commits not in `main`) |
 
-Active development continues on **`main`**.
+Active development on **`aster`** (V3 ownerless + Aster perp DEX). The **`main`** branch retains the legacy Hyperliquid V2 deployment docs and contracts.

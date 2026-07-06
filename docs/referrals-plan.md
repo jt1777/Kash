@@ -13,7 +13,7 @@
 
 | Area | Today |
 |------|-------|
-| Fees | Computed in [`_processBatchPhase2`](../contracts/KashYieldETH.sol) (~L511–565); 100% credited to `ownerEthReserve` / `protocolFeeEthReserve` |
+| Fees | V3: sent to immutable **`feeReceiver`** at Phase 2 (`_processBatchPhase2`). Legacy V2 credited `ownerEthReserve` / `protocolFeeEthReserve`. |
 | Mint payout | **Push** KASH transfer in Phase 2 loop |
 | Redeem payout | **Pull** via `claimRedeem` + Merkle root committed at Phase 2 |
 | Backend | Next.js only — [`/api/activity`](../frontend/app/api/activity/route.ts), no DB |

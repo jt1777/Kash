@@ -8,7 +8,7 @@ This guide covers the prerequisites for making a first deposit.
 
 - **A wallet** — Rabby, Coinbase Wallet, or Rainbow wallet. Metamask wallet is not recommended as it indiscriminately blocks legitimate contracts.
 - **Arbitrum One** added to the wallet (chain ID **42161**). See below for more details.
-- **ETH** on Arbitrum One for gas, and **ETH** (for KASH-ETH) or **wBTC** (for KASH-BTC) to deposit
+- **ETH** on Arbitrum One for gas, and **ETH** or **wETH** (for KASH-ETH) or **wBTC** (for KASH-BTC) to deposit
 
 > KASH runs on **Arbitrum One**. The protocol uses **real assets** — only amounts that can be affordably lost should be deposited, and [Risks](risks.md) should be reviewed first.
 
@@ -16,11 +16,9 @@ This guide covers the prerequisites for making a first deposit.
 
 ## Step 1 — Add Arbitrum One to the wallet
 
-KASH is deployed on **Arbitrum One** — not on Ethereum mainnet.  Arbitrum One is a Layer 2 (L2) network built on top of Ethereum. Instead of running every transaction on Ethereum mainnet (often called “L1”), Arbitrum processes them on a separate chain and periodically posts the results back to Ethereum for security. That design keeps fees much lower and confirmations faster, while still inheriting Ethereum’s security model.
+KASH is deployed on **Arbitrum One** — not on Ethereum mainnet. Arbitrum One is a Layer 2 network built on Ethereum: lower fees and faster confirmations while inheriting Ethereum’s security model.
 
-Wallets default to Ethereum L1, so **Arbitrum One must be added as a network** before connecting to the app or sending a deposit. On Arbitrum One, **ETH** is still used to pay gas (the same asset as on mainnet, but on a different chain).
-
-If Arbitrum One is not already configured, add it manually:
+Wallets default to Ethereum L1, so **Arbitrum One must be added** before connecting to the app.
 
 | Setting | Value |
 |---------|-------|
@@ -36,7 +34,7 @@ Most wallets also support adding the network from [Chainlist](https://chainlist.
 
 ## Step 2 — Get ETH and wBTC on Arbitrum One
 
-**ETH on Arbitrum** is required to pay gas and to use as a deposit asset for KASH-ETH.  Note both ETH and wETH can be used as a deposit for the KASH-ETH contract.
+**ETH on Arbitrum** is required to pay gas and to deposit into **KASH-ETH** (native ETH or wETH).
 
 **Common options:**
 
@@ -44,7 +42,7 @@ Most wallets also support adding the network from [Chainlist](https://chainlist.
 - Withdraw from a centralized exchange directly to Arbitrum One
 - Use another L2 bridge or on-ramp that supports Arbitrum
 
-For **KASH-BTC**, **wBTC** must be held on Arbitrum One (`0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f`). wBTC can be acquired via a DEX or bridge, then the app can be used on the BTC tab.
+For **KASH-BTC**, **wBTC** must be held on Arbitrum One (`0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f`).
 
 ---
 
@@ -59,12 +57,15 @@ For **KASH-BTC**, **wBTC** must be held on Arbitrum One (`0x2f2a2543B76A4166549F
 
 ## Live contract addresses (Arbitrum One)
 
-| Product | Vault | KASH token |
-|---------|-------|------------|
-| KASH-ETH | `0xC5C8B1Dc1fFF6728869C8BCCe6105Caa6Df9E68d` | `0xf29483f62502D714c14CB3141944C6D8CCDF9962` |
-| KASH-BTC | `0x86B0095f866c05F53363AE31F994E9540033fC2E` | `0x4f628402227a2Fe292641db7aDa1Fae744568445` |
+Vault and token addresses are **environment-specific**. After a V3 Aster deploy, they appear in:
 
-Programmatic integrators: see [Agent Quickstart](agent-quickstart.md) for adapter/facade addresses, ABIs, and Merkle claim flows.
+- The app **footer** (Contract Address links)
+- [`frontend/lib/contracts/addresses.ts`](../frontend/lib/contracts/addresses.ts)
+- Your deployment `.env` / `frontend/.env.local`
+
+Programmatic integrators: see [Agent Quickstart](agent-quickstart.md) for ABIs, adapter/facade reads, and Merkle claim flows.
+
+> **Note:** The legacy **Hyperliquid** deployment on the `main` branch uses **different addresses and contract versions** (owner-gated V2). Do not assume addresses from old docs or screenshots apply to V3 Aster vaults.
 
 ---
 
@@ -72,7 +73,7 @@ Programmatic integrators: see [Agent Quickstart](agent-quickstart.md) for adapte
 
 Once connected, two tabs are available:
 
-- **KASH-ETH** — deposit ETH, earn yield
+- **KASH-ETH** — deposit ETH or wETH, earn yield
 - **KASH-BTC** — deposit wBTC, earn yield
 
 Select the desired product.

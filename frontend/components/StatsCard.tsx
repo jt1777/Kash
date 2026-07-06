@@ -2,39 +2,31 @@
 
 import { useReadContract, useAccount } from 'wagmi';
 import {
-  CONTRACTS,
   arbiscanAddressUrl,
   isArbiscanVerifiedKashToken,
 } from '@/lib/contracts/addresses';
-import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 import { kashTokenABI } from '@/lib/contracts/kashTokenABI';
 import { formatEther } from 'viem';
-import { useMemo } from 'react';
-import { useStrategyYield } from '@/hooks/useStrategyYield';
+import { useVaultMetrics, type VaultMetricsProduct } from '@/hooks/useVaultMetrics';
+import { formatNavForApp } from '@/lib/vaultMetrics/formatNav';
 
-type Product = 'eth' | 'btc';
-
-export function StatsCard({ product = 'eth' }: { product?: Product }) {
+export function StatsCard({ product = 'eth' }: { product?: VaultMetricsProduct }) {
   const { address, connector } = useAccount();
 
-  const isBtc = product === 'btc' && CONTRACTS.kashYieldBtc && CONTRACTS.kashTokenBtc;
-  const kashYield = isBtc ? CONTRACTS.kashYieldBtc! : CONTRACTS.kashYieldEth;
-  const kashToken = isBtc ? CONTRACTS.kashTokenBtc! : CONTRACTS.kashTokenEth;
+  const {
+    kashToken,
+    nav,
+    yield: yieldQuery,
+    refetchNav,
+    refetchYield,
+    isNavFetching,
+    productName,
+  } = useVaultMetrics(product);
+
+  const { data: strategyYield, isFetching: isYieldFetching, isError: isYieldError } = yieldQuery;
+  const isBtc = product === 'btc';
   const kashTokenVerified = isArbiscanVerifiedKashToken(kashToken);
   const kashTokenShort = `${kashToken.slice(0, 6)}…${kashToken.slice(-4)}`;
-
-  const { data: nav, refetch: refetchNav, isFetching: isNavFetching } = useReadContract({
-    address: kashYield,
-    abi: kashYieldABI,
-    functionName: 'getNAV',
-  });
-
-  const {
-    data: strategyYield,
-    refetch: refetchYield,
-    isFetching: isYieldFetching,
-    isError: isYieldError,
-  } = useStrategyYield(product);
 
   const { data: kashBalance, refetch: refetchKashBalance, isFetching: isKashBalanceFetching } = useReadContract({
     address: kashToken,
@@ -42,15 +34,6 @@ export function StatsCard({ product = 'eth' }: { product?: Product }) {
     functionName: 'balanceOf',
     args: address ? [address] : undefined,
   });
-
-  const navDisplay = useMemo(() => {
-    if (nav === undefined) return '1.000000';
-    const microUnits = 10n ** 12n;
-    const roundedMicro = (nav + microUnits / 2n) / microUnits;
-    const whole = roundedMicro / 1_000_000n;
-    const frac = roundedMicro % 1_000_000n;
-    return `${whole}.${frac.toString().padStart(6, '0')}`;
-  }, [nav]);
 
   const paYieldDisplay = strategyYield?.paYieldDisplay ?? '—';
   const paYieldColor =
@@ -87,7 +70,7 @@ export function StatsCard({ product = 'eth' }: { product?: Product }) {
           </button>
         </div>
         <p className="text-3xl font-bold text-gray-900">
-          ${navDisplay}
+          {formatNavForApp(nav)}
         </p>
         <p className="text-xs text-gray-500 mt-1">
           Per KASH token, updated by the NAV bot
@@ -166,7 +149,7 @@ export function StatsCard({ product = 'eth' }: { product?: Product }) {
           {address && kashBalance ? Number(formatEther(kashBalance)).toFixed(2) : '0.00'}
         </p>
         <p className="text-xs text-gray-500 mt-1">
-          {isBtc ? 'KASH-BTC' : 'KASH-ETH'} tokens
+          {productName} tokens
         </p>
         <div className="mt-3 pt-3 border-t border-gray-100">
           <div className="flex flex-wrap items-center gap-2">

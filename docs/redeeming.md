@@ -18,7 +18,7 @@ After settlement, use the app's **Claim** button to receive ETH or wBTC.
 
 ## Batch wallet limit
 
-Each batch cycle accepts at most **10,000 unique wallet addresses** for redemptions through the app, configurable in the contract up to a maximum of 100,000 addresses.
+Each batch cycle accepts at most **`maxRedeemUsers`** unique wallet addresses (commonly **10,000** at deploy, hard cap **100,000**). Read `maxRedeemUsers()` on the vault.
 
 - When the limit is reached, **new wallets** cannot submit a redemption request for that cycle in the app.
 - A wallet that **already has a pending redemption** in the current cycle may add to its existing request.
@@ -32,26 +32,26 @@ Mint and redeem limits are tracked **separately** — a full mint batch does not
 
 ## Batch timing and capacity
 
-Batch **cycle length** and **processing windows** are configurable on-chain to accommodate demand. The operator can adjust parameters such as `cycleDurationSeconds` and batch processing windows.
+Batch timing is **immutable on V3** — see [Depositing — Batch timing](depositing.md#batch-timing-and-capacity).
 
-At launch, the typical schedule is:
+At deploy, the typical schedule is:
 
 | Phase | Typical time (UTC) |
 |-------|-------------------|
 | User window | Submissions accepted throughout the cycle (e.g. until ~23:40) |
 | Processing window | Batch runs (~23:40–23:59) |
 
-If demand grows, cycles may be shortened or scheduling updated so more batches run per day. Confirm the live schedule in the app before submitting a request.
+If demand grows, timing changes require a **new vault deployment**. Confirm the live schedule in the app before submitting a request.
 
 ---
 
 ## Yield on exit
 
-On redemption, assets are returned based on the **current NAV** at the time of the batch. Because NAV increases as the protocol earns yield, the redemption value typically exceeds the original deposit value.
+On redemption, assets are returned based on **NAV at batch settlement**. Because NAV increases as the protocol earns yield, the redemption value typically exceeds the original deposit value.
 
 **Example:**
-- A deposit of 1 ETH when KASH-ETH NAV = $1.00 → 1,800 KASH received
-- Redemption when KASH-ETH NAV = $1.06 → ETH worth 1,800 × $1.06 / ETH price
+- A deposit of 1 ETH when KASH-ETH NAV = $1.00 → ~1,800 KASH received (after fees)
+- Redemption when NAV = $1.06 → ETH worth roughly 1,800 × $1.06 / ETH price (minus protocol fee)
 
 Yield is the difference in NAV between entry and exit.
 

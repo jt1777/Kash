@@ -64,13 +64,6 @@ export const kashYieldABI = [
     type: "function",
   },
   {
-    inputs: [],
-    name: "paused",
-    outputs: [{ name: "", type: "bool" }],
-    stateMutability: "view",
-    type: "function",
-  },
-  {
     inputs: [
       { name: "user", type: "address" },
       { name: "batchCycle", type: "uint256" },

@@ -1,6 +1,6 @@
 /**
  * Frontend batch wallet cap (mint and redeem). Matches on-chain maxMintUsers / maxRedeemUsers
- * default (10_000); owner may raise up to 100_000 on-chain.
+ * default (10_000); V3 vaults fix caps at deploy (up to 100_000).
  */
 export const BATCH_USER_CAP = 10_000;
 

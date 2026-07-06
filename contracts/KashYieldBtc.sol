@@ -48,6 +48,7 @@ error AlreadyClaimed();
 error ClaimExpired();
 error InvalidProof();
 error ClaimsNotExpired();
+error PreviousBatchNotComplete();
 
 event MintRequested(address indexed user, uint256 amountIn, uint256 batchCycle);
 event RedeemRequested(address indexed user, uint256 kashAmount, uint256 batchCycle);
@@ -129,7 +130,6 @@ contract KashYieldBtc is ReentrancyGuard {
     struct RedeemRequest {
         address user;
         uint256 kashAmount;
-        uint256 redeemValueUSD;
         uint256 batchCycle;
     }
 
@@ -271,9 +271,6 @@ contract KashYieldBtc is ReentrancyGuard {
         req.user = msg.sender;
         req.kashAmount += kashAmount;
         req.batchCycle = batchCycle;
-        uint256 usdIncrement = (kashAmount * currentNAV) / 1e18;
-        req.redeemValueUSD += usdIncrement;
-        batchTotalRedeemValueUSD[batchCycle] += usdIncrement;
         batchTotalRedeemKash[batchCycle] += kashAmount;
         if (!wasActive) {
             if (activeRedeemUsers[batchCycle] >= maxRedeemUsers) revert RedeemCapReached();
@@ -305,9 +302,7 @@ contract KashYieldBtc is ReentrancyGuard {
         RedeemRequest storage req = userRedeemRequests[msg.sender][batchCycle];
         if (req.kashAmount == 0) revert NoRequest();
         uint256 kashAmount = req.kashAmount;
-        uint256 usdAmount = req.redeemValueUSD;
         batchTotalRedeemKash[batchCycle] -= kashAmount;
-        batchTotalRedeemValueUSD[batchCycle] -= usdAmount;
         unchecked { activeRedeemUsers[batchCycle]--; }
         delete userRedeemRequests[msg.sender][batchCycle];
         kashTokenBtc.transfer(msg.sender, kashAmount);
@@ -334,6 +329,7 @@ contract KashYieldBtc is ReentrancyGuard {
     function processBatchPhase1() internal onlyProcessingWindow {
         uint256 batchCycle = block.timestamp / cycleDurationSeconds;
         if (batchPhase[batchCycle] != 0) revert PhaseAlreadyStarted();
+        if (batchCycle > 0 && batchPhase[batchCycle - 1] == 1) revert PreviousBatchNotComplete();
 
         uint256 indicativeNAV = currentNAV;
         // Single BTC price for the whole batch — every minter in this cycle is valued
@@ -342,7 +338,10 @@ contract KashYieldBtc is ReentrancyGuard {
         batchMintBtcPrice[batchCycle] = btcPrice;
         uint256 totalMintUSD = (batchTotalMintBtc[batchCycle] * btcPrice) / (10 ** WBTC_DECIMALS);
         batchTotalMintValueUSD[batchCycle] = totalMintUSD;
-        uint256 totalRedeemUSD = batchTotalRedeemValueUSD[batchCycle];
+        // Single NAV for the whole batch — every redeemer in this cycle is valued at
+        // indicativeNAV (post pre-Phase-1 updateNAV), not at request-time NAV.
+        uint256 totalRedeemUSD = (batchTotalRedeemKash[batchCycle] * indicativeNAV) / 1e18;
+        batchTotalRedeemValueUSD[batchCycle] = totalRedeemUSD;
         batchIndicativeNAV[batchCycle] = indicativeNAV;
 
         int256 netPositionUSD = int256(totalMintUSD) - int256(totalRedeemUSD);

@@ -293,7 +293,7 @@ export function RecentActivity() {
       setCancelTarget(null);
       setCancelFeedback({
         type: 'error',
-        message: 'Cancel failed (transaction reverted). The contract may not have enough wBTC—e.g. it was moved to Aave. Ask the owner to run the ownerWithdrawFromAave script first, then try again.',
+        message: 'Cancel failed (transaction reverted). The contract may not have enough wBTC on hand—e.g. it was moved to Aave. Wait for the operator to rebalance collateral, then try again.',
       });
       resetWrite();
       return;
