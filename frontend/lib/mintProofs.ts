@@ -5,8 +5,26 @@ import { formatEther } from 'viem';
 export type MintProofManifest = {
   batchCycle: string;
   root: string;
-  leaves: Array<{ user: string; amount: string; proof: string[] }>;
+  leaves: Array<{
+    user: string;
+    /** Bot manifest field */
+    kashAmount?: string;
+    /** Legacy / alternate field */
+    amount?: string;
+    proof: string[];
+  }>;
 };
+
+function leafKashAmount(leaf: MintProofManifest['leaves'][number]): bigint | null {
+  const raw = leaf.kashAmount ?? leaf.amount;
+  if (raw == null || raw === '') return null;
+  try {
+    const n = BigInt(raw);
+    return n > 0n ? n : null;
+  } catch {
+    return null;
+  }
+}
 
 export function formatMintClaimAmount(amountWei: bigint): string {
   const n = Number(formatEther(amountWei));
@@ -45,8 +63,10 @@ export async function fetchMintProof(
     (l) => l.user.toLowerCase() === userAddress.toLowerCase(),
   );
   if (!leaf) return null;
+  const amount = leafKashAmount(leaf);
+  if (amount == null) return null;
   return {
-    amount: BigInt(leaf.amount),
+    amount,
     proof: leaf.proof as `0x${string}`[],
   };
 }

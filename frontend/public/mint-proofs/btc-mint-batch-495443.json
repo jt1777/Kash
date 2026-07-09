@@ -1,0 +1,11 @@
+{
+  "batchCycle": "495443",
+  "root": "0xcc6131b32eecd449113bc58aca9820ddca622155d448ae12fc6a2a587f722310",
+  "leaves": [
+    {
+      "user": "0xCc29196f3d3E1Af2A4dd20F4F2765b090c9e892f",
+      "kashAmount": "184199991173892473849",
+      "proof": []
+    }
+  ]
+}
