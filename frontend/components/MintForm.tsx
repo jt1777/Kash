@@ -119,6 +119,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
   const [pendingClaimCycle, setPendingClaimCycle] = useState<bigint | null>(null);
   const [claimErrors, setClaimErrors] = useState<Record<string, string>>({});
   const [claimPayouts, setClaimPayouts] = useState<Record<string, bigint | null>>({});
+  const [claimPayoutsLoading, setClaimPayoutsLoading] = useState(false);
 
   const { data: balance } = useBalance({ address });
   const nativeBalance = balance?.value ?? 0n;
@@ -260,26 +261,38 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
   useEffect(() => {
     if (!address || claimableMints.length === 0) {
       setClaimPayouts({});
+      setClaimPayoutsLoading(false);
       return;
     }
     let cancelled = false;
     setClaimPayouts({});
+    setClaimPayoutsLoading(true);
     const loadPayouts = async () => {
-      const entries = await Promise.all(
-        claimableMints.map(async (req) => {
-          const key = req.batchCycle.toString();
-          const proof = await resolveMintClaimProof({
-            product,
-            batchCycle: req.batchCycle,
-            userAddress: address,
-            kashYield,
-            publicClient,
-          });
-          return [key, proof && proof.amount > 0n ? proof.amount : null] as const;
-        }),
-      );
-      if (!cancelled) {
-        setClaimPayouts(Object.fromEntries(entries));
+      try {
+        const entries = await Promise.all(
+          claimableMints.map(async (req) => {
+            const key = req.batchCycle.toString();
+            try {
+              const proof = await resolveMintClaimProof({
+                product,
+                batchCycle: req.batchCycle,
+                userAddress: address,
+                kashYield,
+                publicClient,
+              });
+              return [key, proof && proof.amount > 0n ? proof.amount : null] as const;
+            } catch {
+              return [key, null] as const;
+            }
+          }),
+        );
+        if (!cancelled) {
+          setClaimPayouts(Object.fromEntries(entries));
+        }
+      } finally {
+        if (!cancelled) {
+          setClaimPayoutsLoading(false);
+        }
       }
     };
     void loadPayouts();
@@ -701,15 +714,17 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
                         {' · '}
                         Claim <span className="font-medium">{formatMintClaimAmount(payout)}</span> {kashSymbol}
                       </>
-                    ) : (
+                    ) : claimPayoutsLoading ? (
                       <> · Loading claim amount…</>
+                    ) : (
+                      <> · Could not load claim amount. Try again or contact the operator.</>
                     )}
                   </p>
                   {claimErr ? <p className="text-sm text-red-600">{claimErr}</p> : null}
                   <button
                     type="button"
                     onClick={() => void handleClaimMint(req.batchCycle)}
-                    disabled={isThisClaimPending || payout == null}
+                    disabled={isThisClaimPending || payout == null || claimPayoutsLoading}
                     className="w-full px-4 py-2 bg-green-700 text-white rounded-lg text-sm font-medium hover:bg-green-800 disabled:bg-gray-300 disabled:cursor-not-allowed cursor-pointer transition-colors"
                   >
                     {isThisClaimPending ? 'Claiming…' : `Claim ${kashSymbol}`}
