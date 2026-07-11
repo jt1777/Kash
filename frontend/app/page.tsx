@@ -642,41 +642,24 @@ export default function Home() {
             <h2 className="section-title">Why KASH?</h2>
             <div className="features-grid">
               <div className="feature-card">
-                <div className="feature-icon">⚡</div>
-                <h3 className="feature-title">Programmatic-First</h3>
-                <p className="feature-desc">No UI needed. Deposit, earn, and redeem entirely through smart contract calls. Built for automation.</p>
-              </div>
-              {/*<div className="feature-card">
-                <div className="feature-icon">🛡️</div>
-                <h3 className="feature-title">Delta Neutral</h3>
-                <p className="feature-desc"></p>
-              </div>*/}
-              <div className="feature-card">
                 <div className="feature-icon">🔋</div>
                 <h3 className="feature-title">Funding Rate Yield</h3>
                 <p className="feature-desc">
-                  Strategy targets delta-neutral funding income; superior yield from innovative strategies.
-                </p>
-              </div>
-              <div className="feature-card">
-                <div className="feature-icon">🌐</div>
-                <h3 className="feature-title">Arbitrum Native</h3>
-                <p className="feature-desc">
-                  Low gas on Arbitrum One for mints, redeems, and on-chain reads — NAV, fees, and pending requests settle on a daily batch schedule.
+                  Strategy targets market-neutral funding income; superior yield from innovative strategies.
                 </p>
               </div>
               <div className="feature-card">
                 <div className="feature-icon">📊</div>
                 <h3 className="feature-title">Transparent Metrics</h3>
                 <p className="feature-desc">
-                  Read NAV and batch events on-chain (e.g. getNAV(), BatchProcessed). Understand assumptions in docs — not guaranteed APY.
+                  Verify user assets on chain. Read NAV and batch events (e.g. getNAV(), BatchProcessed) — every position is auditable in real time.
                 </p>
               </div>
               <div className="feature-card">
-                <div className="feature-icon">🤖</div>
-                <h3 className="feature-title">Agent Optimized</h3>
+                <div className="feature-icon">💰</div>
+                <h3 className="feature-title">Passive Income</h3>
                 <p className="feature-desc">
-                  Predictable daily windows for mint/redeem requests and settlement — no need to micromanage intraday swaps.
+                  Deposit wBTC or ETH to receive KASH tokens that increase in value over time. Full redemption within 24 hours.
                 </p>
               </div>
             </div>
