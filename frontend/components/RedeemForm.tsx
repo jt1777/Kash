@@ -73,6 +73,7 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
   const [pendingClaimCycle, setPendingClaimCycle] = useState<bigint | null>(null);
   const [claimErrors, setClaimErrors] = useState<Record<string, string>>({});
   const [claimPayouts, setClaimPayouts] = useState<Record<string, bigint | null>>({});
+  const [redeemSubmitError, setRedeemSubmitError] = useState<string | null>(null);
   const claimAssetSymbol = isBtc ? 'wBTC' : 'ETH';
 
   const { data: feesPerGas } = useEstimateFeesPerGas();
@@ -335,6 +336,7 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
   // Refetch pending request after redeem confirms so cancel button and status update immediately
   useEffect(() => {
     if (isRedeemSuccess) {
+      setRedeemSubmitError(null);
       refetchPendingRedeem();
       refetchPendingLookback();
     }
@@ -380,15 +382,42 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
   };
 
   const handleRedeem = async () => {
-    if (!parsedAmount) return;
+    if (!parsedAmount || !address) return;
     setShowRedeemConfirm(false);
+    setRedeemSubmitError(null);
 
+    if (!publicClient) {
+      setRedeemSubmitError('Wallet RPC unavailable. Reconnect your wallet on Arbitrum One and try again.');
+      return;
+    }
+
+    let simulation;
+    try {
+      simulation = await publicClient.simulateContract({
+        address: kashYield,
+        abi: kashYieldABI,
+        functionName: 'requestRedeem',
+        args: [parsedAmount],
+        account: address,
+      });
+    } catch (simErr) {
+      const msg =
+        simErr instanceof Error
+          ? simErr.message
+          : 'Redeem request would revert on-chain.';
+      setRedeemSubmitError(msg);
+      return;
+    }
+
+    // Pin gas from simulation so MetaMask does not re-estimate with a revert-inflated limit.
+    const estimatedGas = simulation.request.gas ?? 250_000n;
+    const gasLimit = (estimatedGas * 130n) / 100n;
     redeem({
       address: kashYield,
       abi: kashYieldABI,
       functionName: 'requestRedeem',
       args: [parsedAmount],
-      ...gasOptions,
+      gas: gasLimit,
     });
   };
 
@@ -679,6 +708,13 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
             : batchCapSubmitLabel('redeem', redeemBatchCapBlocked)}
         </button>
       </div>
+
+      {redeemSubmitError && (
+        <div className="p-3 rounded-lg border border-red-200 bg-red-50 text-left">
+          <p className="text-sm font-medium text-red-800">Redeem request failed</p>
+          <p className="text-xs text-red-600 mt-1.5 leading-relaxed break-words">{redeemSubmitError}</p>
+        </div>
+      )}
 
       {(redeemError || isRedeemError) && (
         <div className="p-3 rounded-lg border border-red-200 bg-red-50 text-left">
