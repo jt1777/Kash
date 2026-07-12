@@ -18,6 +18,10 @@ function hashPair(a: Hex, b: Hex): Hex {
   return keccak256(concat([left, right]));
 }
 
+/**
+ * Build sorted-pair Merkle tree matching on-chain MerkleVerify / OpenZeppelin layout.
+ * Proofs use per-layer sibling indices so 3+ leaves verify (not just the first pair).
+ */
 export function buildMintMerkleTree(
   batchCycle: bigint,
   entries: MintLeaf[],
@@ -28,34 +32,40 @@ export function buildMintMerkleTree(
   }
 
   const leaves = active.map((e) => hashLeaf(batchCycle, e.user, e.amount));
-  let layer = leaves;
-  const proofs: Hex[][] = active.map(() => []);
-
-  while (layer.length > 1) {
+  const layers: Hex[][] = [leaves];
+  while (layers[layers.length - 1].length > 1) {
+    const prev = layers[layers.length - 1];
     const next: Hex[] = [];
-    for (let i = 0; i < layer.length; i += 2) {
-      if (i + 1 === layer.length) {
-        next.push(layer[i]);
-        continue;
-      }
-      const parent = hashPair(layer[i], layer[i + 1]);
-      next.push(parent);
-      for (let j = 0; j < 2; j++) {
-        const leafIdx = i + j;
-        if (leafIdx < proofs.length) {
-          proofs[leafIdx].push(layer[i + 1 - j]);
-        }
+    for (let i = 0; i < prev.length; i += 2) {
+      if (i + 1 === prev.length) {
+        next.push(prev[i]);
+      } else {
+        next.push(hashPair(prev[i], prev[i + 1]));
       }
     }
-    layer = next;
+    layers.push(next);
   }
+
+  const proofs: Hex[][] = leaves.map((_, index) => {
+    const proof: Hex[] = [];
+    let idx = index;
+    for (let layerIdx = 0; layerIdx < layers.length - 1; layerIdx++) {
+      const layer = layers[layerIdx];
+      const siblingIndex = idx % 2 === 0 ? idx + 1 : idx - 1;
+      if (siblingIndex < layer.length) {
+        proof.push(layer[siblingIndex]);
+      }
+      idx = Math.floor(idx / 2);
+    }
+    return proof;
+  });
 
   const proofMap = new Map<string, Hex[]>();
   active.forEach((e, idx) => {
     proofMap.set(e.user.toLowerCase(), proofs[idx]);
   });
 
-  return { root: layer[0], proofs: proofMap };
+  return { root: layers[layers.length - 1][0], proofs: proofMap };
 }
 
 export function allocMintKashAmounts(
