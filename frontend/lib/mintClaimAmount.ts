@@ -110,22 +110,13 @@ async function loadBatchMintData(
     }),
   ]);
 
-  const processed =
-    typeof batchInfo === 'object' && batchInfo !== null && 'processed' in batchInfo
-      ? batchInfo.processed
-      : (batchInfo as readonly [bigint, bigint, boolean, bigint, bigint, bigint])[2];
-  const mintUsersCount =
-    typeof batchInfo === 'object' && batchInfo !== null && 'mintUsersCount' in batchInfo
-      ? batchInfo.mintUsersCount
-      : (batchInfo as readonly [bigint, bigint, boolean, bigint, bigint, bigint])[3];
-  const totalMintUSD =
-    typeof batchInfo === 'object' && batchInfo !== null && 'totalMintUSD' in batchInfo
-      ? batchInfo.totalMintUSD
-      : (batchInfo as readonly [bigint, bigint, boolean, bigint, bigint, bigint])[0];
-  const totalMintClaimable =
-    typeof claimInfo === 'object' && claimInfo !== null && 'totalMintClaimable' in claimInfo
-      ? claimInfo.totalMintClaimable
-      : (claimInfo as readonly Hex[])[3];
+  const batchTuple = batchInfo as readonly [bigint, bigint, boolean, bigint, bigint, bigint];
+  const claimTuple = claimInfo as readonly [Hex, Hex, bigint, bigint, bigint, bigint, bigint];
+  const totalMintUSD = batchTuple[0];
+  const processed = batchTuple[2];
+  const mintUsersCount = batchTuple[3];
+  const totalMintClaimable = claimTuple[3];
+  const mintRoot = claimTuple[1];
   if (!processed || totalMintClaimable === 0n) return null;
 
   const minters: `0x${string}`[] = [];
@@ -139,21 +130,17 @@ async function loadBatchMintData(
       functionName: 'batchMintUsers',
       args: [batchCycle, BigInt(i)],
     });
-    const usd = await client.readContract({
+    const req = await client.readContract({
       address: kashYield,
       abi: kashYieldABI,
-      functionName: 'getMintRequestUSD',
+      functionName: 'getPendingMintRequest',
       args: [minter, batchCycle],
     });
     minters.push(minter);
-    amountInUSD.push(usd);
+    amountInUSD.push(req.amountInUSD);
   }
 
-  const mintRoot =
-    typeof claimInfo === 'object' && claimInfo !== null && 'mintMerkleRoot' in claimInfo
-      ? claimInfo.mintMerkleRoot
-      : (claimInfo as readonly Hex[])[1];
-  return { minters, amountInUSD, totalMintUSD, totalMintClaimable, mintRoot: mintRoot as Hex };
+  return { minters, amountInUSD, totalMintUSD, totalMintClaimable, mintRoot };
 }
 
 export async function buildMintClaimProofFromChain(

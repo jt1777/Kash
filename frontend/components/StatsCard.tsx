@@ -189,10 +189,14 @@ export function StatsCard({ product = 'eth' }: { product?: VaultMetricsProduct }
                     decimals: 18,
                   },
                 };
+                type WatchAssetProvider = {
+                  request: (args: { method: string; params: unknown }) => Promise<unknown>;
+                };
                 try {
                   const provider = await connector?.getProvider();
-                  if (provider && typeof (provider as any).request === 'function') {
-                    await (provider as any).request({
+                  const watchProvider = provider as WatchAssetProvider | undefined;
+                  if (watchProvider && typeof watchProvider.request === 'function') {
+                    await watchProvider.request({
                       method: 'wallet_watchAsset',
                       params,
                     });
