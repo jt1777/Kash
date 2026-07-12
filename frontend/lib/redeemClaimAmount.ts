@@ -142,7 +142,22 @@ async function loadBatchRedeemData(
     }),
   ]);
 
-  const [, totalGrossRedeem, processed, , redeemUsersCount, totalRedeemKash] = batchInfo;
+  const processed =
+    typeof batchInfo === 'object' && batchInfo !== null && 'processed' in batchInfo
+      ? batchInfo.processed
+      : (batchInfo as readonly [bigint, bigint, boolean, bigint, bigint, bigint])[2];
+  const redeemUsersCount =
+    typeof batchInfo === 'object' && batchInfo !== null && 'redeemUsersCount' in batchInfo
+      ? batchInfo.redeemUsersCount
+      : (batchInfo as readonly [bigint, bigint, boolean, bigint, bigint, bigint])[4];
+  const totalRedeemKash =
+    typeof batchInfo === 'object' && batchInfo !== null && 'totalRedeemKash' in batchInfo
+      ? batchInfo.totalRedeemKash
+      : (batchInfo as readonly [bigint, bigint, boolean, bigint, bigint, bigint])[5];
+  const totalGrossRedeem =
+    typeof batchInfo === 'object' && batchInfo !== null && 'totalRedeemUSD' in batchInfo
+      ? batchInfo.totalRedeemUSD
+      : (batchInfo as readonly [bigint, bigint, boolean, bigint, bigint, bigint])[1];
   if (!processed || totalRedeemKash === 0n) return null;
 
   const redeemers: `0x${string}`[] = [];
@@ -193,7 +208,11 @@ export async function buildClaimProofFromChain(
     functionName: 'batchClaimInfo',
     args: [batchCycle],
   });
-  if (root.toLowerCase() !== claimInfo[0].toLowerCase()) return null;
+  const onChainRoot =
+    typeof claimInfo === 'object' && claimInfo !== null && 'redeemMerkleRoot' in claimInfo
+      ? claimInfo.redeemMerkleRoot
+      : (claimInfo as readonly Hex[])[0];
+  if (root.toLowerCase() !== onChainRoot.toLowerCase()) return null;
 
   const userKey = userAddress.toLowerCase();
   const proof = proofs.get(userKey);

@@ -110,8 +110,22 @@ async function loadBatchMintData(
     }),
   ]);
 
-  const [totalMintUSD, , processed, mintUsersCount] = batchInfo;
-  const totalMintClaimable = claimInfo[3];
+  const processed =
+    typeof batchInfo === 'object' && batchInfo !== null && 'processed' in batchInfo
+      ? batchInfo.processed
+      : (batchInfo as readonly [bigint, bigint, boolean, bigint, bigint, bigint])[2];
+  const mintUsersCount =
+    typeof batchInfo === 'object' && batchInfo !== null && 'mintUsersCount' in batchInfo
+      ? batchInfo.mintUsersCount
+      : (batchInfo as readonly [bigint, bigint, boolean, bigint, bigint, bigint])[3];
+  const totalMintUSD =
+    typeof batchInfo === 'object' && batchInfo !== null && 'totalMintUSD' in batchInfo
+      ? batchInfo.totalMintUSD
+      : (batchInfo as readonly [bigint, bigint, boolean, bigint, bigint, bigint])[0];
+  const totalMintClaimable =
+    typeof claimInfo === 'object' && claimInfo !== null && 'totalMintClaimable' in claimInfo
+      ? claimInfo.totalMintClaimable
+      : (claimInfo as readonly Hex[])[3];
   if (!processed || totalMintClaimable === 0n) return null;
 
   const minters: `0x${string}`[] = [];
@@ -135,7 +149,11 @@ async function loadBatchMintData(
     amountInUSD.push(usd);
   }
 
-  return { minters, amountInUSD, totalMintUSD, totalMintClaimable, mintRoot: claimInfo[1] as Hex };
+  const mintRoot =
+    typeof claimInfo === 'object' && claimInfo !== null && 'mintMerkleRoot' in claimInfo
+      ? claimInfo.mintMerkleRoot
+      : (claimInfo as readonly Hex[])[1];
+  return { minters, amountInUSD, totalMintUSD, totalMintClaimable, mintRoot: mintRoot as Hex };
 }
 
 export async function buildMintClaimProofFromChain(

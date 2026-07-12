@@ -274,6 +274,31 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
         setClaimingCycle(null);
         return;
       }
+      if (!publicClient) {
+        setClaimErrors((prev) => ({
+          ...prev,
+          [cycleKey]: 'Wallet RPC unavailable. Reconnect your wallet on Arbitrum One and try again.',
+        }));
+        setClaimingCycle(null);
+        return;
+      }
+      try {
+        await publicClient.simulateContract({
+          address: kashYield,
+          abi: kashYieldABI,
+          functionName: 'claimRedeem',
+          args: [batchCycle, proofData.amount, proofData.proof],
+          account: address,
+        });
+      } catch (simErr) {
+        const msg =
+          simErr instanceof Error
+            ? simErr.message
+            : 'Claim would revert on-chain (invalid proof or already claimed).';
+        setClaimErrors((prev) => ({ ...prev, [cycleKey]: msg }));
+        setClaimingCycle(null);
+        return;
+      }
       setPendingClaimCycle(batchCycle);
       claimRedeem({
         address: kashYield,

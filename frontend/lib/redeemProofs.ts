@@ -57,7 +57,7 @@ export async function fetchRedeemProof(
   };
 }
 
-/** Hosted proof JSON when available; otherwise rebuild from on-chain batch data. */
+/** Prefer on-chain rebuild (always matches committed root); hosted JSON is fallback only. */
 export async function resolveClaimProof(
   options: {
     product: 'eth' | 'btc';
@@ -68,10 +68,9 @@ export async function resolveClaimProof(
   },
 ): Promise<{ amount: bigint; proof: `0x${string}`[] } | null> {
   const { product, batchCycle, userAddress, kashYield, publicClient } = options;
-  const hosted = await fetchRedeemProof(product, batchCycle, userAddress);
-  if (hosted) return hosted;
   if (publicClient && kashYield) {
-    return buildClaimProofFromChain(publicClient, kashYield, batchCycle, userAddress);
+    const onChain = await buildClaimProofFromChain(publicClient, kashYield, batchCycle, userAddress);
+    if (onChain) return onChain;
   }
-  return null;
+  return fetchRedeemProof(product, batchCycle, userAddress);
 }
