@@ -142,7 +142,11 @@ async function loadBatchRedeemData(
     }),
   ]);
 
-  const [, totalGrossRedeem, processed, , redeemUsersCount, totalRedeemKash] = batchInfo;
+  const batchTuple = batchInfo as readonly [bigint, bigint, boolean, bigint, bigint, bigint];
+  const totalGrossRedeem = batchTuple[1];
+  const processed = batchTuple[2];
+  const redeemUsersCount = batchTuple[4];
+  const totalRedeemKash = batchTuple[5];
   if (!processed || totalRedeemKash === 0n) return null;
 
   const redeemers: `0x${string}`[] = [];
@@ -193,7 +197,9 @@ export async function buildClaimProofFromChain(
     functionName: 'batchClaimInfo',
     args: [batchCycle],
   });
-  if (root.toLowerCase() !== claimInfo[0].toLowerCase()) return null;
+  const claimTuple = claimInfo as readonly [Hex, Hex, bigint, bigint, bigint, bigint, bigint];
+  const onChainRoot = claimTuple[0];
+  if (root.toLowerCase() !== onChainRoot.toLowerCase()) return null;
 
   const userKey = userAddress.toLowerCase();
   const proof = proofs.get(userKey);

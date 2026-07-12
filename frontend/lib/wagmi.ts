@@ -20,7 +20,10 @@ const appUrl =
 // localStorage shim for SSR
 if (typeof window === 'undefined' && typeof global !== 'undefined') {
   const storage: Record<string, string> = {};
-  (global as any).localStorage = {
+  const globalWithStorage = globalThis as typeof globalThis & {
+    localStorage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem' | 'clear' | 'key' | 'length'>;
+  };
+  globalWithStorage.localStorage = {
     getItem: (key: string) => storage[key] || null,
     setItem: (key: string, value: string) => { storage[key] = String(value); },
     removeItem: (key: string) => { delete storage[key]; },

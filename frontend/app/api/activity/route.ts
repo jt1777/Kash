@@ -14,7 +14,7 @@ const KASH_YIELD_ADDRESSES = new Set([
 ]);
 
 function getEtherscanApiKey(): string {
-  let key =
+  const key =
     process.env.ETHERSCAN_API_KEY ||
     process.env.ARBISCAN_API_KEY ||
     process.env.NEXT_PUBLIC_ETHERSCAN_API_KEY ||

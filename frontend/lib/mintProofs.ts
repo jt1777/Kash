@@ -71,6 +71,7 @@ export async function fetchMintProof(
   };
 }
 
+/** Prefer on-chain rebuild; hosted JSON is fallback only. */
 export async function resolveMintClaimProof(
   options: {
     product: 'eth' | 'btc';
@@ -81,10 +82,9 @@ export async function resolveMintClaimProof(
   },
 ): Promise<{ amount: bigint; proof: `0x${string}`[] } | null> {
   const { product, batchCycle, userAddress, kashYield, publicClient } = options;
-  const hosted = await fetchMintProof(product, batchCycle, userAddress);
-  if (hosted) return hosted;
   if (publicClient && kashYield) {
-    return buildMintClaimProofFromChain(publicClient, kashYield, batchCycle, userAddress);
+    const onChain = await buildMintClaimProofFromChain(publicClient, kashYield, batchCycle, userAddress);
+    if (onChain) return onChain;
   }
-  return null;
+  return fetchMintProof(product, batchCycle, userAddress);
 }

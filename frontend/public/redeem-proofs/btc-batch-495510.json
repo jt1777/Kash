@@ -1,0 +1,29 @@
+{
+  "batchCycle": "495510",
+  "root": "0x2c8c0ca56d0f951aa590f006452fca150fbb3ade8c6f0405961d80ba8514ad40",
+  "leaves": [
+    {
+      "user": "0xCc29196f3d3E1Af2A4dd20F4F2765b090c9e892f",
+      "amount": "173279",
+      "proof": [
+        "0xea9cfd27eb9555975fa1a7393cf6b6c6276b280b130532aa85ed4cff244ca3c2",
+        "0x1a2855d1bd569f81f8b128c839a3b89d724e6f840a841241671a08251aba67ec"
+      ]
+    },
+    {
+      "user": "0xE2e2BE5667F5B3C345b5966e52e1F0Be9C711e48",
+      "amount": "100534",
+      "proof": [
+        "0x1fcb65301f927c924cb24fe1bb3d4fabaf67c7e1f8d366f6711164d668d0e2d4",
+        "0x1a2855d1bd569f81f8b128c839a3b89d724e6f840a841241671a08251aba67ec"
+      ]
+    },
+    {
+      "user": "0x1BC77DFf44c9cD2E7AeFAca78E729Dd8d3511381",
+      "amount": "201069",
+      "proof": [
+        "0x27008c714c2bc41d2d0d99ac4df5058279e379b41b248e3035d8d84d8411fac4"
+      ]
+    }
+  ]
+}
