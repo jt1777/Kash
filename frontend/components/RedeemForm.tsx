@@ -282,8 +282,9 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
         setClaimingCycle(null);
         return;
       }
+      let simulation;
       try {
-        await publicClient.simulateContract({
+        simulation = await publicClient.simulateContract({
           address: kashYield,
           abi: kashYieldABI,
           functionName: 'claimRedeem',
@@ -299,13 +300,16 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
         setClaimingCycle(null);
         return;
       }
+      // Pin gas from simulation so MetaMask does not re-estimate with a revert-inflated limit.
+      const estimatedGas = simulation.request.gas ?? 200_000n;
+      const gasLimit = (estimatedGas * 130n) / 100n;
       setPendingClaimCycle(batchCycle);
       claimRedeem({
         address: kashYield,
         abi: kashYieldABI,
         functionName: 'claimRedeem',
         args: [batchCycle, proofData.amount, proofData.proof],
-        ...gasOptions,
+        gas: gasLimit,
       });
     } catch (e) {
       setClaimErrors((prev) => ({
