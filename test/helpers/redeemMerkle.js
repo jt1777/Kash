@@ -15,6 +15,7 @@ function hashPair(a, b) {
   return keccak256(concat([getBytes(left), getBytes(right)]));
 }
 
+/** Proofs use per-layer sibling indices so 3+ leaves verify (not just the first pair). */
 function buildRedeemMerkleTree(batchCycle, entries) {
   const active = entries.filter((e) => e.amount > 0n);
   if (active.length === 0) {
@@ -22,34 +23,40 @@ function buildRedeemMerkleTree(batchCycle, entries) {
   }
 
   const leaves = active.map((e) => hashLeaf(batchCycle, e.user, e.amount));
-  let layer = leaves;
-  const proofs = active.map(() => []);
-
-  while (layer.length > 1) {
+  const layers = [leaves];
+  while (layers[layers.length - 1].length > 1) {
+    const prev = layers[layers.length - 1];
     const next = [];
-    for (let i = 0; i < layer.length; i += 2) {
-      if (i + 1 === layer.length) {
-        next.push(layer[i]);
-        continue;
-      }
-      const parent = hashPair(layer[i], layer[i + 1]);
-      next.push(parent);
-      for (let j = 0; j < 2; j++) {
-        const leafIdx = i + j;
-        if (leafIdx < proofs.length) {
-          proofs[leafIdx].push(layer[i + 1 - j]);
-        }
+    for (let i = 0; i < prev.length; i += 2) {
+      if (i + 1 === prev.length) {
+        next.push(prev[i]);
+      } else {
+        next.push(hashPair(prev[i], prev[i + 1]));
       }
     }
-    layer = next;
+    layers.push(next);
   }
+
+  const proofs = leaves.map((_, index) => {
+    const proof = [];
+    let idx = index;
+    for (let layerIdx = 0; layerIdx < layers.length - 1; layerIdx++) {
+      const layer = layers[layerIdx];
+      const siblingIndex = idx % 2 === 0 ? idx + 1 : idx - 1;
+      if (siblingIndex < layer.length) {
+        proof.push(layer[siblingIndex]);
+      }
+      idx = Math.floor(idx / 2);
+    }
+    return proof;
+  });
 
   const proofMap = new Map();
   active.forEach((e, idx) => {
     proofMap.set(e.user.toLowerCase(), proofs[idx]);
   });
 
-  return { root: layer[0], proofs: proofMap };
+  return { root: layers[layers.length - 1][0], proofs: proofMap };
 }
 
 function allocRedeemNetAmounts(redeemers, kashAmounts, totalRedeemKash, totalGrossRedeem, feeBps) {
