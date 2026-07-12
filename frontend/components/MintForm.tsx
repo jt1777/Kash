@@ -339,13 +339,42 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
         setClaimingCycle(null);
         return;
       }
+      if (!publicClient) {
+        setClaimErrors((prev) => ({
+          ...prev,
+          [cycleKey]: 'Wallet RPC unavailable. Reconnect your wallet on Arbitrum One and try again.',
+        }));
+        setClaimingCycle(null);
+        return;
+      }
+      let simulation;
+      try {
+        simulation = await publicClient.simulateContract({
+          address: kashYield,
+          abi: kashYieldABI,
+          functionName: 'claimMint',
+          args: [batchCycle, proofData.amount, proofData.proof],
+          account: address,
+        });
+      } catch (simErr) {
+        const msg =
+          simErr instanceof Error
+            ? simErr.message
+            : 'Claim would revert on-chain (invalid proof or already claimed).';
+        setClaimErrors((prev) => ({ ...prev, [cycleKey]: msg }));
+        setClaimingCycle(null);
+        return;
+      }
+      // Pin gas from simulation so MetaMask does not re-estimate with a revert-inflated limit.
+      const estimatedGas = simulation.request.gas ?? 200_000n;
+      const gasLimit = (estimatedGas * 130n) / 100n;
       setPendingClaimCycle(batchCycle);
       claimMint({
         address: kashYield,
         abi: kashYieldABI,
         functionName: 'claimMint',
         args: [batchCycle, proofData.amount, proofData.proof],
-        ...gasOptions,
+        gas: gasLimit,
       });
     } catch (e) {
       setClaimErrors((prev) => ({
