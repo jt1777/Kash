@@ -31,6 +31,13 @@ export function formatMintClaimAmount(amountWei: bigint): string {
   return n.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 6 });
 }
 
+function manifestCacheKey(product: 'eth' | 'btc', batchCycle: bigint): string {
+  return `${product}:${batchCycle.toString()}`;
+}
+
+const mintManifestCache = new Map<string, MintProofManifest>();
+const mintManifestInflight = new Map<string, Promise<MintProofManifest | null>>();
+
 async function fetchMintProofManifest(
   product: 'eth' | 'btc',
   batchCycle: bigint,
@@ -52,13 +59,31 @@ async function fetchMintProofManifest(
   return null;
 }
 
-export async function fetchMintProof(
+/** Load manifest once per batch per session; dedupe concurrent fetches. */
+async function loadMintProofManifest(
   product: 'eth' | 'btc',
   batchCycle: bigint,
+): Promise<MintProofManifest | null> {
+  const key = manifestCacheKey(product, batchCycle);
+  const cached = mintManifestCache.get(key);
+  if (cached) return cached;
+
+  let inflight = mintManifestInflight.get(key);
+  if (!inflight) {
+    inflight = fetchMintProofManifest(product, batchCycle).then((manifest) => {
+      mintManifestInflight.delete(key);
+      if (manifest) mintManifestCache.set(key, manifest);
+      return manifest;
+    });
+    mintManifestInflight.set(key, inflight);
+  }
+  return inflight;
+}
+
+function proofFromManifest(
+  manifest: MintProofManifest,
   userAddress: string,
-): Promise<{ amount: bigint; proof: `0x${string}`[] } | null> {
-  const manifest = await fetchMintProofManifest(product, batchCycle);
-  if (!manifest) return null;
+): { amount: bigint; proof: `0x${string}`[] } | null {
   const leaf = manifest.leaves.find(
     (l) => l.user.toLowerCase() === userAddress.toLowerCase(),
   );
@@ -71,7 +96,17 @@ export async function fetchMintProof(
   };
 }
 
-/** Prefer on-chain rebuild; hosted JSON is fallback only. */
+export async function fetchMintProof(
+  product: 'eth' | 'btc',
+  batchCycle: bigint,
+  userAddress: string,
+): Promise<{ amount: bigint; proof: `0x${string}`[] } | null> {
+  const manifest = await loadMintProofManifest(product, batchCycle);
+  if (!manifest) return null;
+  return proofFromManifest(manifest, userAddress);
+}
+
+/** Prefer hosted manifest (O(1) HTTP); on-chain rebuild is fallback when manifest is missing. */
 export async function resolveMintClaimProof(
   options: {
     product: 'eth' | 'btc';
@@ -82,9 +117,15 @@ export async function resolveMintClaimProof(
   },
 ): Promise<{ amount: bigint; proof: `0x${string}`[] } | null> {
   const { product, batchCycle, userAddress, kashYield, publicClient } = options;
-  if (publicClient && kashYield) {
-    const onChain = await buildMintClaimProofFromChain(publicClient, kashYield, batchCycle, userAddress);
-    if (onChain) return onChain;
+
+  const manifest = await loadMintProofManifest(product, batchCycle);
+  if (manifest) {
+    const fromManifest = proofFromManifest(manifest, userAddress);
+    if (fromManifest) return fromManifest;
   }
-  return fetchMintProof(product, batchCycle, userAddress);
+
+  if (publicClient && kashYield) {
+    return buildMintClaimProofFromChain(publicClient, kashYield, batchCycle, userAddress);
+  }
+  return null;
 }
