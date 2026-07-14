@@ -1,6 +1,43 @@
 import type { PublicClient } from 'viem';
-import { concat, encodeAbiParameters, keccak256, type Hex } from 'viem';
+import { concat, encodeAbiParameters, keccak256, parseAbiItem, type Hex } from 'viem';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
+
+const WAD = 10n ** 18n;
+
+/** Mirror bot mintMerkle.ts — per-user fee rounding (not batchTotalMintValueUSD aggregate). */
+export function computeTotalMintKash(
+  mintUSD: bigint[],
+  feeBps: bigint,
+  exactNAV: bigint,
+): bigint {
+  if (exactNAV === 0n) return 0n;
+  let total = 0n;
+  for (const usd of mintUSD) {
+    if (usd === 0n) continue;
+    const afterFee = (usd * (10000n - feeBps)) / 10000n;
+    total += (afterFee * WAD) / exactNAV;
+  }
+  return total;
+}
+
+async function readSettlementNav(
+  client: PublicClient,
+  kashYield: `0x${string}`,
+  batchCycle: bigint,
+): Promise<bigint | null> {
+  const logs = await client.getLogs({
+    address: kashYield,
+    event: parseAbiItem(
+      'event BatchProcessed(uint256 indexed batchCycle, uint256 totalMintValueUSD, uint256 totalRedeemValueUSD, uint256 exactNAV)',
+    ),
+    args: { batchCycle },
+    fromBlock: 0n,
+    toBlock: 'latest',
+  });
+  if (logs.length === 0) return null;
+  const last = logs[logs.length - 1];
+  return last.args.exactNAV as bigint;
+}
 
 export type MintLeaf = { user: string; amount: bigint };
 
@@ -140,7 +177,7 @@ async function loadBatchMintData(
     amountInUSD.push(usd);
   }
 
-  return { minters, amountInUSD, totalMintUSD, totalMintClaimable, mintRoot };
+  return { minters, amountInUSD, totalMintUSD, mintRoot };
 }
 
 export async function buildMintClaimProofFromChain(
@@ -152,11 +189,24 @@ export async function buildMintClaimProofFromChain(
   const batch = await loadBatchMintData(client, kashYield, batchCycle);
   if (!batch) return null;
 
+  const [feeBps, settlementNav] = await Promise.all([
+    client.readContract({
+      address: kashYield,
+      abi: kashYieldABI,
+      functionName: 'feeBps',
+    }),
+    readSettlementNav(client, kashYield, batchCycle),
+  ]);
+  if (settlementNav == null) return null;
+
+  const totalMintKash = computeTotalMintKash(batch.amountInUSD, feeBps, settlementNav);
+  if (totalMintKash === 0n) return null;
+
   const entries = allocMintKashAmounts(
     batch.minters,
     batch.amountInUSD,
     batch.totalMintUSD,
-    batch.totalMintClaimable,
+    totalMintKash,
   );
   const { root, proofs } = buildMintMerkleTree(batchCycle, entries);
   if (root.toLowerCase() !== batch.mintRoot.toLowerCase()) return null;

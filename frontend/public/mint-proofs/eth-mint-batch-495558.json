@@ -1,0 +1,29 @@
+{
+  "batchCycle": "495558",
+  "root": "0x56085a8354bd389d35cb18931cbfd09a47f363c786b72e33873ae47dc0253b21",
+  "leaves": [
+    {
+      "user": "0xCc29196f3d3E1Af2A4dd20F4F2765b090c9e892f",
+      "kashAmount": "581406941637253291684",
+      "proof": [
+        "0xc82f74c423e43076fe32b3aef3bbd9e192b12aafdebce4723928aca28c35f636",
+        "0xadd342f8b0c1ce6d4364f3d151a936f1a1f1627df796b0c17a6bf1ff4abff709"
+      ]
+    },
+    {
+      "user": "0x1BC77DFf44c9cD2E7AeFAca78E729Dd8d3511381",
+      "kashAmount": "193802313879084430561",
+      "proof": [
+        "0x6a382fdf191124eece7689d865192f8f1da466ed32b0780a320645e9543a0eb8",
+        "0xadd342f8b0c1ce6d4364f3d151a936f1a1f1627df796b0c17a6bf1ff4abff709"
+      ]
+    },
+    {
+      "user": "0xE2e2BE5667F5B3C345b5966e52e1F0Be9C711e48",
+      "kashAmount": "193802313879084430562",
+      "proof": [
+        "0xa50b2ac8ae6f5d5c75c81ccfe0cb239f9e978323b8640c49aa74121ac51b2b75"
+      ]
+    }
+  ]
+}
