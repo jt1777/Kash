@@ -19,6 +19,13 @@ export function formatClaimPayoutAmount(
   return n.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 6 });
 }
 
+function manifestCacheKey(product: 'eth' | 'btc', batchCycle: bigint): string {
+  return `${product}:${batchCycle.toString()}`;
+}
+
+const redeemManifestCache = new Map<string, RedeemProofManifest>();
+const redeemManifestInflight = new Map<string, Promise<RedeemProofManifest | null>>();
+
 async function fetchRedeemProofManifest(
   product: 'eth' | 'btc',
   batchCycle: bigint,
@@ -40,24 +47,58 @@ async function fetchRedeemProofManifest(
   return null;
 }
 
+/** Load manifest once per batch per session; dedupe concurrent fetches. */
+async function loadRedeemProofManifest(
+  product: 'eth' | 'btc',
+  batchCycle: bigint,
+): Promise<RedeemProofManifest | null> {
+  const key = manifestCacheKey(product, batchCycle);
+  const cached = redeemManifestCache.get(key);
+  if (cached) return cached;
+
+  let inflight = redeemManifestInflight.get(key);
+  if (!inflight) {
+    inflight = fetchRedeemProofManifest(product, batchCycle).then((manifest) => {
+      redeemManifestInflight.delete(key);
+      if (manifest) redeemManifestCache.set(key, manifest);
+      return manifest;
+    });
+    redeemManifestInflight.set(key, inflight);
+  }
+  return inflight;
+}
+
+function proofFromManifest(
+  manifest: RedeemProofManifest,
+  userAddress: string,
+): { amount: bigint; proof: `0x${string}`[] } | null {
+  const leaf = manifest.leaves.find(
+    (l) => l.user.toLowerCase() === userAddress.toLowerCase(),
+  );
+  if (!leaf || leaf.amount === '') return null;
+  try {
+    const amount = BigInt(leaf.amount);
+    if (amount === 0n) return null;
+    return {
+      amount,
+      proof: leaf.proof as `0x${string}`[],
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchRedeemProof(
   product: 'eth' | 'btc',
   batchCycle: bigint,
   userAddress: string,
 ): Promise<{ amount: bigint; proof: `0x${string}`[] } | null> {
-  const manifest = await fetchRedeemProofManifest(product, batchCycle);
+  const manifest = await loadRedeemProofManifest(product, batchCycle);
   if (!manifest) return null;
-  const leaf = manifest.leaves.find(
-    (l) => l.user.toLowerCase() === userAddress.toLowerCase(),
-  );
-  if (!leaf) return null;
-  return {
-    amount: BigInt(leaf.amount),
-    proof: leaf.proof as `0x${string}`[],
-  };
+  return proofFromManifest(manifest, userAddress);
 }
 
-/** Prefer on-chain rebuild (always matches committed root); hosted JSON is fallback only. */
+/** Prefer hosted manifest (O(1) HTTP); on-chain rebuild is fallback when manifest is missing. */
 export async function resolveClaimProof(
   options: {
     product: 'eth' | 'btc';
@@ -68,9 +109,15 @@ export async function resolveClaimProof(
   },
 ): Promise<{ amount: bigint; proof: `0x${string}`[] } | null> {
   const { product, batchCycle, userAddress, kashYield, publicClient } = options;
-  if (publicClient && kashYield) {
-    const onChain = await buildClaimProofFromChain(publicClient, kashYield, batchCycle, userAddress);
-    if (onChain) return onChain;
+
+  const manifest = await loadRedeemProofManifest(product, batchCycle);
+  if (manifest) {
+    const fromManifest = proofFromManifest(manifest, userAddress);
+    if (fromManifest) return fromManifest;
   }
-  return fetchRedeemProof(product, batchCycle, userAddress);
+
+  if (publicClient && kashYield) {
+    return buildClaimProofFromChain(publicClient, kashYield, batchCycle, userAddress);
+  }
+  return null;
 }
