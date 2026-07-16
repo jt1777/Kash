@@ -420,7 +420,8 @@ contract KashYieldBtc is ReentrancyGuard {
         (, uint256 totalRedeemBtcNeeded, uint256 totalRedeemFeeBtc) =
             _allocRedeemWbtc(batchCycle, redeemers, totalRedeemKash, batchTotalRedeemValueUSD[batchCycle]);
         uint256 totalProtocolFeeBtc = totalMintFeeBtc + totalRedeemFeeBtc;
-        if (IERC20(wbtcAddress).balanceOf(address(this)) + REDEEM_PAYOUT_TOLERANCE < totalRedeemBtcNeeded + lockedClaimWbtc) revert InsufficientWbtcForRedeems();
+        // This batch only — do not add prior batches' lockedClaimWbtc (see KashYieldETH Phase 2).
+        if (IERC20(wbtcAddress).balanceOf(address(this)) + REDEEM_PAYOUT_TOLERANCE < totalRedeemBtcNeeded) revert InsufficientWbtcForRedeems();
         if (totalProtocolFeeBtc > 0) {
             IERC20(wbtcAddress).safeTransfer(feeReceiver, totalProtocolFeeBtc);
         }

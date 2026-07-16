@@ -1,11 +1,20 @@
 'use client';
 
 import { useMemo } from 'react';
-import { useReadContracts } from 'wagmi';
+import { useReadContract, useReadContracts } from 'wagmi';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 
-/** Past batch cycles to scan (daily batches → 30 ≈ claim expiry window on-chain). */
+/** Mirrors KashYield CLAIM_EXPIRY_SECONDS (30 days). */
+export const CLAIM_EXPIRY_SECONDS = 30 * 86400;
+
+/** Fallback when cycleDurationSeconds has not loaded yet (legacy daily batches). */
 export const PENDING_REQUEST_LOOKBACK = 30;
+
+/** Batch cycles to scan so unclaimed mint/redeem stays visible for the full on-chain claim window. */
+export function pendingRequestLookbackCycles(cycleDurationSeconds: number | undefined): number {
+  const duration = Math.max(60, cycleDurationSeconds ?? 86400);
+  return Math.ceil(CLAIM_EXPIRY_SECONDS / duration);
+}
 
 export type PendingBatchRequest = {
   batchCycle: bigint;
@@ -51,9 +60,23 @@ export function usePendingBatchRequest(options: {
     userAddress,
     currentBatchCycle,
     kind,
-    lookback = PENDING_REQUEST_LOOKBACK,
+    lookback: lookbackOverride,
     enabled = true,
   } = options;
+
+  const { data: cycleDurationSecondsRaw } = useReadContract({
+    address: kashYield,
+    abi: kashYieldABI,
+    functionName: 'cycleDurationSeconds',
+    query: { enabled: enabled && !!kashYield },
+  });
+
+  const lookback = useMemo(() => {
+    if (lookbackOverride !== undefined) return lookbackOverride;
+    const duration =
+      cycleDurationSecondsRaw !== undefined ? Number(cycleDurationSecondsRaw) : undefined;
+    return pendingRequestLookbackCycles(duration);
+  }, [lookbackOverride, cycleDurationSecondsRaw]);
 
   const cycles = useMemo(
     () => cyclesForLookback(currentBatchCycle, lookback),

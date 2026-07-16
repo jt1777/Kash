@@ -453,7 +453,9 @@ contract KashYieldETH is ReentrancyGuard {
         (, uint256 totalRedeemEthNeeded, uint256 totalRedeemFeeEth) =
             _allocRedeemEth(batchCycle, redeemers, totalRedeemKash, batchTotalRedeemValueUSD[batchCycle]);
         uint256 totalProtocolFeeEth = totalMintFeeEth + totalRedeemFeeEth;
-        if (address(this).balance + REDEEM_PAYOUT_TOLERANCE < totalRedeemEthNeeded + lockedClaimEth) revert InsufficientEthForRedeems();
+        // This batch only — do not add prior batches' lockedClaimEth. Mark-done sized G for this
+        // cycle; claimRedeem checks balance at pull time; sweepExpiredClaims releases after expiry.
+        if (address(this).balance + REDEEM_PAYOUT_TOLERANCE < totalRedeemEthNeeded) revert InsufficientEthForRedeems();
         if (totalProtocolFeeEth > 0) {
             (bool success, ) = payable(feeReceiver).call{value: totalProtocolFeeEth}("");
             if (!success) revert InsufficientEthInContract();
