@@ -346,11 +346,15 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
     if (isClaimSuccess) {
       setClaimingCycle(null);
       setPendingClaimCycle(null);
+      setSubmittedRedeem(null);
+      setAmount('');
+      setShowRedeemConfirm(false);
+      resetRedeem();
       refetchClaimStatuses();
       refetchPendingLookback();
       dispatchActivityRefresh();
     }
-  }, [isClaimSuccess, refetchClaimStatuses, refetchPendingLookback]);
+  }, [isClaimSuccess, refetchClaimStatuses, refetchPendingLookback, resetRedeem]);
 
   useEffect(() => {
     if (isRedeemSuccess && redeemHash && amount && lastActivityRefreshHash !== redeemHash) {
@@ -683,7 +687,7 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
           <button
             type="button"
             onClick={handleApprove}
-            disabled={isApprovePending || isApproveConfirming || !amount}
+            disabled={isApprovePending || isApproveConfirming || !amount || needsClaim}
             className="w-full px-6 py-3 bg-purple-600 text-white rounded-lg font-medium hover:bg-purple-700 disabled:bg-gray-300 disabled:cursor-not-allowed cursor-pointer transition-colors"
           >
             {isApprovePending || isApproveConfirming ? 'Approving...' : 'Approve KASH'}
@@ -698,6 +702,7 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
             isRedeemConfirming ||
             !amount ||
             needsApproval ||
+            needsClaim ||
             redeemBatchCapBlocked ||
             (kashBalance !== undefined && parsedAmount > kashBalance)
           }

@@ -398,11 +398,15 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
     if (isClaimSuccess) {
       setClaimingCycle(null);
       setPendingClaimCycle(null);
+      setSubmittedMint(null);
+      setAmount('');
+      setShowMintConfirm(false);
+      resetMint();
       refetchClaimStatuses();
       refetchPendingLookback();
       dispatchActivityRefresh();
     }
-  }, [isClaimSuccess, refetchClaimStatuses, refetchPendingLookback]);
+  }, [isClaimSuccess, refetchClaimStatuses, refetchPendingLookback, resetMint]);
 
   useEffect(() => {
     if (isMintSuccess) {
@@ -797,7 +801,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
           <button
             type="button"
             onClick={handleApprove}
-            disabled={isApprovePending || isApproveConfirming || !amount}
+            disabled={isApprovePending || isApproveConfirming || !amount || needsClaim}
             className="w-full px-6 py-3 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed cursor-pointer transition-colors"
           >
             {isApprovePending || isApproveConfirming ? 'Approving...' : `Approve ${depositToken.symbol}`}
@@ -812,6 +816,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
             isMintConfirming ||
             !amount ||
             needsApproval ||
+            needsClaim ||
             exceedsBalance ||
             !!exceedsWbtcBalance ||
             mintBelowMinUsd ||
