@@ -26,4 +26,11 @@ interface ISpotDex {
         uint256 minAmountOut,
         address recipient
     ) external payable returns (uint256 amountOut);
+
+    /// @notice Quote exact input swap output (no state change). tokenIn address(0) = native ETH.
+    function quoteExactIn(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn
+    ) external view returns (uint256 amountOut);
 }

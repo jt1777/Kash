@@ -29,6 +29,21 @@ interface IWETH9 is IERC20 {
     function withdraw(uint256 amount) external;
 }
 
+/// @dev Uniswap V3 QuoterV2 — Arbitrum One: 0x61fFE014bA17989E743c5F6cB21bF9697530B21e
+interface IQuoterV2 {
+    struct QuoteExactInputSingleParams {
+        address tokenIn;
+        address tokenOut;
+        uint256 amountIn;
+        uint24 fee;
+        uint160 sqrtPriceLimitX96;
+    }
+
+    function quoteExactInputSingle(QuoteExactInputSingleParams memory params)
+        external
+        returns (uint256 amountOut, uint160 sqrtPriceX96After, uint32 initializedTicksCrossed, uint256 gasEstimate);
+}
+
 /**
  * @title UniswapV3Adapter
  * @notice ISpotDex adapter for Uniswap V3. Supports wBTC ↔ USDC and ETH ↔ USDC swaps.
@@ -50,6 +65,8 @@ interface IWETH9 is IERC20 {
  */
 contract UniswapV3Adapter is ISpotDex {
     using SafeERC20 for IERC20;
+
+    address private constant ARBITRUM_QUOTER_V2 = 0x61fFE014bA17989E743c5F6cB21bF9697530B21e;
 
     IUniswapV3SwapRouter public immutable swapRouter;
     address public immutable wethAddress; // Wrapped ETH for native ETH swaps
@@ -147,6 +164,34 @@ contract UniswapV3Adapter is ISpotDex {
         }
 
         emit SwapExecuted(tokenIn, tokenOut, amountIn, amountOut);
+    }
+
+    /// @inheritdoc ISpotDex
+    function quoteExactIn(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn
+    ) external view override returns (uint256 amountOut) {
+        address effectiveTokenIn = tokenIn == address(0) ? wethAddress : tokenIn;
+        address effectiveTokenOut = tokenOut == address(0) ? wethAddress : tokenOut;
+
+        uint24 fee = feeTierOverride[effectiveTokenIn][effectiveTokenOut];
+        if (fee == 0) fee = defaultFeeTier;
+
+        (bool success, bytes memory data) = ARBITRUM_QUOTER_V2.staticcall(
+            abi.encodeWithSelector(
+                IQuoterV2.quoteExactInputSingle.selector,
+                IQuoterV2.QuoteExactInputSingleParams({
+                    tokenIn: effectiveTokenIn,
+                    tokenOut: effectiveTokenOut,
+                    amountIn: amountIn,
+                    fee: fee,
+                    sqrtPriceLimitX96: 0
+                })
+            )
+        );
+        require(success, "QuoterV2 quote failed");
+        (amountOut,,,) = abi.decode(data, (uint256, uint160, uint32, uint256));
     }
 
     receive() external payable {}
