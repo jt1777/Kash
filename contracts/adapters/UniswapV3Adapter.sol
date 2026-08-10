@@ -3,6 +3,7 @@ pragma solidity ^0.8.28;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/utils/math/Math.sol";
 import "../interfaces/ISpotDex.sol";
 
 /// @dev Uniswap **SwapRouter02** `exactInputSingle` (IV3SwapRouter) — **no `deadline` field**.
@@ -29,19 +30,24 @@ interface IWETH9 is IERC20 {
     function withdraw(uint256 amount) external;
 }
 
-/// @dev Uniswap V3 QuoterV2 — Arbitrum One: 0x61fFE014bA17989E743c5F6cB21bF9697530B21e
-interface IQuoterV2 {
-    struct QuoteExactInputSingleParams {
-        address tokenIn;
-        address tokenOut;
-        uint256 amountIn;
-        uint24 fee;
-        uint160 sqrtPriceLimitX96;
-    }
+interface IUniswapV3Factory {
+    function getPool(address tokenA, address tokenB, uint24 fee) external view returns (address pool);
+}
 
-    function quoteExactInputSingle(QuoteExactInputSingleParams memory params)
+interface IUniswapV3Pool {
+    function token0() external view returns (address);
+    function slot0()
         external
-        returns (uint256 amountOut, uint160 sqrtPriceX96After, uint32 initializedTicksCrossed, uint256 gasEstimate);
+        view
+        returns (
+            uint160 sqrtPriceX96,
+            int24 tick,
+            uint16 observationIndex,
+            uint16 observationCardinality,
+            uint16 observationCardinalityNext,
+            uint8 feeProtocol,
+            bool unlocked
+        );
 }
 
 /**
@@ -66,7 +72,9 @@ interface IQuoterV2 {
 contract UniswapV3Adapter is ISpotDex {
     using SafeERC20 for IERC20;
 
-    address private constant ARBITRUM_QUOTER_V2 = 0x61fFE014bA17989E743c5F6cB21bF9697530B21e;
+    /// @dev Uniswap V3 factory — Arbitrum One.
+    address private constant ARBITRUM_FACTORY = 0x1F98431c8aD98523631AE4a59f267346ea31F984;
+    uint256 private constant Q96 = 1 << 96;
 
     IUniswapV3SwapRouter public immutable swapRouter;
     address public immutable wethAddress; // Wrapped ETH for native ETH swaps
@@ -74,7 +82,7 @@ contract UniswapV3Adapter is ISpotDex {
     address public owner;
     address public pendingOwner;
 
-    /// @notice Default fee tier (basis points * 100). 500 = 0.05%, 3000 = 0.3%, 10000 = 1%.
+    /// @notice Default fee tier (hundredths of a bip). 500 = 0.05%, 3000 = 0.3%, 10000 = 1%.
     /// 0.05% is the primary fee tier for WETH/USDC and wBTC/USDC on Arbitrum mainnet.
     uint24 public defaultFeeTier = 500;
     /// @notice Override fee tier per tokenIn+tokenOut pair (0 = use defaultFeeTier).
@@ -167,6 +175,8 @@ contract UniswapV3Adapter is ISpotDex {
     }
 
     /// @inheritdoc ISpotDex
+    /// @notice View quote at current pool spot price (single hop, fee-adjusted).
+    ///         Conservative slippage floor — does not simulate tick-crossing.
     function quoteExactIn(
         address tokenIn,
         address tokenOut,
@@ -178,20 +188,30 @@ contract UniswapV3Adapter is ISpotDex {
         uint24 fee = feeTierOverride[effectiveTokenIn][effectiveTokenOut];
         if (fee == 0) fee = defaultFeeTier;
 
-        (bool success, bytes memory data) = ARBITRUM_QUOTER_V2.staticcall(
-            abi.encodeWithSelector(
-                IQuoterV2.quoteExactInputSingle.selector,
-                IQuoterV2.QuoteExactInputSingleParams({
-                    tokenIn: effectiveTokenIn,
-                    tokenOut: effectiveTokenOut,
-                    amountIn: amountIn,
-                    fee: fee,
-                    sqrtPriceLimitX96: 0
-                })
-            )
-        );
-        require(success, "QuoterV2 quote failed");
-        (amountOut,,,) = abi.decode(data, (uint256, uint160, uint32, uint256));
+        address pool = IUniswapV3Factory(ARBITRUM_FACTORY).getPool(effectiveTokenIn, effectiveTokenOut, fee);
+        require(pool != address(0), "Uniswap pool not found");
+
+        (uint160 sqrtPriceX96,,,,,,) = IUniswapV3Pool(pool).slot0();
+        require(sqrtPriceX96 > 0, "Invalid pool price");
+
+        // Uniswap fee tier is hundredths of a bip (500 = 0.05%).
+        uint256 amountInAfterFee = Math.mulDiv(amountIn, 1_000_000 - uint256(fee), 1_000_000);
+
+        if (effectiveTokenIn == IUniswapV3Pool(pool).token0()) {
+            // token0 → token1: out = in × (sqrtPriceX96 / 2^96)^2
+            amountOut = Math.mulDiv(
+                Math.mulDiv(amountInAfterFee, uint256(sqrtPriceX96), Q96),
+                uint256(sqrtPriceX96),
+                Q96
+            );
+        } else {
+            // token1 → token0: out = in × (2^96 / sqrtPriceX96)^2
+            amountOut = Math.mulDiv(
+                Math.mulDiv(amountInAfterFee, Q96, uint256(sqrtPriceX96)),
+                Q96,
+                uint256(sqrtPriceX96)
+            );
+        }
     }
 
     receive() external payable {}
