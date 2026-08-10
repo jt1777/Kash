@@ -75,6 +75,7 @@ async function deployKashYieldBtcStack({
   feeReceiver,
   feeBps = 3n,
   maxSwapSlippageBps = 100n,
+  redeemPayoutBufferBps = 50n,
   maxMintUsers = 10_000n,
   maxRedeemUsers = 10_000n,
   useBenchmark = false,
@@ -123,6 +124,7 @@ async function deployKashYieldBtcStack({
     feeBps,
     maxMintUsers,
     maxRedeemUsers,
+    redeemPayoutBufferBps,
   );
   await kashYieldBtc.waitForDeployment();
 
@@ -156,6 +158,7 @@ async function deployKashYieldEthStack({
   feeReceiver,
   feeBps = 3n,
   maxSwapSlippageBps = 100n,
+  redeemPayoutBufferBps = 50n,
   maxMintUsers = 10_000n,
   maxRedeemUsers = 10_000n,
 }) {
@@ -202,6 +205,7 @@ async function deployKashYieldEthStack({
     feeBps,
     maxMintUsers,
     maxRedeemUsers,
+    redeemPayoutBufferBps,
   );
   await kashYieldEth.waitForDeployment();
 

@@ -20,7 +20,8 @@ contract BenchmarkKashYieldBtc is KashYieldBtc {
         uint256 _maxSwapSlippageBps,
         uint256 _feeBps,
         uint256 _maxMintUsers,
-        uint256 _maxRedeemUsers
+        uint256 _maxRedeemUsers,
+        uint256 _redeemPayoutBufferBps
     )
         KashYieldBtc(
             _botAddress,
@@ -37,7 +38,8 @@ contract BenchmarkKashYieldBtc is KashYieldBtc {
             _maxSwapSlippageBps,
             _feeBps,
             _maxMintUsers,
-            _maxRedeemUsers
+            _maxRedeemUsers,
+            _redeemPayoutBufferBps
         )
     {}
 

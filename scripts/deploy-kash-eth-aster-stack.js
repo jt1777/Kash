@@ -52,6 +52,7 @@ async function main() {
   const processingWindowStart = BigInt(process.env.PROCESSING_WINDOW_START || "85500");
   const feeBps = BigInt(process.env.FEE_BPS || "3");
   const maxSwapSlippageBps = BigInt(process.env.MAX_SWAP_SLIPPAGE_BPS || "100");
+  const redeemPayoutBufferBps = BigInt(process.env.REDEEM_PAYOUT_BUFFER_BPS || "50");
 
   for (const [label, addr] of [
     ["BOT_ADDRESS", botAddress],
@@ -126,6 +127,7 @@ async function main() {
     feeBps,
     10_000n,
     10_000n,
+    redeemPayoutBufferBps,
   );
   await kashYieldEth.waitForDeployment();
   const kashYieldEthAddress = await kashYieldEth.getAddress();

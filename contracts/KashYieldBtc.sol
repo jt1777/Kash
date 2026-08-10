@@ -48,6 +48,8 @@ error AlreadyClaimed();
 error ClaimExpired();
 error InvalidProof();
 error ClaimsNotExpired();
+error SlippageExceeded();
+error ExceedsAllocation();
 error PreviousBatchNotComplete();
 
 event MintRequested(address indexed user, uint256 amountIn, uint256 batchCycle);
@@ -62,6 +64,10 @@ event RedeemMerkleRootCommitted(uint256 indexed batchCycle, bytes32 root, uint25
 event MintMerkleRootCommitted(uint256 indexed batchCycle, bytes32 root, uint256 totalMintClaimable, uint256 claimDeadline);
 event ExpiredClaimsSwept(uint256 indexed batchCycle, uint256 amountSwept);
 event ExpiredMintClaimsSwept(uint256 indexed batchCycle, uint256 amountSwept);
+event ExpiredRedeemClaimsMarked(uint256 indexed batchCycle);
+event ExpiredMintClaimsMarked(uint256 indexed batchCycle);
+event ExpiredRedeemReleased(uint256 indexed batchCycle, address indexed user, uint256 amount);
+event ExpiredMintReleased(uint256 indexed batchCycle, address indexed user, uint256 amount);
 
 /**
  * @title KashYieldBtc
@@ -95,8 +101,8 @@ contract KashYieldBtc is ReentrancyGuard {
     uint256 public immutable cycleDurationSeconds;
     uint256 public immutable userWindowEnd;
     uint256 public immutable processingWindowStart;
+    uint256 public immutable redeemPayoutBufferBps;
 
-    uint256 private constant REDEEM_PAYOUT_TOLERANCE = 30;
     uint256 public constant CLAIM_EXPIRY_SECONDS = 30 days;
 
     uint256 public lockedClaimWbtc;
@@ -110,8 +116,14 @@ contract KashYieldBtc is ReentrancyGuard {
         uint256 claimDeadline;
         uint256 claimedAmount;
         uint256 mintClaimedAmount;
+        bool redeemClaimsExpired;
+        bool mintClaimsExpired;
     }
     mapping(uint256 => BatchClaimInfo) public batchClaimInfo;
+    mapping(uint256 => mapping(address => uint256)) public batchRedeemNetAsset;
+    mapping(uint256 => mapping(address => uint256)) public batchRedeemReleasedAsset;
+    mapping(uint256 => mapping(address => uint256)) public batchMintKashAllocation;
+    mapping(uint256 => mapping(address => uint256)) public batchMintKashReleased;
     mapping(uint256 => mapping(address => bool)) public redeemClaimed;
     mapping(uint256 => mapping(address => bool)) public mintClaimed;
     mapping(uint256 => uint256) public activeMintUsers;
@@ -177,7 +189,8 @@ contract KashYieldBtc is ReentrancyGuard {
         uint256 _maxSwapSlippageBps,
         uint256 _feeBps,
         uint256 _maxMintUsers,
-        uint256 _maxRedeemUsers
+        uint256 _maxRedeemUsers,
+        uint256 _redeemPayoutBufferBps
     ) payable {
         if (_botAddress == address(0)) revert InvalidAddress();
         if (_wbtc == address(0) || _usdc == address(0)) revert InvalidAddress();
@@ -187,7 +200,8 @@ contract KashYieldBtc is ReentrancyGuard {
         if (_userWindowEnd > _cycleDurationSeconds) revert InvalidRequest();
         if (_processingWindowStart > _cycleDurationSeconds) revert InvalidRequest();
         if (_maxSwapSlippageBps > 500) revert FeeTooHigh();
-        if (_feeBps > 100) revert FeeTooHigh();
+        if (_feeBps > 30) revert FeeTooHigh();
+        if (_redeemPayoutBufferBps > 500) revert FeeTooHigh();
         if (_maxMintUsers == 0 || _maxMintUsers > 100_000) revert InvalidRequest();
         if (_maxRedeemUsers == 0 || _maxRedeemUsers > 100_000) revert InvalidRequest();
 
@@ -206,6 +220,7 @@ contract KashYieldBtc is ReentrancyGuard {
         feeBps = _feeBps;
         maxMintUsers = _maxMintUsers;
         maxRedeemUsers = _maxRedeemUsers;
+        redeemPayoutBufferBps = _redeemPayoutBufferBps;
         btcDecimals = AggregatorV3Interface(_btcOracle).decimals();
 
         aavePoolAddress = 0x794a61358D6845594F94dc1DB02A252b5b4814aD;
@@ -384,7 +399,7 @@ contract KashYieldBtc is ReentrancyGuard {
         address[] memory redeemers,
         uint256 totalRedeemKash,
         uint256 totalGrossRedeem
-    ) private view returns (uint256[] memory amounts, uint256 totalNet, uint256 totalFee) {
+    ) private returns (uint256[] memory amounts, uint256 totalNet, uint256 totalFee) {
         amounts = new uint256[](redeemers.length);
         uint256 kashLeft = totalRedeemKash;
         uint256 grossLeft = totalGrossRedeem;
@@ -398,8 +413,26 @@ contract KashYieldBtc is ReentrancyGuard {
             grossLeft -= gross;
             uint256 fee = gross * feeBps / 10000;
             amounts[i] = gross - fee;
+            batchRedeemNetAsset[batchCycle][redeemers[i]] = amounts[i];
             totalNet += amounts[i];
             totalFee += fee;
+        }
+    }
+
+    function _storeMintKashAllocations(uint256 batchCycle, uint256 totalMintKash, uint256 totalMintBtc) private {
+        if (totalMintKash == 0 || totalMintBtc == 0) return;
+        address[] memory minters = batchMintUsers[batchCycle];
+        uint256 kashLeft = totalMintKash;
+        uint256 btcLeft = totalMintBtc;
+        for (uint256 i = 0; i < minters.length; i++) {
+            MintRequest memory req = userMintRequests[minters[i]][batchCycle];
+            if (req.amountIn == 0) continue;
+            uint256 kash = btcLeft == req.amountIn
+                ? kashLeft
+                : (totalMintKash * req.amountIn) / totalMintBtc;
+            btcLeft -= req.amountIn;
+            kashLeft -= kash;
+            batchMintKashAllocation[batchCycle][minters[i]] = kash;
         }
     }
 
@@ -419,8 +452,10 @@ contract KashYieldBtc is ReentrancyGuard {
         uint256 totalRedeemKash = batchTotalRedeemKash[batchCycle];
         (, uint256 totalRedeemBtcNeeded, uint256 totalRedeemFeeBtc) =
             _allocRedeemWbtc(batchCycle, redeemers, totalRedeemKash, batchTotalRedeemValueUSD[batchCycle]);
+        _storeMintKashAllocations(batchCycle, totalMintKash, batchTotalMintBtc[batchCycle]);
         uint256 totalProtocolFeeBtc = totalMintFeeBtc + totalRedeemFeeBtc;
-        if (IERC20(wbtcAddress).balanceOf(address(this)) + REDEEM_PAYOUT_TOLERANCE < totalRedeemBtcNeeded + lockedClaimWbtc) revert InsufficientWbtcForRedeems();
+        uint256 buffer = (totalRedeemBtcNeeded * redeemPayoutBufferBps) / 10000;
+        if (IERC20(wbtcAddress).balanceOf(address(this)) + buffer < totalRedeemBtcNeeded + lockedClaimWbtc) revert InsufficientWbtcForRedeems();
         if (totalProtocolFeeBtc > 0) {
             IERC20(wbtcAddress).safeTransfer(feeReceiver, totalProtocolFeeBtc);
         }
@@ -496,24 +531,57 @@ contract KashYieldBtc is ReentrancyGuard {
         BatchClaimInfo storage info = batchClaimInfo[batchCycle];
         if (!batchProcessed[batchCycle]) revert WrongPhase();
         if (block.timestamp <= info.claimDeadline) revert ClaimsNotExpired();
+        if (info.redeemClaimsExpired) revert AlreadyProcessed();
         uint256 unclaimed = info.totalNetClaimable - info.claimedAmount;
         if (unclaimed == 0) revert ZeroAmount();
-        info.claimedAmount = info.totalNetClaimable;
-        lockedClaimWbtc -= unclaimed;
-        IERC20(wbtcAddress).safeTransfer(feeReceiver, unclaimed);
-        emit ExpiredClaimsSwept(batchCycle, unclaimed);
+        info.redeemClaimsExpired = true;
+        emit ExpiredRedeemClaimsMarked(batchCycle);
     }
 
     function sweepExpiredMintClaims(uint256 batchCycle) external onlyBotOrKeeper {
         BatchClaimInfo storage info = batchClaimInfo[batchCycle];
         if (!batchProcessed[batchCycle]) revert WrongPhase();
         if (block.timestamp <= info.claimDeadline) revert ClaimsNotExpired();
+        if (info.mintClaimsExpired) revert AlreadyProcessed();
         uint256 unclaimed = info.totalMintClaimable - info.mintClaimedAmount;
         if (unclaimed == 0) revert ZeroAmount();
-        info.mintClaimedAmount = info.totalMintClaimable;
-        lockedClaimKash -= unclaimed;
-        kashTokenBtc.burn(address(this), unclaimed);
-        emit ExpiredMintClaimsSwept(batchCycle, unclaimed);
+        info.mintClaimsExpired = true;
+        emit ExpiredMintClaimsMarked(batchCycle);
+    }
+
+    function releaseExpiredRedeem(uint256 batchCycle, address user, uint256 amount)
+        external
+        onlyBotOrKeeper
+        nonReentrant
+    {
+        if (amount == 0) revert ZeroAmount();
+        BatchClaimInfo storage info = batchClaimInfo[batchCycle];
+        if (!info.redeemClaimsExpired) revert ClaimsNotExpired();
+        if (redeemClaimed[batchCycle][user]) revert AlreadyClaimed();
+        uint256 cap = batchRedeemNetAsset[batchCycle][user] - batchRedeemReleasedAsset[batchCycle][user];
+        if (amount > cap) revert ExceedsAllocation();
+        batchRedeemReleasedAsset[batchCycle][user] += amount;
+        lockedClaimWbtc -= amount;
+        totalRedeemedBtcByUser[user] += amount;
+        IERC20(wbtcAddress).safeTransfer(user, amount);
+        emit ExpiredRedeemReleased(batchCycle, user, amount);
+    }
+
+    function releaseExpiredMint(uint256 batchCycle, address user, uint256 amount)
+        external
+        onlyBotOrKeeper
+        nonReentrant
+    {
+        if (amount == 0) revert ZeroAmount();
+        BatchClaimInfo storage info = batchClaimInfo[batchCycle];
+        if (!info.mintClaimsExpired) revert ClaimsNotExpired();
+        if (mintClaimed[batchCycle][user]) revert AlreadyClaimed();
+        uint256 cap = batchMintKashAllocation[batchCycle][user] - batchMintKashReleased[batchCycle][user];
+        if (amount > cap) revert ExceedsAllocation();
+        batchMintKashReleased[batchCycle][user] += amount;
+        lockedClaimKash -= amount;
+        kashTokenBtc.transfer(user, amount);
+        emit ExpiredMintReleased(batchCycle, user, amount);
     }
 
     function depositToAave(uint256 amount) external onlyBotOrKeeper nonReentrant {
@@ -545,19 +613,34 @@ contract KashYieldBtc is ReentrancyGuard {
     }
 
     function swapForUsdc(uint256 wbtcAmount, uint256 minOut) external onlyBotOrKeeper nonReentrant {
+        uint256 effectiveMinOut = _effectiveSwapMinOut(wbtcAddress, usdcAddress, wbtcAmount, minOut);
         IERC20(wbtcAddress).forceApprove(spotDexAddress, wbtcAmount);
         uint256 usdcOut = ISpotDex(spotDexAddress).swapExactIn(
-            wbtcAddress, usdcAddress, wbtcAmount, minOut, address(this)
+            wbtcAddress, usdcAddress, wbtcAmount, effectiveMinOut, address(this)
         );
+        if (usdcOut < effectiveMinOut) revert SlippageExceeded();
         emit ProtocolInteraction(ProtocolActionCodes.DEX_SWAP_FOR_USDC, usdcAddress, usdcOut);
     }
 
     function swapFromUsdc(uint256 usdcAmount, uint256 minOut) external onlyBotOrKeeper nonReentrant {
+        uint256 effectiveMinOut = _effectiveSwapMinOut(usdcAddress, wbtcAddress, usdcAmount, minOut);
         IERC20(usdcAddress).forceApprove(spotDexAddress, usdcAmount);
         uint256 wbtcOut = ISpotDex(spotDexAddress).swapExactIn(
-            usdcAddress, wbtcAddress, usdcAmount, minOut, address(this)
+            usdcAddress, wbtcAddress, usdcAmount, effectiveMinOut, address(this)
         );
+        if (wbtcOut < effectiveMinOut) revert SlippageExceeded();
         emit ProtocolInteraction(ProtocolActionCodes.DEX_SWAP_FROM_USDC, wbtcAddress, wbtcOut);
+    }
+
+    function _effectiveSwapMinOut(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 minOut
+    ) internal view returns (uint256) {
+        uint256 expectedOut = ISpotDex(spotDexAddress).quoteExactIn(tokenIn, tokenOut, amountIn);
+        uint256 floor = expectedOut * (10000 - maxSwapSlippageBps) / 10000;
+        return minOut > floor ? minOut : floor;
     }
 
     function updateNAV(

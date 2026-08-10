@@ -18,6 +18,8 @@ async function deployKashYieldV3Fixture() {
   const MockOracle = await ethers.getContractFactory("MockChainlinkOracle");
   const oracle = await MockOracle.deploy(ETH_USD_8, 8);
 
+  const redeemPayoutBufferBps = 50n;
+
   const KashYieldETH = await ethers.getContractFactory("KashYieldETH");
   const vault = await KashYieldETH.deploy(
     bot.address,
@@ -35,6 +37,7 @@ async function deployKashYieldV3Fixture() {
     3n,
     10_000n,
     10_000n,
+    redeemPayoutBufferBps,
   );
 
   const kashTokenAddress = await vault.kashTokenEth();
