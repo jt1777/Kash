@@ -35,8 +35,6 @@ error WrongPhase();
 error OpsNotDone();
 error UsePerformUpkeep();
 error InsufficientWbtcForRedeems();
-error InsufficientExcessWbtc();
-error InsufficientOwnerWbtcReserve();
 error InsufficientOwnerUsdcReserve();
 error ExceedsMintWbtcForCycle();
 error NoUsersProvided();
@@ -117,6 +115,7 @@ contract KashYieldBtc is ReentrancyGuard {
 
     address public immutable wbtcAddress; // wBTC — Arbitrum One
     address public immutable usdcAddress;
+    address public immutable feeReceiver;
     address public exchangeFacade;
     address public spotDexAddress;
     uint256 public maxSwapSlippageBps = 100;
@@ -134,13 +133,12 @@ contract KashYieldBtc is ReentrancyGuard {
 
     // ── Fee config ────────────────────────────────────────────────────────
     uint256 public feeBps = 3;
-    uint256 public constant MAX_FEE_BPS = 100;
+    uint256 public constant MAX_FEE_BPS = 30;
 
     bool public paused;
 
     uint256 public ownerUsdcReserve;
     uint256 public ownerWbtcReserve;
-    uint256 public protocolFeeWbtcReserve;
     uint256 public lockedClaimWbtc;
     uint256 public lockedClaimKash;
 
@@ -233,9 +231,11 @@ contract KashYieldBtc is ReentrancyGuard {
         _;
     }
 
-    constructor(address _botAddress, address _wbtc, address _usdc) payable {
+    constructor(address _botAddress, address _wbtc, address _usdc, address _feeReceiver) payable {
+        if (_feeReceiver == address(0)) revert InvalidAddress();
         owner = payable(msg.sender);
         botAddress = _botAddress;
+        feeReceiver = _feeReceiver;
         kashTokenBtc = new KashTokenBtc();
         kashTokenBtc.transferOwnership(address(this));
 
@@ -569,9 +569,10 @@ contract KashYieldBtc is ReentrancyGuard {
         _storeMintKashAllocations(batchCycle, totalMintKash, totalMintUSD);
         uint256 totalProtocolFeeBtc = totalMintFeeBtc + totalRedeemFeeBtc;
         uint256 buffer = (totalRedeemBtcNeeded * redeemPayoutBufferBps) / 10000;
-        if (IERC20(wbtcAddress).balanceOf(address(this)) + buffer < ownerWbtcReserve + totalProtocolFeeBtc + totalRedeemBtcNeeded + lockedClaimWbtc) revert InsufficientWbtcForRedeems();
-        ownerWbtcReserve += totalProtocolFeeBtc;
-        protocolFeeWbtcReserve += totalProtocolFeeBtc;
+        if (IERC20(wbtcAddress).balanceOf(address(this)) + buffer < totalRedeemBtcNeeded + lockedClaimWbtc) revert InsufficientWbtcForRedeems();
+        if (totalProtocolFeeBtc > 0) {
+            IERC20(wbtcAddress).safeTransfer(feeReceiver, totalProtocolFeeBtc);
+        }
 
         BatchClaimInfo storage info = batchClaimInfo[batchCycle];
         uint256 claimDeadline = block.timestamp + CLAIM_EXPIRY_SECONDS;
@@ -846,31 +847,6 @@ contract KashYieldBtc is ReentrancyGuard {
         if (batchMintBtcDeployedToAave[batchCycle] + amount > batchTotalMintBtc[batchCycle]) revert ExceedsMintWbtcForCycle();
         batchMintBtcDeployedToAave[batchCycle] += amount;
         emit ProtocolInteraction(ProtocolActionCodes.MINT_BTC_DEPLOYED, wbtcAddress, amount);
-    }
-
-    /// @notice Pull owner-marked wBTC from the vault (protocol fees credit `ownerWbtcReserve` on phase 2).
-    ///         Does not withdraw unreserved vault wBTC that backs user NAV.
-    function ownerWithdrawWbtc(uint256 amount) external onlyOwner {
-        if (amount > ownerWbtcReserve) revert InsufficientOwnerWbtcReserve();
-        uint256 bal = IERC20(wbtcAddress).balanceOf(address(this));
-        uint256 available = bal > lockedClaimWbtc ? bal - lockedClaimWbtc : 0;
-        if (amount > available) revert InsufficientExcessWbtc();
-        unchecked {
-            ownerWbtcReserve -= amount;
-        }
-        uint256 protocolFeeConsumed = amount < protocolFeeWbtcReserve ? amount : protocolFeeWbtcReserve;
-        unchecked {
-            protocolFeeWbtcReserve -= protocolFeeConsumed;
-        }
-        IERC20(wbtcAddress).safeTransfer(owner, amount);
-        emit ProtocolInteraction(ProtocolActionCodes.OWNER_WITHDRAW_WBTC, wbtcAddress, amount);
-    }
-
-    function rescueERC20(address token, uint256 amount, address recipient) external onlyOwner {
-        if (token == wbtcAddress) revert InvalidAddress();
-        if (recipient == address(0)) revert InvalidAddress();
-        IERC20(token).safeTransfer(recipient, amount);
-        emit ProtocolInteraction(ProtocolActionCodes.RESCUE_ERC20, token, amount);
     }
 
     /// @notice Pull USDC from the owner and credit owner reserve (excluded from user NAV).

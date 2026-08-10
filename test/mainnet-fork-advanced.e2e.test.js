@@ -72,7 +72,8 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     kashYieldEth = await KashYieldETH.deploy(
       bot.address,
       WETH_ADDRESS,
-      USDC_ADDRESS
+      USDC_ADDRESS,
+      owner.address,
     );
     await kashYieldEth.waitForDeployment();
 

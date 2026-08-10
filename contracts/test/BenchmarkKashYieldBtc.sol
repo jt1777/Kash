@@ -6,7 +6,9 @@ import "../KashYieldBtc.sol";
 /// @dev Fork gas-benchmark helper only — not deployed to production.
 /// Registers many minters in one tx (same state as repeated `requestMint` calls).
 contract BenchmarkKashYieldBtc is KashYieldBtc {
-    constructor(address _botAddress, address _wbtc, address _usdc) KashYieldBtc(_botAddress, _wbtc, _usdc) {}
+    constructor(address _botAddress, address _wbtc, address _usdc, address _feeReceiver)
+        KashYieldBtc(_botAddress, _wbtc, _usdc, _feeReceiver)
+    {}
 
     function benchmarkEnrollMints(address[] calldata users, uint256 amountEach)
         external

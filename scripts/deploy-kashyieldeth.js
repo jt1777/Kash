@@ -44,6 +44,7 @@ async function main() {
   }
 
   const botAddress = process.env.BOT_ADDRESS || deployer.address;
+  const feeReceiver = process.env.FEE_RECEIVER_ADDRESS || deployer.address;
 
   const DEFAULTS = {
     arbitrumOne: {
@@ -60,9 +61,9 @@ async function main() {
   const wethAddress = process.env.WETH_ADDRESS || networkDefaults.weth;
   const usdcAddress = process.env.USDC_ADDRESS || networkDefaults.usdc;
 
-  console.log(`Deploying KashYieldETH (bot: ${botAddress}, weth: ${wethAddress}, usdc: ${usdcAddress})...`);
+  console.log(`Deploying KashYieldETH (bot: ${botAddress}, weth: ${wethAddress}, usdc: ${usdcAddress}, feeReceiver: ${feeReceiver})...`);
   const KashYieldETH = await hre.ethers.getContractFactory("KashYieldETH");
-  const kashYieldEth = await KashYieldETH.deploy(botAddress, wethAddress, usdcAddress);
+  const kashYieldEth = await KashYieldETH.deploy(botAddress, wethAddress, usdcAddress, feeReceiver);
   await kashYieldEth.waitForDeployment();
 
   const kashYieldEthAddress = await kashYieldEth.getAddress();

@@ -120,7 +120,8 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
       kashYieldEth = await KashYieldETH.deploy(
         bot.address,
         WETH_ADDRESS,
-        USDC_ADDRESS
+        USDC_ADDRESS,
+        owner.address,
       );
       await kashYieldEth.waitForDeployment();
       console.log("    ✅ KashYieldETH:", await kashYieldEth.getAddress());
@@ -378,7 +379,8 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
       kashYieldBtc = await KashYieldBtc.deploy(
         bot.address,
         WBTC_ADDRESS,
-        USDC_ADDRESS
+        USDC_ADDRESS,
+        owner.address,
       );
 
       // ── Configure ────────────────────────────────────────────────────────

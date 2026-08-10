@@ -44,7 +44,7 @@ async function deployKashYieldBtcBenchmark(owner, bot) {
   await uniAdapter.waitForDeployment();
 
   const BenchmarkKashYieldBtc = await ethers.getContractFactory("BenchmarkKashYieldBtc");
-  const kashYieldBtc = await BenchmarkKashYieldBtc.deploy(bot.address, WBTC_ADDRESS, USDC_ADDRESS);
+  const kashYieldBtc = await BenchmarkKashYieldBtc.deploy(bot.address, WBTC_ADDRESS, USDC_ADDRESS, owner.address);
   await kashYieldBtc.setSpotDex(await uniAdapter.getAddress());
   await kashYieldBtc.setCycleDurationSeconds(CYCLE_SECS);
   await kashYieldBtc.setUserWindowEnd(CYCLE_SECS);

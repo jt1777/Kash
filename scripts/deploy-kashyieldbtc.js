@@ -32,6 +32,7 @@ async function main() {
   console.log("Balance:", hre.ethers.formatEther(balance), "ETH\n");
 
   const botAddress = process.env.BOT_ADDRESS || deployer.address;
+  const feeReceiver = process.env.FEE_RECEIVER_ADDRESS || deployer.address;
 
   const wbtcAddress = process.env.WBTC_ADDRESS;
   const usdcAddress = process.env.USDC_ADDRESS;
@@ -54,11 +55,12 @@ async function main() {
   console.log("  USDC:     ", usdcAddress);
   console.log("  BTC feed: ", btcOracleAddress);
   console.log("  Bot:      ", botAddress);
+  console.log("  Fee recv: ", feeReceiver);
   console.log("  Aave:      0x794a61358D6845594F94dc1DB02A252b5b4814aD (hardcoded mainnet)");
   console.log("");
 
   const KashYieldBtc = await hre.ethers.getContractFactory("KashYieldBtc");
-  const kashYieldBtc = await KashYieldBtc.deploy(botAddress, wbtcAddress, usdcAddress);
+  const kashYieldBtc = await KashYieldBtc.deploy(botAddress, wbtcAddress, usdcAddress, feeReceiver);
   await kashYieldBtc.waitForDeployment();
   const kashYieldBtcAddress = await kashYieldBtc.getAddress();
   const kashTokenBtcAddress = await kashYieldBtc.kashTokenBtc();

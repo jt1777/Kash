@@ -9,7 +9,7 @@ const { time } = require("@nomicfoundation/hardhat-network-helpers");
 
 describe("Expired claim user custody (#9)", function () {
   async function deployFixture() {
-    const [owner, bot, user] = await ethers.getSigners();
+    const [owner, bot, user, feeReceiver] = await ethers.getSigners();
 
     const wbtc = await (await ethers.getContractFactory("MockERC20")).deploy("wBTC", "wBTC", 8);
     const usdc = await (await ethers.getContractFactory("MockERC20")).deploy("USDC", "USDC", 6);
@@ -21,6 +21,7 @@ describe("Expired claim user custody (#9)", function () {
       bot.address,
       await wbtc.getAddress(),
       await usdc.getAddress(),
+      feeReceiver.address,
     );
     await kashYield.setBtcOracle(await oracle.getAddress());
     await kashYield.setProcessingWindowStart(0);

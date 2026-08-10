@@ -42,8 +42,6 @@ error OpsNotDone();
 error UsePerformUpkeep();
 error InsufficientEthForRedeems();
 error InsufficientEthInContract();
-error InsufficientExcessEth();
-error InsufficientOwnerEthReserve();
 error InsufficientOwnerUsdcReserve();
 error ExceedsMintEthForCycle();
 error NoUsersProvided();
@@ -125,6 +123,7 @@ contract KashYieldETH is ReentrancyGuard {
     address public constant ETH_ADDRESS = address(0);
     address public immutable wethAddress; // WETH9-compatible contract with deposit()/withdraw()
     address public immutable usdcAddress;
+    address public immutable feeReceiver;
     address public exchangeFacade;
     address public spotDexAddress;
     uint256 public maxSwapSlippageBps = 100;
@@ -142,7 +141,7 @@ contract KashYieldETH is ReentrancyGuard {
 
     // ── Fee config ────────────────────────────────────────────────────────
     uint256 public feeBps = 3;
-    uint256 public constant MAX_FEE_BPS = 100;
+    uint256 public constant MAX_FEE_BPS = 30;
 
     bool public paused;
 
@@ -150,8 +149,6 @@ contract KashYieldETH is ReentrancyGuard {
     uint256 public ownerUsdcReserve;
     /// @notice Owner ETH buffer (gas, HL fees, profit) excluded from user NAV accounting (see markOwnerEthDeposit).
     uint256 public ownerEthReserve;
-    /// @notice Current owner ETH reserve that came from protocol mint/redeem fees.
-    uint256 public protocolFeeEthReserve;
     uint256 public lockedClaimEth;
     uint256 public lockedClaimKash;
 
@@ -244,9 +241,11 @@ contract KashYieldETH is ReentrancyGuard {
         _;
     }
 
-    constructor(address _botAddress, address _weth, address _usdc) payable {
+    constructor(address _botAddress, address _weth, address _usdc, address _feeReceiver) payable {
+        if (_feeReceiver == address(0)) revert InvalidAddress();
         owner = payable(msg.sender);
         botAddress = _botAddress;
+        feeReceiver = _feeReceiver;
         kashTokenEth = new KashTokenEth();
         kashTokenEth.transferOwnership(address(this));
 
@@ -585,9 +584,11 @@ contract KashYieldETH is ReentrancyGuard {
         _storeMintKashAllocations(batchCycle, totalMintKash, totalMintUSD);
         uint256 totalProtocolFeeEth = totalMintFeeEth + totalRedeemFeeEth;
         uint256 buffer = (totalRedeemEthNeeded * redeemPayoutBufferBps) / 10000;
-        if (address(this).balance + buffer < ownerEthReserve + totalProtocolFeeEth + totalRedeemEthNeeded + lockedClaimEth) revert InsufficientEthForRedeems();
-        ownerEthReserve += totalProtocolFeeEth;
-        protocolFeeEthReserve += totalProtocolFeeEth;
+        if (address(this).balance + buffer < totalRedeemEthNeeded + lockedClaimEth) revert InsufficientEthForRedeems();
+        if (totalProtocolFeeEth > 0) {
+            (bool ok,) = payable(feeReceiver).call{value: totalProtocolFeeEth}("");
+            if (!ok) revert InsufficientEthInContract();
+        }
 
         BatchClaimInfo storage info = batchClaimInfo[batchCycle];
         uint256 claimDeadline = block.timestamp + CLAIM_EXPIRY_SECONDS;
@@ -866,31 +867,6 @@ contract KashYieldETH is ReentrancyGuard {
         if (batchMintEthDeployedToAave[batchCycle] + amount > batchTotalMintEth[batchCycle]) revert ExceedsMintEthForCycle();
         batchMintEthDeployedToAave[batchCycle] += amount;
         emit ProtocolInteraction(ProtocolActionCodes.MINT_ETH_DEPLOYED, ETH_ADDRESS, amount);
-    }
-
-    /// @notice Pull owner-marked ETH from the vault (protocol fees credit `ownerEthReserve` on phase 2).
-    ///         Does not withdraw unreserved vault ETH that backs user NAV.
-    function ownerWithdrawEth(uint256 amount) external onlyOwner {
-        if (amount > ownerEthReserve) revert InsufficientOwnerEthReserve();
-        uint256 bal = address(this).balance;
-        uint256 available = bal > lockedClaimEth ? bal - lockedClaimEth : 0;
-        if (amount > available) revert InsufficientExcessEth();
-        unchecked {
-            ownerEthReserve -= amount;
-        }
-        uint256 protocolFeeConsumed = amount < protocolFeeEthReserve ? amount : protocolFeeEthReserve;
-        unchecked {
-            protocolFeeEthReserve -= protocolFeeConsumed;
-        }
-        payable(owner).transfer(amount);
-        emit ProtocolInteraction(ProtocolActionCodes.OWNER_WITHDRAW_ETH, ETH_ADDRESS, amount);
-    }
-
-    function rescueERC20(address token, uint256 amount, address recipient) external onlyOwner {
-        if (token == ETH_ADDRESS) revert InvalidAddress();
-        if (recipient == address(0)) revert InvalidAddress();
-        IERC20(token).safeTransfer(recipient, amount);
-        emit ProtocolInteraction(ProtocolActionCodes.RESCUE_ERC20, token, amount);
     }
 
     /// @notice Pull USDC from the owner and credit owner reserve (excluded from user NAV).
