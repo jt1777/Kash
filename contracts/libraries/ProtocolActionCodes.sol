@@ -36,4 +36,6 @@ library ProtocolActionCodes {
     uint8 internal constant OWNER_ETH_DEPOSIT = 28;
     uint8 internal constant OWNER_WBTC_DEPOSIT = 29;
     uint8 internal constant OWNER_USDC_COVER_SHORTFALL = 30;
+    uint8 internal constant OWNER_USDC_COVER_REPAID = 31;
+    uint8 internal constant OWNER_USDC_COVER_RESET = 32;
 }

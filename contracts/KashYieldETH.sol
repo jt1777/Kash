@@ -43,6 +43,9 @@ error UsePerformUpkeep();
 error InsufficientEthForRedeems();
 error InsufficientEthInContract();
 error InsufficientOwnerUsdcReserve();
+error InsufficientOwnerCoverReceivable();
+error InsufficientVaultUsdc();
+error SupplyNotDust();
 error ExceedsMintEthForCycle();
 error NoUsersProvided();
 error NotPaused();
@@ -107,6 +110,8 @@ contract KashYieldETH is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     uint256 public constant ETH_DECIMALS = 18;
+    /// @dev Matches bot `POST_PHASE2_SUPPLY_DUST` — supply below this is "dust" for resetOwnerCoverUsdc.
+    uint256 private constant SUPPLY_DUST_THRESHOLD = 1e15;
     string public constant VERSION = "2.0.0";
 
     // ── Core state ────────────────────────────────────────────────────────
@@ -887,9 +892,27 @@ contract KashYieldETH is ReentrancyGuard {
         if (amount == 0) revert ZeroAmount();
         if (amount > ownerUsdcReserve) revert InsufficientOwnerUsdcReserve();
         ownerUsdcReserve -= amount;
-        // Monotonic owner receivable — decrement only if an on-chain repayment path is added.
         totalOwnerCoverUsdc += amount;
         emit ProtocolInteraction(ProtocolActionCodes.OWNER_USDC_COVER_SHORTFALL, usdcAddress, amount);
+    }
+
+    /// @notice Repay owner-cover receivable back to the owner (only up to what the owner covered).
+    ///         NAV-safe: USDC leaves the vault in lockstep with the counter decrement.
+    function repayOwnerCoverUsdc(uint256 amount) external onlyOwner {
+        if (amount == 0) revert ZeroAmount();
+        if (amount > totalOwnerCoverUsdc) revert InsufficientOwnerCoverReceivable();
+        uint256 bal = IERC20(usdcAddress).balanceOf(address(this));
+        if (amount > bal) revert InsufficientVaultUsdc();
+        totalOwnerCoverUsdc -= amount;
+        IERC20(usdcAddress).safeTransfer(owner, amount);
+        emit ProtocolInteraction(ProtocolActionCodes.OWNER_USDC_COVER_REPAID, usdcAddress, amount);
+    }
+
+    /// @notice Reset the owner-cover receivable when KASH supply is dust (vault fully unwound).
+    function resetOwnerCoverUsdc() external onlyOwner {
+        if (kashTokenEth.totalSupply() >= SUPPLY_DUST_THRESHOLD) revert SupplyNotDust();
+        totalOwnerCoverUsdc = 0;
+        emit ProtocolInteraction(ProtocolActionCodes.OWNER_USDC_COVER_RESET, usdcAddress, 0);
     }
 
     function emergencyWithdrawMint(uint256 batchCycle) external {
