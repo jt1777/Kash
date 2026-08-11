@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect } from 'react';
 import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadContract, useReadContracts, useEstimateFeesPerGas, usePublicClient } from 'wagmi';
-import { CONTRACTS, ARBITRUM_ONE_BLOCK_EXPLORER, HARDHAT_CHAIN_ID } from '@/lib/contracts/addresses';
+import { CONTRACTS, ARBITRUM_ONE_BLOCK_EXPLORER } from '@/lib/contracts/addresses';
 import { ContractVerifiedBadge } from '@/components/ContractVerifiedBadge';
 import { BatchUserCapStatus } from '@/components/BatchUserCapStatus';
 import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
@@ -16,7 +16,6 @@ import {
   isRedeemCapReachedError,
 } from '@/lib/batchUserCap';
 import { parseEther, formatEther } from 'viem';
-import { useChainId } from 'wagmi';
 
 function isUserRejectedWalletError(error: Error | null | undefined): boolean {
   if (!error) return false;
@@ -54,8 +53,6 @@ function dispatchActivityRefresh() {
 export function RedeemForm({ product = 'eth' }: { product?: Product }) {
   const { address } = useAccount();
   const publicClient = usePublicClient();
-  const chainId = useChainId();
-
   const isBtc = product === 'btc' && CONTRACTS.kashYieldBtc && CONTRACTS.kashTokenBtc;
   const kashYield = isBtc ? CONTRACTS.kashYieldBtc! : CONTRACTS.kashYieldEth;
   const kashToken = isBtc ? CONTRACTS.kashTokenBtc! : CONTRACTS.kashTokenEth;
@@ -214,7 +211,7 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
     query: { refetchInterval: 15_000 },
   });
 
-  const { data: pendingRedeemRequest, refetch: refetchPendingRedeem } = useReadContract({
+  const { refetch: refetchPendingRedeem } = useReadContract({
     address: kashYield,
     abi: kashYieldABI,
     functionName: 'getPendingRedeemRequest',
@@ -239,7 +236,10 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
   const { writeContract: approve, data: approveHash, isPending: isApprovePending } = useWriteContract();
   const redeemWriteResult = useWriteContract();
   const { writeContract: redeem, data: redeemHash, isPending: isRedeemPending, error: redeemError } = redeemWriteResult;
-  const resetRedeem = 'reset' in redeemWriteResult ? (redeemWriteResult as { reset: () => void }).reset : () => {};
+  const resetRedeem = useMemo(
+    () => ('reset' in redeemWriteResult ? (redeemWriteResult as { reset: () => void }).reset : () => {}),
+    [redeemWriteResult],
+  );
   const { writeContract: cancelRedeem, data: cancelRedeemHash, isPending: isCancelRedeemPending } = useWriteContract();
   const claimWrite = useWriteContract();
   const { writeContract: claimRedeem, data: claimHash, isPending: isClaimPending } = claimWrite;

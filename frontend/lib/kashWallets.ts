@@ -44,8 +44,8 @@ function rainbowMobileUri(uri: string): string {
  * Rabby Mobile: only show direct Rabby inside Rabby's in-app browser, where it injects a provider.
  * External mobile browsers do not reliably hand WalletConnect URIs to Rabby Mobile.
  */
-export function kashRabbyWallet(_options: KashWalletOptions): Wallet {
-  const extensionWallet = rabbyWallet();
+export function kashRabbyWallet(options: KashWalletOptions): Wallet {
+  const extensionWallet = rabbyWallet(options);
   const isInjected = hasRabbyInjected();
   const isMobile = isMobileBrowser();
 

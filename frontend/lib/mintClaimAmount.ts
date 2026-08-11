@@ -148,12 +148,11 @@ async function loadBatchMintData(
   ]);
 
   const batchTuple = batchInfo as readonly [bigint, bigint, boolean, bigint, bigint, bigint];
-  const claimTuple = claimInfo as readonly [Hex, Hex, bigint, bigint, bigint, bigint, bigint];
   const totalMintUSD = batchTuple[0];
   const processed = batchTuple[2];
   const mintUsersCount = batchTuple[3];
-  const totalMintClaimable = claimTuple[3];
-  const mintRoot = claimTuple[1];
+  const totalMintClaimable = claimInfo[3];
+  const mintRoot = claimInfo[1];
   if (!processed || totalMintClaimable === 0n) return null;
 
   const minters: `0x${string}`[] = [];

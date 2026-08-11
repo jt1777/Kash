@@ -197,8 +197,7 @@ export async function buildClaimProofFromChain(
     functionName: 'batchClaimInfo',
     args: [batchCycle],
   });
-  const claimTuple = claimInfo as readonly [Hex, Hex, bigint, bigint, bigint, bigint, bigint];
-  const onChainRoot = claimTuple[0];
+  const onChainRoot = claimInfo[0];
   if (root.toLowerCase() !== onChainRoot.toLowerCase()) return null;
 
   const userKey = userAddress.toLowerCase();
