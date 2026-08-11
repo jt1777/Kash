@@ -45,7 +45,8 @@ function rainbowMobileUri(uri: string): string {
  * External mobile browsers do not reliably hand WalletConnect URIs to Rabby Mobile.
  */
 export function kashRabbyWallet(options: KashWalletOptions): Wallet {
-  const extensionWallet = rabbyWallet(options);
+  void options;
+  const extensionWallet = rabbyWallet();
   const isInjected = hasRabbyInjected();
   const isMobile = isMobileBrowser();
 
