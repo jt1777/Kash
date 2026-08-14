@@ -234,8 +234,8 @@ function AppContent() {
         .app-page .focus\\:ring-indigo-500:focus { box-shadow: 0 0 0 2px rgba(0, 255, 255, 0.4); }
         .app-page button.bg-indigo-600, .app-page .bg-indigo-600 { background: #00FFFF !important; color: #0A0A1E !important; border: 2px solid #00FFFF; box-shadow: 0 0 10px rgba(0, 255, 255, 0.4); }
         .app-page button.bg-indigo-600:hover:not(:disabled), .app-page .hover\\:bg-indigo-700:hover { background: transparent !important; color: #00FFFF !important; box-shadow: 0 0 20px #00FFFF, 0 0 30px rgba(0, 255, 255, 0.3); }
-        .app-page .from-indigo-600, .app-page .to-purple-600, .app-page .bg-linear-to-r { background: #00FFFF !important; background-image: none !important; color: #0A0A1E !important; border: 2px solid #00FFFF; box-shadow: 0 0 10px rgba(0, 255, 255, 0.4); }
-        .app-page .hover\\:from-indigo-700:hover, .app-page .hover\\:to-purple-700:hover { background: transparent !important; background-image: none !important; color: #00FFFF !important; box-shadow: 0 0 20px #00FFFF, 0 0 30px rgba(0, 255, 255, 0.3); }
+        .app-page .from-indigo-600, .app-page .to-purple-600, .app-page .from-purple-600, .app-page .to-pink-600, .app-page .bg-linear-to-r { background: #00FFFF !important; background-image: none !important; color: #0A0A1E !important; border: 2px solid #00FFFF; box-shadow: 0 0 10px rgba(0, 255, 255, 0.4); }
+        .app-page .hover\\:from-indigo-700:hover, .app-page .hover\\:to-purple-700:hover, .app-page .hover\\:from-purple-700:hover, .app-page .hover\\:to-pink-700:hover { background: transparent !important; background-image: none !important; color: #00FFFF !important; box-shadow: 0 0 20px #00FFFF, 0 0 30px rgba(0, 255, 255, 0.3); }
         .app-page .bg-purple-600 { background: #00FFFF !important; color: #0A0A1E !important; }
         .app-page .hover\\:bg-purple-700:hover { background: transparent !important; color: #00FFFF !important; box-shadow: 0 0 20px #00FFFF; }
         .app-page .border-indigo-600, .app-page .border-purple-600 { border-color: #00FFFF !important; }
