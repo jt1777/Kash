@@ -648,7 +648,16 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
       {/* Amount Input */}
       <div>
         <div className="flex items-center justify-between mb-2">
-          <label className="block text-sm font-medium text-gray-700">Amount</label>
+          <div className="flex items-center">
+            <label className="text-sm font-medium text-gray-700">Amount</label>
+            <button
+              type="button"
+              onClick={() => setAmount('')}
+              className="ml-1.5 text-xs text-indigo-600 hover:text-indigo-700 font-medium cursor-pointer"
+            >
+              Clear
+            </button>
+          </div>
           {depositToken.symbol === 'ETH' && !isBtc && address && (
             <span className="text-xs text-gray-500">
               Balance: {formatEtherDisplayDecimals(nativeBalance, 6)} ETH
@@ -656,7 +665,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
                 <button
                   type="button"
                   onClick={() => setAmount(formatEther(maxMintEth))}
-                  className="ml-1.5 text-indigo-600 hover:text-indigo-700 font-medium"
+                  className="ml-1.5 text-indigo-600 hover:text-indigo-700 font-medium cursor-pointer"
                 >
                   Max
                 </button>
@@ -670,7 +679,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
                 <button
                   type="button"
                   onClick={() => setAmount(formatUnits(wbtcBalance!.value, 8))}
-                  className="ml-1.5 text-indigo-600 hover:text-indigo-700 font-medium"
+                  className="ml-1.5 text-indigo-600 hover:text-indigo-700 font-medium cursor-pointer"
                 >
                   Max
                 </button>

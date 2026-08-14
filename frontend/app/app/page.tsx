@@ -316,8 +316,6 @@ function AppContent() {
             <Link href="/" className="nav-logo">KASH</Link>
             <div className="app-nav-links">
               <Link href="/" className="nav-link">Home</Link>
-              <Link href="#features" className="nav-link">Features</Link>
-              <a href="https://github.com/jt1777/Kash" className="nav-link" target="_blank" rel="noopener noreferrer">GitHub</a>
             </div>
             <div className="app-nav-wallet">
               <CustomWalletButton />
@@ -343,7 +341,7 @@ function AppContent() {
               <button
                 type="button"
                 onClick={() => setProduct('btc')}
-                className={`px-4 py-2 rounded-lg font-medium transition ${
+                className={`px-4 py-2 rounded-lg font-medium transition cursor-pointer ${
                   product === 'btc'
                     ? 'bg-indigo-600 text-white'
                     : 'bg-white/10 text-gray-400 hover:text-white border border-white/20'
@@ -354,7 +352,7 @@ function AppContent() {
               <button
                 type="button"
                 onClick={() => setProduct('eth')}
-                className={`px-4 py-2 rounded-lg font-medium transition ${
+                className={`px-4 py-2 rounded-lg font-medium transition cursor-pointer ${
                   product === 'eth'
                     ? 'bg-indigo-600 text-white'
                     : 'bg-white/10 text-gray-400 hover:text-white border border-white/20'
