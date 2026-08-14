@@ -580,7 +580,16 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
       {/* Amount Input */}
       <div>
         <div className="flex justify-between items-center mb-2">
-          <label className="block text-sm font-medium text-gray-700">KASH Amount</label>
+          <div className="flex items-center">
+            <label className="text-sm font-medium text-gray-700">KASH Amount</label>
+            <button
+              type="button"
+              onClick={() => setAmount('')}
+              className="ml-1.5 text-xs text-purple-600 hover:text-purple-700 font-medium cursor-pointer"
+            >
+              Clear
+            </button>
+          </div>
           <button
             type="button"
             onClick={handleMaxClick}

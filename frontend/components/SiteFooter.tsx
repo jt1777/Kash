@@ -36,7 +36,7 @@ export function SiteFooter({ className, contractAddress }: SiteFooterProps) {
               target="_blank"
               rel="noopener noreferrer"
             >
-              {verified ? 'Verified on Arbiscan ↗' : 'Contract Address'}
+              {verified ? 'Arbiscan' : 'Contract Address'}
             </a>
           )}
         </div>

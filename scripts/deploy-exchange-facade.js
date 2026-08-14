@@ -18,13 +18,18 @@ const { ethers } = hre;
 
 async function main() {
   const network = hre.network.name;
-  const kashYield = process.env.KASH_YIELD_ADDRESS;
-  const usdc = process.env.USDC_ADDRESS || "0xaf88d065e77c8cC2239327C5EDb3A432268e5831";
   const primaryAsset = process.env.PRIMARY_ASSET || ethers.ZeroAddress;
+  const isEthAsset = (process.env.IS_ETH_ASSET || "").toLowerCase() === "true";
+  const isEth = primaryAsset === ethers.ZeroAddress || isEthAsset;
+  const kashYield =
+    process.env.KASH_YIELD_ADDRESS ||
+    (isEth ? process.env.KASH_YIELD_ETH_ADDRESS : process.env.KASH_YIELD_BTC_ADDRESS);
+  const usdc = process.env.USDC_ADDRESS || "0xaf88d065e77c8cC2239327C5EDb3A432268e5831";
   const bot = process.env.BOT_ADDRESS;
-  const isEth = primaryAsset === ethers.ZeroAddress;
 
-  if (!kashYield || !ethers.isAddress(kashYield)) throw new Error("Set KASH_YIELD_ADDRESS");
+  if (!kashYield || !ethers.isAddress(kashYield)) {
+    throw new Error("Set KASH_YIELD_ADDRESS or KASH_YIELD_ETH_ADDRESS / KASH_YIELD_BTC_ADDRESS");
+  }
   if (!bot || !ethers.isAddress(bot)) throw new Error("Set BOT_ADDRESS");
   if (!ethers.isAddress(primaryAsset)) throw new Error("Set PRIMARY_ASSET (wBTC address or 0x0 for ETH)");
 
@@ -48,8 +53,10 @@ async function main() {
   console.log(`✅ ExchangeFacade (${label}):`, facadeAddr);
 
   const envVarName = isEth ? "EXCHANGE_FACADE_ETH_ADDRESS" : "EXCHANGE_FACADE_BTC_ADDRESS";
+  const envAlias = isEth ? "EXCHANGE_FACADE_ETH" : "EXCHANGE_FACADE_BTC";
   console.log("\nAdd to .env and kash-ops .env:");
   console.log(`  ${envVarName}=${facadeAddr}`);
+  console.log(`  (${envAlias}= also accepted by kash-ops scripts)`);
   console.log("\nNext (kash-ops repo):");
   console.log("  npx hardhat run scripts/wire-exchange-facade.js --network", network);
   console.log("  Owner must call vault.setExchangeFacade(facade) if not done in wire script.");
