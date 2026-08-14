@@ -341,7 +341,7 @@ function AppContent() {
               <button
                 type="button"
                 onClick={() => setProduct('btc')}
-                className={`px-4 py-2 rounded-lg font-medium transition ${
+                className={`px-4 py-2 rounded-lg font-medium transition cursor-pointer ${
                   product === 'btc'
                     ? 'bg-indigo-600 text-white'
                     : 'bg-white/10 text-gray-400 hover:text-white border border-white/20'
@@ -352,7 +352,7 @@ function AppContent() {
               <button
                 type="button"
                 onClick={() => setProduct('eth')}
-                className={`px-4 py-2 rounded-lg font-medium transition ${
+                className={`px-4 py-2 rounded-lg font-medium transition cursor-pointer ${
                   product === 'eth'
                     ? 'bg-indigo-600 text-white'
                     : 'bg-white/10 text-gray-400 hover:text-white border border-white/20'

@@ -653,7 +653,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
             <button
               type="button"
               onClick={() => setAmount('')}
-              className="ml-1.5 text-xs text-indigo-600 hover:text-indigo-700 font-medium"
+              className="ml-1.5 text-xs text-indigo-600 hover:text-indigo-700 font-medium cursor-pointer"
             >
               Clear
             </button>
@@ -665,7 +665,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
                 <button
                   type="button"
                   onClick={() => setAmount(formatEther(maxMintEth))}
-                  className="ml-1.5 text-indigo-600 hover:text-indigo-700 font-medium"
+                  className="ml-1.5 text-indigo-600 hover:text-indigo-700 font-medium cursor-pointer"
                 >
                   Max
                 </button>
@@ -679,7 +679,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
                 <button
                   type="button"
                   onClick={() => setAmount(formatUnits(wbtcBalance!.value, 8))}
-                  className="ml-1.5 text-indigo-600 hover:text-indigo-700 font-medium"
+                  className="ml-1.5 text-indigo-600 hover:text-indigo-700 font-medium cursor-pointer"
                 >
                   Max
                 </button>
