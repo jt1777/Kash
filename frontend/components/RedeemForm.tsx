@@ -18,6 +18,10 @@ import {
 import { parseEther, formatEther } from 'viem';
 import { useChainId } from 'wagmi';
 
+/** Primary redeem CTA — shared by Approve KASH and Submit redeem request. */
+const REDEEM_PRIMARY_BUTTON_CLASS =
+  'w-full px-6 py-3 rounded-lg bg-linear-to-r from-purple-600 to-pink-600 text-white font-medium hover:from-purple-700 hover:to-pink-700 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed disabled:shadow-none cursor-pointer transition-all shadow-lg hover:shadow-xl border-2 border-transparent';
+
 function isUserRejectedWalletError(error: Error | null | undefined): boolean {
   if (!error) return false;
   const msg = `${error.name} ${error.message} ${error.cause instanceof Error ? error.cause.message : ''}`.toLowerCase();
@@ -697,7 +701,7 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
             type="button"
             onClick={handleApprove}
             disabled={isApprovePending || isApproveConfirming || !amount || needsClaim}
-            className="w-full px-6 py-3 bg-purple-600 text-white rounded-lg font-medium hover:bg-purple-700 disabled:bg-gray-300 disabled:cursor-not-allowed cursor-pointer transition-colors"
+            className={REDEEM_PRIMARY_BUTTON_CLASS}
           >
             {isApprovePending || isApproveConfirming ? 'Approving...' : 'Approve KASH'}
           </button>
@@ -715,7 +719,7 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
             redeemBatchCapBlocked ||
             (kashBalance !== undefined && parsedAmount > kashBalance)
           }
-          className="w-full px-6 py-3 bg-linear-to-r from-purple-600 to-pink-600 text-white rounded-lg font-medium hover:from-purple-700 hover:to-pink-700 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed cursor-pointer transition-all shadow-lg"
+          className={REDEEM_PRIMARY_BUTTON_CLASS}
         >
           {isRedeemPending || isRedeemConfirming
             ? 'Processing...'
