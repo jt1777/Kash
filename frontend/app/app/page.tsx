@@ -313,7 +313,7 @@ function AppContent() {
       <div className="app-page">
         <nav className="nav">
           <div className="nav-content">
-            <Link href="/" className="nav-logo">KASH</Link>
+            <span className="nav-logo">KASH</span>
             <div className="app-nav-links">
               <Link href="/" className="nav-link">Home</Link>
             </div>
@@ -325,7 +325,7 @@ function AppContent() {
 
         <main className="pt-24 pb-16" style={{ maxWidth: 1200, margin: '0 auto', paddingLeft: 20, paddingRight: 20 }}>
           <header className="mb-8">
-            <Link href="/" className="flex items-center space-x-3">
+            <div className="flex items-center space-x-3">
               <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ background: 'rgba(0, 255, 255, 0.2)', boxShadow: '0 0 12px rgba(0, 255, 255, 0.3)' }}>
                 <span className="font-bold text-xl app-title">K</span>
               </div>
@@ -333,7 +333,7 @@ function AppContent() {
                 <h1 className="text-2xl font-bold app-title">Kash - Enhanced Yield Protocol</h1>
                 <p className="text-xs app-subtitle"></p>
               </div>
-            </Link>
+            </div>
           </header>
 
           {showProductTabs && (
