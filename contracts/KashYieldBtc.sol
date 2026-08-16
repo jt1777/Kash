@@ -47,6 +47,8 @@ error InvalidMerkleRoot();
 error AlreadyClaimed();
 error ClaimExpired();
 error InvalidProof();
+error StalePrice();
+error NAVDeviationTooLarge();
 error ClaimsNotExpired();
 error SlippageExceeded();
 error ExceedsAllocation();
@@ -79,6 +81,8 @@ contract KashYieldBtc is ReentrancyGuard {
 
     uint256 public constant WBTC_DECIMALS = 8;
     string public constant VERSION = "3.0.0";
+    uint256 public constant NAV_MAX_DEVIATION_BPS = 1500; // 15%
+    uint256 public constant ORACLE_MAX_STALENESS = 25 hours;
 
     KashTokenBtc public kashTokenBtc;
     uint256 public currentNAV = 1e18;
@@ -130,6 +134,7 @@ contract KashYieldBtc is ReentrancyGuard {
     mapping(uint256 => uint256) public activeRedeemUsers;
 
     mapping(uint256 => bool)    public batchProcessed;
+    mapping(uint256 => uint256) public cycleStartNAV;
     mapping(uint256 => uint256) public batchIndicativeNAV;
     mapping(uint256 => uint256) public batchMintBtcPrice;
     mapping(uint256 => uint8)   public batchPhase;
@@ -358,6 +363,7 @@ contract KashYieldBtc is ReentrancyGuard {
         uint256 totalRedeemUSD = (batchTotalRedeemKash[batchCycle] * indicativeNAV) / 1e18;
         batchTotalRedeemValueUSD[batchCycle] = totalRedeemUSD;
         batchIndicativeNAV[batchCycle] = indicativeNAV;
+        cycleStartNAV[batchCycle] = indicativeNAV;
 
         int256 netPositionUSD = int256(totalMintUSD) - int256(totalRedeemUSD);
         if (netPositionUSD > 0) emit ProtocolInteraction(ProtocolActionCodes.NET_MINT, wbtcAddress, uint256(netPositionUSD));
@@ -497,6 +503,7 @@ contract KashYieldBtc is ReentrancyGuard {
 
         bytes32 leaf = keccak256(abi.encode(batchCycle, msg.sender, kashAmount));
         if (!MerkleVerify.verify(proof, info.mintMerkleRoot, leaf)) revert InvalidProof();
+        if (kashAmount != batchMintKashAllocation[batchCycle][msg.sender]) revert InvalidProof();
 
         MintRequest storage req = userMintRequests[msg.sender][batchCycle];
         if (req.amountIn == 0) revert NoRequest();
@@ -518,6 +525,7 @@ contract KashYieldBtc is ReentrancyGuard {
 
         bytes32 leaf = keccak256(abi.encode(batchCycle, msg.sender, wbtcAmount));
         if (!MerkleVerify.verify(proof, info.redeemMerkleRoot, leaf)) revert InvalidProof();
+        if (wbtcAmount != batchRedeemNetAsset[batchCycle][msg.sender]) revert InvalidProof();
 
         redeemClaimed[batchCycle][msg.sender] = true;
         info.claimedAmount += wbtcAmount;
@@ -650,14 +658,31 @@ contract KashYieldBtc is ReentrancyGuard {
         uint256 perpPnL
     ) external onlyBotOrKeeper {
         if (newNAV == 0) revert InvalidNAV();
+        uint256 old = currentNAV;
+        if (old != 0) {
+            uint256 lower = old * (10000 - NAV_MAX_DEVIATION_BPS) / 10000;
+            uint256 upper = old * (10000 + NAV_MAX_DEVIATION_BPS) / 10000;
+            if (newNAV < lower || newNAV > upper) revert NAVDeviationTooLarge();
+        }
+        uint256 cycle = block.timestamp / cycleDurationSeconds;
+        uint256 anchor = cycleStartNAV[cycle];
+        if (anchor == 0) anchor = currentNAV;
+        if (anchor != 0) {
+            uint256 cumLower = anchor * (10000 - NAV_MAX_DEVIATION_BPS) / 10000;
+            uint256 cumUpper = anchor * (10000 + NAV_MAX_DEVIATION_BPS) / 10000;
+            if (newNAV < cumLower || newNAV > cumUpper) revert NAVDeviationTooLarge();
+        }
         currentNAV = newNAV;
         emit NAVProposedAndUpdated(newNAV, usdcBalance, assetBalance, perpPnL, block.timestamp);
         emit NAVUpdateExecuted(newNAV, block.timestamp);
     }
 
     function getBtcPrice() public view returns (uint256) {
-        (, int256 price,,,) = AggregatorV3Interface(btcOracle).latestRoundData();
+        (uint80 roundId, int256 price,, uint256 updatedAt, uint80 answeredInRound) =
+            AggregatorV3Interface(btcOracle).latestRoundData();
         if (price <= 0) revert InvalidPrice();
+        if (updatedAt == 0 || block.timestamp - updatedAt > ORACLE_MAX_STALENESS) revert StalePrice();
+        if (answeredInRound < roundId) revert StalePrice();
         uint8 dec = AggregatorV3Interface(btcOracle).decimals();
         return uint256(price) * 10 ** (18 - dec);
     }

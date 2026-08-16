@@ -174,8 +174,12 @@ contract AsterAdapter is IPerpExchange {
     }
 
     function closePerpPosition(string calldata /* symbol */) external override onlyFacade {
+        int256 posSize = IAsterAccountBalance(accountBalance).getTotalPositionSize(address(this), baseToken);
+        uint256 closeSize = posSize < 0 ? uint256(-posSize) : uint256(posSize);
+        if (closeSize == 0) return;
+        uint256 bound = _maxQuoteUsdc6ForBuy(closeSize);
         IAsterClearingHouse(clearingHouse).closePosition(
-            baseToken, 0, 0, block.timestamp + DEFAULT_DEADLINE_OFFSET, bytes32(0)
+            baseToken, 0, bound, block.timestamp + DEFAULT_DEADLINE_OFFSET, bytes32(0)
         );
         emit AdapterCall("closePerpPosition", 0);
     }

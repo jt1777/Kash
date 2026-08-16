@@ -56,6 +56,8 @@ error InvalidMerkleRoot();
 error AlreadyClaimed();
 error ClaimExpired();
 error InvalidProof();
+error StalePrice();
+error NAVDeviationTooLarge();
 error ClaimsNotExpired();
 error SlippageExceeded();
 error ExceedsAllocation();
@@ -90,6 +92,8 @@ contract KashYieldETH is ReentrancyGuard {
 
     uint256 public constant ETH_DECIMALS = 18;
     string public constant VERSION = "3.0.0";
+    uint256 public constant NAV_MAX_DEVIATION_BPS = 1500; // 15%
+    uint256 public constant ORACLE_MAX_STALENESS = 25 hours;
 
     KashTokenEth public kashTokenEth;
     uint256 public currentNAV = 1e18;
@@ -142,6 +146,7 @@ contract KashYieldETH is ReentrancyGuard {
     mapping(uint256 => uint256) public activeRedeemUsers;
 
     mapping(uint256 => bool)    public batchProcessed;
+    mapping(uint256 => uint256) public cycleStartNAV;
     mapping(uint256 => uint256) public batchIndicativeNAV;
     mapping(uint256 => uint256) public batchMintEthPrice;
     mapping(uint256 => uint8)   public batchPhase;
@@ -334,7 +339,8 @@ contract KashYieldETH is ReentrancyGuard {
         batchTotalMintEth[batchCycle] -= amount;
         unchecked { activeMintUsers[batchCycle]--; }
         delete userMintRequests[msg.sender][batchCycle];
-        payable(msg.sender).transfer(amount);
+        (bool ok, ) = payable(msg.sender).call{value: amount}("");
+        if (!ok) revert InsufficientEthInContract();
         emit ProtocolInteraction(ProtocolActionCodes.CANCEL_MINT, ETH_ADDRESS, amount);
     }
 
@@ -389,6 +395,7 @@ contract KashYieldETH is ReentrancyGuard {
         uint256 totalRedeemUSD = (batchTotalRedeemKash[batchCycle] * indicativeNAV) / 1e18;
         batchTotalRedeemValueUSD[batchCycle] = totalRedeemUSD;
         batchIndicativeNAV[batchCycle] = indicativeNAV;
+        cycleStartNAV[batchCycle] = indicativeNAV;
 
         int256 netPositionUSD = int256(totalMintUSD) - int256(totalRedeemUSD);
         if (netPositionUSD > 0) emit ProtocolInteraction(ProtocolActionCodes.NET_MINT, ETH_ADDRESS, uint256(netPositionUSD));
@@ -531,6 +538,7 @@ contract KashYieldETH is ReentrancyGuard {
 
         bytes32 leaf = keccak256(abi.encode(batchCycle, msg.sender, kashAmount));
         if (!MerkleVerify.verify(proof, info.mintMerkleRoot, leaf)) revert InvalidProof();
+        if (kashAmount != batchMintKashAllocation[batchCycle][msg.sender]) revert InvalidProof();
 
         MintRequest storage req = userMintRequests[msg.sender][batchCycle];
         if (req.amountIn == 0) revert NoRequest();
@@ -552,6 +560,7 @@ contract KashYieldETH is ReentrancyGuard {
 
         bytes32 leaf = keccak256(abi.encode(batchCycle, msg.sender, ethAmount));
         if (!MerkleVerify.verify(proof, info.redeemMerkleRoot, leaf)) revert InvalidProof();
+        if (ethAmount != batchRedeemNetAsset[batchCycle][msg.sender]) revert InvalidProof();
 
         redeemClaimed[batchCycle][msg.sender] = true;
         info.claimedAmount += ethAmount;
@@ -691,14 +700,31 @@ contract KashYieldETH is ReentrancyGuard {
         uint256 perpPnL
     ) external onlyBotOrKeeper {
         if (newNAV == 0) revert InvalidNAV();
+        uint256 old = currentNAV;
+        if (old != 0) {
+            uint256 lower = old * (10000 - NAV_MAX_DEVIATION_BPS) / 10000;
+            uint256 upper = old * (10000 + NAV_MAX_DEVIATION_BPS) / 10000;
+            if (newNAV < lower || newNAV > upper) revert NAVDeviationTooLarge();
+        }
+        uint256 cycle = block.timestamp / cycleDurationSeconds;
+        uint256 anchor = cycleStartNAV[cycle];
+        if (anchor == 0) anchor = currentNAV;
+        if (anchor != 0) {
+            uint256 cumLower = anchor * (10000 - NAV_MAX_DEVIATION_BPS) / 10000;
+            uint256 cumUpper = anchor * (10000 + NAV_MAX_DEVIATION_BPS) / 10000;
+            if (newNAV < cumLower || newNAV > cumUpper) revert NAVDeviationTooLarge();
+        }
         currentNAV = newNAV;
         emit NAVProposedAndUpdated(newNAV, usdcBalance, assetBalance, perpPnL, block.timestamp);
         emit NAVUpdateExecuted(newNAV, block.timestamp);
     }
 
     function getEthPrice() public view returns (uint256) {
-        (, int256 price,,,) = AggregatorV3Interface(ethOracle).latestRoundData();
+        (uint80 roundId, int256 price,, uint256 updatedAt, uint80 answeredInRound) =
+            AggregatorV3Interface(ethOracle).latestRoundData();
         if (price <= 0) revert InvalidPrice();
+        if (updatedAt == 0 || block.timestamp - updatedAt > ORACLE_MAX_STALENESS) revert StalePrice();
+        if (answeredInRound < roundId) revert StalePrice();
         uint8 dec = AggregatorV3Interface(ethOracle).decimals();
         return uint256(price) * 10 ** (18 - dec);
     }

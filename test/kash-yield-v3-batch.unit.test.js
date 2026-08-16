@@ -12,7 +12,7 @@ const {
 describe("KashYield V3 batch guards", function () {
   it("defers redeem USD until Phase 1 using indicative NAV", async function () {
     const { bot, user, vault, kashToken } = await deployKashYieldV3Fixture();
-    const nav = 2n * WAD;
+    const nav = (11n * WAD) / 10n; // +10% — within FIX-2 ±15% bound from genesis 1e18
     const redeemKash = 50n * WAD;
 
     await mintKashToUser(vault, kashToken, user, redeemKash);

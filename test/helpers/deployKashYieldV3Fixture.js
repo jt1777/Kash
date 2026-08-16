@@ -12,7 +12,7 @@ const ETH_USD_8 = 3000n * 10n ** 8n;
  * Uses dummy WETH/USDC/facade/spot addresses — only redeem + Phase 1 paths are exercised.
  */
 async function deployKashYieldV3Fixture() {
-  const [bot, user, feeReceiver] = await ethers.getSigners();
+  const [bot, user, attacker, feeReceiver] = await ethers.getSigners();
   const dummy = ethers.Wallet.createRandom().address;
 
   const MockOracle = await ethers.getContractFactory("MockChainlinkOracle");
@@ -48,6 +48,7 @@ async function deployKashYieldV3Fixture() {
   return {
     bot,
     user,
+    attacker,
     feeReceiver,
     vault,
     kashToken,
