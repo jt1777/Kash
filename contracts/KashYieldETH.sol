@@ -123,7 +123,6 @@ contract KashYieldETH is ReentrancyGuard {
     address public pendingOwner;
     KashTokenEth public kashTokenEth;
     uint256 public currentNAV = 1e18;
-    bool private navInitialized;
 
     // ── Protocol addresses ────────────────────────────────────────────────
     address public immutable aavePoolAddress; // Aave V3 Pool — hardcoded in constructor
@@ -824,21 +823,22 @@ contract KashYieldETH is ReentrancyGuard {
     ) external onlyBotOrKeeper {
         if (newNAV == 0) revert InvalidNAV();
         uint256 old = currentNAV;
-        if (navInitialized) {
+        if (old != 0) {
             uint256 lower = old * (10000 - NAV_MAX_DEVIATION_BPS) / 10000;
             uint256 upper = old * (10000 + NAV_MAX_DEVIATION_BPS) / 10000;
             if (newNAV < lower || newNAV > upper) revert NAVDeviationTooLarge();
         }
         currentNAV = newNAV;
-        navInitialized = true;
         emit NAVProposedAndUpdated(newNAV, usdcBalance, assetBalance, perpPnL, block.timestamp);
         emit NAVUpdateExecuted(newNAV, block.timestamp);
     }
 
     function getEthPrice() public view returns (uint256) {
-        (, int256 price,, uint256 updatedAt,) = AggregatorV3Interface(ethOracle).latestRoundData();
+        (uint80 roundId, int256 price,, uint256 updatedAt, uint80 answeredInRound) =
+            AggregatorV3Interface(ethOracle).latestRoundData();
         if (price <= 0) revert InvalidPrice();
-        if (block.timestamp - updatedAt > ORACLE_MAX_STALENESS) revert StalePrice();
+        if (updatedAt == 0 || block.timestamp - updatedAt > ORACLE_MAX_STALENESS) revert StalePrice();
+        if (answeredInRound < roundId) revert StalePrice();
         uint8 dec = AggregatorV3Interface(ethOracle).decimals();
         return uint256(price) * 10 ** (18 - dec);
     }
