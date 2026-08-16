@@ -65,6 +65,8 @@ error InvalidMerkleRoot();
 error AlreadyClaimed();
 error ClaimExpired();
 error InvalidProof();
+error StalePrice();
+error NAVDeviationTooLarge();
 error ClaimsNotExpired();
 error Unauthorized();
 error SlippageExceeded();
@@ -113,12 +115,15 @@ contract KashYieldETH is ReentrancyGuard {
     /// @dev Matches bot `POST_PHASE2_SUPPLY_DUST` — supply below this is "dust" for resetOwnerCoverUsdc.
     uint256 private constant SUPPLY_DUST_THRESHOLD = 1e15;
     string public constant VERSION = "2.0.0";
+    uint256 public constant NAV_MAX_DEVIATION_BPS = 1500; // 15%
+    uint256 public constant ORACLE_MAX_STALENESS = 25 hours;
 
     // ── Core state ────────────────────────────────────────────────────────
     address payable public owner;
     address public pendingOwner;
     KashTokenEth public kashTokenEth;
     uint256 public currentNAV = 1e18;
+    bool private navInitialized;
 
     // ── Protocol addresses ────────────────────────────────────────────────
     address public immutable aavePoolAddress; // Aave V3 Pool — hardcoded in constructor
@@ -442,7 +447,8 @@ contract KashYieldETH is ReentrancyGuard {
         batchTotalMintValueUSD[batchCycle] -= usdAmount;
         unchecked { activeMintUsers[batchCycle]--; }
         delete userMintRequests[msg.sender][batchCycle];
-        payable(msg.sender).transfer(amount);
+        (bool ok, ) = payable(msg.sender).call{value: amount}("");
+        if (!ok) revert InsufficientEthInContract();
         emit ProtocolInteraction(ProtocolActionCodes.CANCEL_MINT, ETH_ADDRESS, amount);
     }
 
@@ -632,6 +638,7 @@ contract KashYieldETH is ReentrancyGuard {
 
         bytes32 leaf = keccak256(abi.encode(batchCycle, msg.sender, kashAmount));
         if (!MerkleVerify.verify(proof, info.mintMerkleRoot, leaf)) revert InvalidProof();
+        if (kashAmount != batchMintKashAllocation[batchCycle][msg.sender]) revert InvalidProof();
 
         MintRequest storage req = userMintRequests[msg.sender][batchCycle];
         if (req.amountIn == 0) revert NoRequest();
@@ -653,6 +660,7 @@ contract KashYieldETH is ReentrancyGuard {
 
         bytes32 leaf = keccak256(abi.encode(batchCycle, msg.sender, ethAmount));
         if (!MerkleVerify.verify(proof, info.redeemMerkleRoot, leaf)) revert InvalidProof();
+        if (ethAmount != batchRedeemNetAsset[batchCycle][msg.sender]) revert InvalidProof();
 
         redeemClaimed[batchCycle][msg.sender] = true;
         info.claimedAmount += ethAmount;
@@ -683,7 +691,7 @@ contract KashYieldETH is ReentrancyGuard {
         emit MintMerkleRootOverridden(batchCycle, oldRoot, newRoot);
     }
 
-    function sweepExpiredClaims(uint256 batchCycle) external onlyBotOrKeeper {
+    function sweepExpiredClaims(uint256 batchCycle) external onlyOwnerOrBotOrKeeper {
         BatchClaimInfo storage info = batchClaimInfo[batchCycle];
         if (!batchProcessed[batchCycle]) revert WrongPhase();
         if (block.timestamp <= info.claimDeadline) revert ClaimsNotExpired();
@@ -694,7 +702,7 @@ contract KashYieldETH is ReentrancyGuard {
         emit ExpiredRedeemClaimsMarked(batchCycle);
     }
 
-    function sweepExpiredMintClaims(uint256 batchCycle) external onlyBotOrKeeper {
+    function sweepExpiredMintClaims(uint256 batchCycle) external onlyOwnerOrBotOrKeeper {
         BatchClaimInfo storage info = batchClaimInfo[batchCycle];
         if (!batchProcessed[batchCycle]) revert WrongPhase();
         if (block.timestamp <= info.claimDeadline) revert ClaimsNotExpired();
@@ -815,14 +823,22 @@ contract KashYieldETH is ReentrancyGuard {
         uint256 perpPnL
     ) external onlyBotOrKeeper {
         if (newNAV == 0) revert InvalidNAV();
+        uint256 old = currentNAV;
+        if (navInitialized) {
+            uint256 lower = old * (10000 - NAV_MAX_DEVIATION_BPS) / 10000;
+            uint256 upper = old * (10000 + NAV_MAX_DEVIATION_BPS) / 10000;
+            if (newNAV < lower || newNAV > upper) revert NAVDeviationTooLarge();
+        }
         currentNAV = newNAV;
+        navInitialized = true;
         emit NAVProposedAndUpdated(newNAV, usdcBalance, assetBalance, perpPnL, block.timestamp);
         emit NAVUpdateExecuted(newNAV, block.timestamp);
     }
 
     function getEthPrice() public view returns (uint256) {
-        (, int256 price,,,) = AggregatorV3Interface(ethOracle).latestRoundData();
+        (, int256 price,, uint256 updatedAt,) = AggregatorV3Interface(ethOracle).latestRoundData();
         if (price <= 0) revert InvalidPrice();
+        if (block.timestamp - updatedAt > ORACLE_MAX_STALENESS) revert StalePrice();
         uint8 dec = AggregatorV3Interface(ethOracle).decimals();
         return uint256(price) * 10 ** (18 - dec);
     }
@@ -926,11 +942,13 @@ contract KashYieldETH is ReentrancyGuard {
         batchTotalMintValueUSD[batchCycle] -= usdAmount;
         unchecked { activeMintUsers[batchCycle]--; }
         delete userMintRequests[msg.sender][batchCycle];
-        payable(msg.sender).transfer(amount);
+        (bool ok, ) = payable(msg.sender).call{value: amount}("");
+        if (!ok) revert InsufficientEthInContract();
     }
 
     function emergencyWithdrawRedeem(uint256 batchCycle) external {
         if (!paused) revert NotPaused();
+        if (batchPhase[batchCycle] != 0) revert WrongPhase();
         RedeemRequest storage req = userRedeemRequests[msg.sender][batchCycle];
         if (req.user != msg.sender || req.kashAmount == 0) revert InvalidRequest();
         batchTotalRedeemKash[batchCycle] -= req.kashAmount;

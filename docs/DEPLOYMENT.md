@@ -250,3 +250,24 @@ Copy `.env.example` to `.env` and fill in:
 - Confirm `exchangeFacade` is set on the vault and `kashYieldAddress` matches on the facade
 - Verify contracts on Arbiscan
 - Update frontend env and redeploy app
+
+### Security hardening (audit 2026-08-16) — redeploy required
+
+These fixes are in current `KashYieldETH` / `KashYieldBtc` bytecode. **Upgrade = new vault deploy** (not a proxy patch). After cutover, sync artifacts to **kash-ops** and the frontend.
+
+| Fix | What changed | Operator note |
+|-----|----------------|---------------|
+| **Claim allocation binding** | `claimMint` / `claimRedeem` require proof amount = on-chain Phase-2 allocation (`batchMintKashAllocation` / `batchRedeemNetAsset`) | Evil Merkle roots cannot pay arbitrary amounts. Proofs must match settlement math the bot already uses. |
+| **NAV deviation cap** | `updateNAV` limited to **±15%** per call after the first bot update (`NAV_MAX_DEVIATION_BPS = 1500`) | First `updateNAV` after deploy is uncapped (genesis calibration). Later jumps >15% **revert on-chain** even if the bot allows them. Legitimate large recovery may need **multiple stepped updates** (one per cycle). |
+| **Oracle staleness** | `getEthPrice` / `getBtcPrice` revert if Chainlink `updatedAt` is older than **25 hours** (`ORACLE_MAX_STALENESS`) | Before deploy, confirm feed heartbeats on [data.chain.link](https://data.chain.link/) (Arbitrum ETH/USD + BTC/USD are ~24h). If you substitute a faster feed, tighten the constant to heartbeat + ~1h buffer. |
+| **Emergency redeem phase** | `emergencyWithdrawRedeem` requires `batchPhase == 0` (same as mint) | Prevents clawing KASH back after ops started liquidating for that batch. |
+| **Owner expired-claim sweep** | `sweepExpiredClaims` / `sweepExpiredMintClaims` callable by **owner** as well as bot/keeper | Cold owner can mark claims expired if the bot key is lost. `releaseExpired*` flow unchanged. |
+| **ETH refund gas (ETH only)** | `cancelMintRequest` / `emergencyWithdrawMint` use `.call` instead of `.transfer` | Smart-contract wallets (Safe, etc.) can receive refunds. |
+
+**After merge + deploy**
+
+1. **`kash-ops`:** recompile and refresh bot ABI (`bot/dist/contracts/kashYieldABI.js` or your canonical sync path).
+2. **Bot ops:** treat `ALLOW_NAV_DEVIATION` as advisory only — on-chain cap is 15%.
+3. **Frontend:** no claim UX change; proofs must still match allocated amounts (already true for honest bot runs).
+
+Tests: `test/claim-allocation-binding.unit.test.js` (FIX-1). Run full suite with `ARBITRUM_MAINNET_RPC_URL=` empty for local unit tests, or a valid fork RPC for e2e.
