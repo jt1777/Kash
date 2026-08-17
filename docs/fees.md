@@ -72,7 +72,7 @@ Pool fees on WETH/USDC and wBTC/USDC routes (typically **0.05%** tier on Arbitru
 
 ### Slippage
 
-Bounded by **`maxSwapSlippageBps`** (immutable at deploy, commonly **1%**). Actual slippage is borne by the vault via NAV.
+Bounded by **`maxSwapSlippageBps`** (immutable at deploy; **50 bps / 0.5%** default in deploy scripts — read on-chain per vault). Actual slippage is borne by the vault via NAV.
 
 ---
 
@@ -86,7 +86,7 @@ Bounded by **`maxSwapSlippageBps`** (immutable at deploy, commonly **1%**). Actu
 | **Aave borrow / supply** | Vault via NAV | Continuous | Net lending spread |
 | **Aster funding & trading** | Vault via NAV | Per funding interval / rebalance | Main yield driver |
 | **Uniswap pool fees** | Vault via NAV | On swaps | ~0.05% per swap on default routes |
-| **Slippage** | Vault via NAV | On swaps | Capped per swap at deploy |
+| **Slippage** | Vault via NAV | On swaps | **0.5% (50 bps)** default at deploy; read `maxSwapSlippageBps()` |
 
 The **protocol fee** is the only charge KASH applies **directly to your deposit or redemption amount**. Other costs are shared through NAV or paid by the operator bot.
 

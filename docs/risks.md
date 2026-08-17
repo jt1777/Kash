@@ -126,7 +126,7 @@ KASH V3 is designed with layered protections against **external exploits** and *
 
 **Immutable integrations.** Each vault is bound to one `ExchangeFacade`, one `AsterAdapter`, and one spot DEX address at construction. Nobody can point the vault at a malicious router after deploy.
 
-**Bot-supplied swap bounds.** On-chain swaps require a minimum output from a live quote at execution time (bounded by immutable `maxSwapSlippageBps`).
+**Bot-supplied swap bounds.** On-chain swaps require a minimum output from a live quote at execution time (bounded by immutable `maxSwapSlippageBps`; **50 bps / 0.5%** default at deploy).
 
 **Batch processing limits flash-loan abuse.** Deposits and redemptions queue for the **daily batch**; there is no same-block deposit-and-redeem loop.
 

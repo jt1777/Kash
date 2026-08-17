@@ -70,7 +70,7 @@ npm run deploy:btc-aster
 | `AAVE_POOL_ADDRESS` | Aave V3 pool |
 | `*_ORACLE_ADDRESS` | Chainlink feed for batch pricing |
 | `CYCLE_DURATION_SECONDS`, `USER_WINDOW_END`, `PROCESSING_WINDOW_START` | Batch schedule (immutable) |
-| `FEE_BPS`, `MAX_SWAP_SLIPPAGE_BPS`, `MAX_MINT_USERS`, `MAX_REDEEM_USERS` | Economic params (immutable) |
+| `FEE_BPS`, `MAX_SWAP_SLIPPAGE_BPS`, `MAX_MINT_USERS`, `MAX_REDEEM_USERS` | Economic params (immutable). **`MAX_SWAP_SLIPPAGE_BPS` default: 50** (0.5%) in deploy scripts. |
 
 Script output includes `KASH_YIELD_*`, `KASH_TOKEN_*`, `EXCHANGE_FACADE_*`, `ASTER_ADAPTER_*` — save to `.env` and `frontend/.env.local`.
 

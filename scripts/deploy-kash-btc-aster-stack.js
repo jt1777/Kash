@@ -51,7 +51,7 @@ async function main() {
   const userWindowEnd = BigInt(process.env.USER_WINDOW_END || "85500");
   const processingWindowStart = BigInt(process.env.PROCESSING_WINDOW_START || "85500");
   const feeBps = BigInt(process.env.FEE_BPS || "3");
-  const maxSwapSlippageBps = BigInt(process.env.MAX_SWAP_SLIPPAGE_BPS || "100");
+  const maxSwapSlippageBps = BigInt(process.env.MAX_SWAP_SLIPPAGE_BPS || "50");
   const redeemPayoutBufferBps = BigInt(process.env.REDEEM_PAYOUT_BUFFER_BPS || "50");
 
   for (const [label, addr] of [
