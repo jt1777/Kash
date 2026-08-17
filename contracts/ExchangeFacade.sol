@@ -11,6 +11,7 @@ contract ExchangeFacade {
     using SafeERC20 for IERC20;
 
     address public owner;
+    address public pendingOwner;
     address public botAddress;
     address public keeperRegistry;
     address public immutable usdcAddress;
@@ -29,6 +30,8 @@ contract ExchangeFacade {
     event AdapterProposed(string indexed name, address adapter, uint256 readyAt);
     event ExchangeSwitchConfirmed(string indexed name, address adapter);
     event ProtocolInteraction(uint8 indexed action, address indexed asset, uint256 amount);
+    event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 
     modifier onlyOwner() {
         require(msg.sender == owner, "Only owner");
@@ -46,6 +49,18 @@ contract ExchangeFacade {
         usdcAddress = _usdc;
         primaryAsset = _primaryAsset;
         kashYieldAddress = _kashYield;
+    }
+
+    function transferOwnership(address newOwner) external onlyOwner {
+        pendingOwner = newOwner;
+        emit OwnershipTransferStarted(owner, newOwner);
+    }
+
+    function acceptOwnership() external {
+        require(msg.sender == pendingOwner, "Not pending owner");
+        emit OwnershipTransferred(owner, pendingOwner);
+        owner = pendingOwner;
+        pendingOwner = address(0);
     }
 
     function setBotAddress(address _bot) external onlyOwner { botAddress = _bot; }
