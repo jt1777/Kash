@@ -15,7 +15,7 @@ The vault contracts only recognize deposits submitted via the **Submit Mint Requ
 | Vault | Accepted asset | Correct method | What goes wrong if you transfer directly |
 |-------|----------------|----------------|----------------------------------------|
 | **KASH-ETH** (`0xC5C8B1Dc1fFF6728869C8BCCe6105Caa6Df9E68d`) | ETH or wETH | Use **Mint KASH** on the ETH tab (calls `requestMint`) | **Native ETH** sent to the contract is accepted by `receive()` but is **not** tied to your wallet — you receive no KASH and have **no way to reclaim it**. **wETH** sent without calling `requestMint` is likewise not credited to you. |
-| **KASH-BTC** (`0x86B0095f866c05F53363AE31F994E9540033fC2E`) | wBTC only | Use **Mint KASH** on the BTC tab (calls `requestMint`) | **wBTC** sent via a direct ERC-20 transfer is **not** credited and **cannot be recovered** — `rescueERC20` explicitly blocks the vault’s wBTC address, so even the protocol owner cannot pull it back out. |
+| **KASH-BTC** (`0x86B0095f866c05F53363AE31F994E9540033fC2E`) | wBTC only | Use **Mint KASH** on the BTC tab (calls `requestMint`) | **wBTC** sent via a direct ERC-20 transfer is **not** credited and **cannot be recovered** — there is no rescue function and no owner withdrawal path for mistaken transfers. |
 
 **Use the right vault for the right asset:**
 
@@ -118,7 +118,7 @@ KASH is designed with layered protections against **external exploits** (hacks, 
 
 **Timelock before new exchange adapters.** Registering a new perp or spot DEX adapter starts a **24-hour waiting period** on mainnet. A compromised owner key cannot instantly redirect the entire vault to a fake exchange — users and monitors have time to react before the adapter is confirmed and activated. The owner can lengthen this delay if desired.
 
-**Swap slippage cap.** On-chain swaps enforce a maximum slippage bound, limiting how much value can be lost to sandwich attacks or misconfigured routes in a single swap.
+**Swap slippage cap.** On-chain swaps enforce a maximum slippage bound via `maxSwapSlippageBps` (**50 bps / 0.5%** default at deploy; owner may change up to 500 bps), limiting how much value can be lost to sandwich attacks or misconfigured routes in a single swap.
 
 **Safe token handling.** ERC-20 transfers use standard safe-transfer patterns, avoiding non-standard token return-value bugs.
 
@@ -130,13 +130,11 @@ KASH is designed with layered protections against **external exploits** (hacks, 
 
 ### Protections against owner misuse
 
-**Pending user funds are ring-fenced.** When a deposit is submitted, ETH or wBTC is tracked in an on-chain **reserved** balance. Owner withdrawal functions can only take assets **above** what is reserved for pending mints and estimated redeems across recent unprocessed batches. Any attempt to withdraw reserved funds **reverts automatically**.
+**Pending user funds are ring-fenced in batch accounting.** When a deposit is submitted, ETH or wBTC is tracked against that user's mint request. The owner **cannot** pull vault collateral via withdrawal or rescue — `ownerWithdraw*` and `rescueERC20` were **removed** in Aug 2026. Pending mint/redeem requests remain **cancellable** by users during the user window.
 
 **Users can cancel before the batch runs.** While the user window is open and the batch has not entered processing, a pending mint or redeem may be **cancelled** and assets or KASH returned — without owner involvement.
 
-**Users can self-rescue if the contract is paused.** If the contract is paused, dedicated emergency withdrawal paths allow reclamation of a **still-pending** request directly from the contract. These paths do not go through the owner. They require interacting with the contract directly (e.g. Arbiscan “Write Contract”) rather than the app UI.
-
-**Stray tokens only.** Token rescue exists to recover mistakenly sent ERC-20s (not the main deposit asset), sent to a designated recipient.
+**Users can self-rescue if the contract is paused.** If the contract is paused, dedicated emergency withdrawal paths (`emergencyWithdrawMint` / `emergencyWithdrawRedeem`) allow reclamation of a **still-pending** request directly from the contract. These paths do not go through the owner. They require interacting with the contract directly (e.g. Arbiscan “Write Contract”) rather than the app UI.
 
 ### Operator and NAV transparency
 

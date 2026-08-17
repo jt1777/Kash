@@ -16,7 +16,7 @@ The **protocol fee** is KASH's own charge on user flows. It is the **only fee ta
 | **When charged** | Once per batch, when mints and redeems are settled (~23:40–23:59 UTC) — not when the request is submitted |
 | **On deposits** | Fee is taken from deposited ETH or wBTC before KASH tokens are minted. KASH is minted from the **post-fee** USD value at the batch NAV. |
 | **On redemptions** | Fee is taken from the gross asset value of the redemption before payout. The **net amount after the fee** is what you claim. |
-| **Where it goes** | Credited to the protocol owner's reserve on-chain (`ownerEthReserve` / `ownerWbtcReserve`). It is **not** redeployed into the yield strategy. |
+| **Where it goes** | Sent to the immutable **`feeReceiver`** address at Phase 2 settlement (native ETH via `call`, wBTC via ERC-20 transfer). It is **not** credited to `ownerEthReserve` / `ownerWbtcReserve`. |
 
 **Example — deposit:** A deposit of 1 ETH when ETH = $2,000 and NAV = $1.00 incurs a protocol fee of 0.05% of 1 ETH → 0.0005 ETH. KASH is minted from the remaining $1,999 of value.
 
@@ -38,7 +38,7 @@ Those steps incur **real costs**, but they are **not** itemized on an individual
 | **Wallet gas (user txs)** | **You** | Arbitrum gas when submitting, cancelling, or claiming — separate from the protocol fee |
 | **Wallet gas (batch txs)** | **Operator bot** | Gas for `performUpkeep`, Aave/HL/DEX calls, NAV updates, etc. — paid by the bot wallet, **not** passed through as a per-user charge |
 | **DeFi protocol fees** | **Vault** (all holders) | Aave borrow interest, Uniswap pool fees (~0.05% on default routes), Hyperliquid trading fees — reduce portfolio value → lower NAV growth |
-| **Slippage on swaps** | **Vault** (all holders) | Less output than the ideal quote on a swap — also reduces portfolio value → NAV; capped by `maxSwapSlippageBps` (default **1%**) per swap |
+| **Slippage on swaps** | **Vault** (all holders) | Less output than the ideal quote on a swap — also reduces portfolio value → NAV; capped by `maxSwapSlippageBps` per swap (**default 50 bps / 0.5%** at deploy; read on-chain) |
 
 **In short:** the protocol fee is paid by the user on entry (minting) and exit (redemption). Strategy execution costs during the batch are **shared across the vault** via NAV — every KASH holder bears a proportional share, including users who neither minted nor redeemed that day.
 
@@ -86,7 +86,7 @@ When the bot swaps assets on-chain (for example WETH ↔ USDC), Uniswap **pool f
 
 **Slippage** is the gap between the expected swap output and what the vault actually receives — caused by price impact, timing, or market depth. It is **not** a fee paid to KASH or a third-party protocol in the same way as pool fees; it is value left on the table during execution.
 
-On-chain swaps are bounded by **`maxSwapSlippageBps`** (default **100 bps = 1%**). The contract rejects swaps that would lose more than this cap in a single trade. Actual slippage is usually much lower, but whatever occurs is borne by the **vault** and shows up in NAV, shared across all token holders.
+On-chain swaps are bounded by **`maxSwapSlippageBps`** — **50 bps (0.5%)** by default at deploy. The owner may change it via `setMaxSwapSlippageBps` (up to 500 bps). Always read the live value on the vault. The contract rejects swaps that would lose more than this cap in a single trade. Actual slippage is usually much lower, but whatever occurs is borne by the **vault** and shows up in NAV, shared across all token holders.
 
 ### Rebalancing during batch
 
@@ -106,6 +106,6 @@ When deposits or redemptions require the protocol to add or remove hedge exposur
 | **Hyperliquid funding** | Vault → all holders via NAV | Periodic (exchange schedule) | Main yield driver; can be negative |
 | **Hyperliquid trading fees** | Vault → all holders via NAV | On position changes | Reduces yield |
 | **Uniswap pool fees** | Vault → all holders via NAV | On swaps | ~0.05% per swap on default routes |
-| **Slippage** | Vault → all holders via NAV | On swaps | Capped at 1% per swap by contract; actual slippage usually much lower |
+| **Slippage** | Vault → all holders via NAV | On swaps | **0.5% (50 bps)** default at deploy; read `maxSwapSlippageBps()` per vault |
 
 The **protocol fee** is the only charge KASH applies **directly to your deposit or redemption amount**. Batch rebalancing costs — DeFi fees, slippage, and bot gas — are part of operating the strategy; DeFi fees and slippage are shared by all holders through NAV, while bot gas is an operator expense separate from your settlement math.

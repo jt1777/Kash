@@ -127,7 +127,7 @@ contract KashYieldBtc is ReentrancyGuard {
     address public immutable feeReceiver;
     address public exchangeFacade;
     address public spotDexAddress;
-    uint256 public maxSwapSlippageBps = 100;
+    uint256 public maxSwapSlippageBps = 50;
     uint256 public constant MAX_REDEEM_PAYOUT_BUFFER_BPS = 500;
     uint256 public redeemPayoutBufferBps = 30;
     uint256 public totalOwnerCoverUsdc;
