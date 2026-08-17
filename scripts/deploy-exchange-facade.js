@@ -1,7 +1,7 @@
 /**
  * Deploy immutable ExchangeFacade for a KashYield vault (ETH or BTC).
  *
- * For KashYieldBtc V3, prefer scripts/deploy-kashyieldbtc.js (facade + vault in one flow).
+ * For KashYieldBtc (Aster), prefer scripts/deploy-kashyieldbtc.js (facade + vault in one flow).
  *
  * Usage (BTC):
  *   KASH_YIELD_ADDRESS=0x... PRIMARY_ASSET=0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f \
@@ -62,7 +62,7 @@ async function main() {
   console.log("\nAdd to .env:");
   console.log(`  ${envVarName}=${facadeAddr}`);
   console.log("\nWire: KashYieldETH owner calls setExchangeFacade(facade).");
-  console.log("      KashYieldBtc V3 requires facade address in vault constructor.");
+  console.log("      KashYieldBtc (Aster) requires facade address in vault constructor.");
 
   const deploymentsDir = path.join(__dirname, "..", "deployments");
   if (!fs.existsSync(deploymentsDir)) fs.mkdirSync(deploymentsDir, { recursive: true });

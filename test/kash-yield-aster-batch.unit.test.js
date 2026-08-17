@@ -4,14 +4,14 @@ const {
   WAD,
   CYCLE_DURATION,
   PROCESSING_WINDOW_START,
-  deployKashYieldV3Fixture,
+  deployKashYieldAsterFixture,
   mintKashToUser,
   jumpToCycleOffset,
-} = require("./helpers/deployKashYieldV3Fixture");
+} = require("./helpers/deployKashYieldAsterFixture");
 
-describe("KashYield V3 batch guards", function () {
+describe("ownerless KashYield batch guards", function () {
   it("defers redeem USD until Phase 1 using indicative NAV", async function () {
-    const { bot, user, vault, kashToken } = await deployKashYieldV3Fixture();
+    const { bot, user, vault, kashToken } = await deployKashYieldAsterFixture();
     const nav = (11n * WAD) / 10n; // +10% — within FIX-2 ±15% bound from genesis 1e18
     const redeemKash = 50n * WAD;
 
@@ -35,7 +35,7 @@ describe("KashYield V3 batch guards", function () {
   });
 
   it("reverts Phase 1 when the previous batch is still in Phase 1", async function () {
-    const { bot, vault } = await deployKashYieldV3Fixture();
+    const { bot, vault } = await deployKashYieldAsterFixture();
     const nav = WAD;
 
     await vault.connect(bot).updateNAV(nav, 0, 0, 0);
@@ -54,7 +54,7 @@ describe("KashYield V3 batch guards", function () {
   });
 
   it("allows Phase 1 on the next cycle after the previous batch reaches Phase 2", async function () {
-    const { bot, vault } = await deployKashYieldV3Fixture();
+    const { bot, vault } = await deployKashYieldAsterFixture();
     const nav = WAD;
 
     await vault.connect(bot).updateNAV(nav, 0, 0, 0);

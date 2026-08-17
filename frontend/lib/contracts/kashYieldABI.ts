@@ -1,4 +1,4 @@
-// Auto-synced from compiled KashYieldETH + KashYieldBtc artifacts (aster V3).
+// Auto-synced from compiled KashYieldETH + KashYieldBtc artifacts (aster branch).
 export const kashYieldABI = [
   {
     "inputs": [

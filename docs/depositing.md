@@ -28,7 +28,7 @@ KASH tokens must be claimed within **30 days** of batch settlement.
 
 ## Batch wallet limit
 
-Each batch cycle accepts at most **`maxMintUsers`** unique wallet addresses (commonly **10,000** at deploy, hard cap **100,000**). Read `maxMintUsers()` on the vault — not changeable after deploy on V3.
+Each batch cycle accepts at most **`maxMintUsers`** unique wallet addresses (commonly **10,000** at deploy, hard cap **100,000**). Read `maxMintUsers()` on the vault — not changeable after deploy on Aster vaults.
 
 - When the limit is reached, **new wallets** cannot submit a mint request for that cycle in the app.
 - A wallet that **already has a pending deposit** in the current cycle may add to its existing request.
@@ -40,7 +40,7 @@ The app shows batch capacity for the current cycle as a status indicator: **Avai
 
 ## Batch timing and capacity
 
-Batch **cycle length**, **user window**, and **processing window** are **fixed at vault deploy** on V3 (immutable `cycleDurationSeconds`, `userWindowEnd`, `processingWindowStart`). They are not adjustable on-chain after launch.
+Batch **cycle length**, **user window**, and **processing window** are **fixed at vault deploy** on Aster vaults (immutable `cycleDurationSeconds`, `userWindowEnd`, `processingWindowStart`). They are not adjustable on-chain after launch.
 
 At deploy, the typical schedule is:
 

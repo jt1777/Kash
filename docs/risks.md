@@ -4,7 +4,7 @@ KASH is a decentralised finance protocol on **Arbitrum One**. Participation invo
 
 > **Important:** KASH should be treated as high risk until contract review and operational security are satisfactory. Only amounts that can be affordably lost should be deposited.
 
-This documentation describes the **V3 ownerless vaults** on the **`aster` branch** — deployed with **Aster** as the on-chain perp DEX. The legacy **Hyperliquid (HL)** deployment on the `main` branch is a separate, older stack with different custody and governance tradeoffs.
+This documentation describes the **ownerless Aster vaults** on the **`aster` branch** — deployed with **Aster** as the on-chain perp DEX. The legacy **Hyperliquid (HL)** deployment on the `main` branch is a separate, older stack with different custody and governance tradeoffs.
 
 ---
 
@@ -16,8 +16,8 @@ The vault contracts only recognize deposits submitted via **Submit Mint Request*
 
 | Vault | Accepted asset | Correct method | What goes wrong if you transfer directly |
 |-------|----------------|----------------|----------------------------------------|
-| **KASH-ETH** | ETH or wETH | Use **Mint KASH** on the ETH tab (calls `requestMint`) | **Native ETH** sent to the contract is accepted by `receive()` but is **not** tied to your wallet — you receive no KASH and have **no way to reclaim it** (V3 vaults are ownerless; there is no rescue function). **wETH** sent without calling `requestMint` is likewise not credited. |
-| **KASH-BTC** | wBTC only | Use **Mint KASH** on the BTC tab (calls `requestMint`) | **wBTC** sent via a direct ERC-20 transfer is **not** credited and **cannot be recovered** — there is no owner or rescue path on V3. |
+| **KASH-ETH** | ETH or wETH | Use **Mint KASH** on the ETH tab (calls `requestMint`) | **Native ETH** sent to the contract is accepted by `receive()` but is **not** tied to your wallet — you receive no KASH and have **no way to reclaim it** (Aster vaults are ownerless; there is no rescue function). **wETH** sent without calling `requestMint` is likewise not credited. |
+| **KASH-BTC** | wBTC only | Use **Mint KASH** on the BTC tab (calls `requestMint`) | **wBTC** sent via a direct ERC-20 transfer is **not** credited and **cannot be recovered** — there is no owner or rescue path on Aster. |
 
 **Use the right vault for the right asset:**
 
@@ -34,7 +34,7 @@ Live vault addresses are shown in the app footer and in [`frontend/lib/contracts
 The protocol is governed entirely by smart contracts. If there is a bug in the code, funds could be lost or locked. Mitigations in place:
 
 - All user-facing functions are protected against reentrancy attacks
-- Each V3 vault is **ownerless**: the bot address, `ExchangeFacade`, `AsterAdapter`, spot DEX, oracle, fees, batch timing, and user caps are **fixed permanently at deploy** — there is no privileged key that could redirect integrations or parameters after launch
+- Each Aster vault is **ownerless**: the bot address, `ExchangeFacade`, `AsterAdapter`, spot DEX, oracle, fees, batch timing, and user caps are **fixed permanently at deploy** — there is no privileged key that could redirect integrations or parameters after launch
 - There is **no emergency pause** — see [Safeguards](#safeguards) for the tradeoffs of the ownerless design
 
 **Verification steps:** The Contract Address link in the app footer leads to the verified contract page on Arbiscan. Contracts are source-code verified on Arbiscan; the full Solidity is also published in the public GitHub repository and can be cross-checked against deployed bytecode.
@@ -43,7 +43,7 @@ The protocol is governed entirely by smart contracts. If there is a bug in the c
 
 ## Funding rate risk
 
-Yield comes primarily from earning the funding rate on short positions held on the perp DEX (**Aster** on V3). Funding rates are not guaranteed and can go negative — meaning the protocol would **pay** funding instead of earning it. During extended bear markets or periods of low speculative activity, yield could be zero or negative.
+Yield comes primarily from earning the funding rate on short positions held on the perp DEX (**Aster**). Funding rates are not guaranteed and can go negative — meaning the protocol would **pay** funding instead of earning it. During extended bear markets or periods of low speculative activity, yield could be zero or negative.
 
 The protocol does not promise a fixed APY. Yield is variable and reflects current market conditions. The app’s indicative P.A. Yield is computed in the browser from live market inputs; it is not a guarantee.
 
@@ -67,7 +67,7 @@ The strategy depends on **Aave**, **Aster**, and (when used) **Uniswap** continu
 
 Protocol operations — batch processing, capital deployment, and NAV updates — are performed by a **bot** (and optionally a **keeper** for Chainlink-style upkeep). A compromised or unavailable bot key could delay batches, mis-size hedges, or submit an incorrect NAV.
 
-**Mitigations on V3:**
+**Mitigations on Aster:**
 
 - The bot address is **immutable** at deploy — it cannot be rotated on-chain after launch (a misconfigured bot requires redeploying the stack and user migration)
 - Capital movement (Aave, Aster, spot DEX) is **bot/keeper-gated** only
@@ -81,9 +81,9 @@ Protocol operations — batch processing, capital deployment, and NAV updates �
 
 ## Perp DEX custody (Aster) — improved vs legacy HL
 
-On **V3 + Aster**, perpetual exposure is managed **entirely on Arbitrum** through an **`AsterAdapter`** bound to an immutable **`ExchangeFacade`**. The adapter calls Aster’s clearing house and vault contracts; the bot triggers those calls **through the facade**, not by holding a separate cross-chain master wallet.
+On **Aster**, perpetual exposure is managed **entirely on Arbitrum** through an **`AsterAdapter`** bound to an immutable **`ExchangeFacade`**. The adapter calls Aster’s clearing house and vault contracts; the bot triggers those calls **through the facade**, not by holding a separate cross-chain master wallet.
 
-| | **V3 (Aster, `aster` branch)** | **Legacy (`main` branch, HL)** |
+| | **Aster (, `aster` branch)** | **Legacy (`main` branch, HL)** |
 |--|----------------------------------|--------------------------------|
 | Perp venue | Aster on Arbitrum | Hyperliquid (cross-chain) |
 | Custody model | Adapter + facade on-chain; bot is operator only | Direct-deposit mode: bot EOA is HL master |
@@ -102,7 +102,7 @@ Deposit and redeem sizing at batch time uses **Chainlink** price feeds (`getEthP
 
 ## Batch overlap
 
-V3 blocks starting **Phase 1** for cycle **N+1** while cycle **N** is still in **Phase 1** (ops running). This reduces the risk of concurrent batches corrupting NAV or ops sizing during long on-chain perp chunks. It does **not** guarantee the bot finishes every batch before the next user window — monitor `batchPhase` on-chain.
+Aster vaults block starting **Phase 1** for cycle **N+1** while cycle **N** is still in **Phase 1** (ops running). This reduces the risk of concurrent batches corrupting NAV or ops sizing during long on-chain perp chunks. It does **not** guarantee the bot finishes every batch before the next user window — monitor `batchPhase` on-chain.
 
 ---
 
@@ -114,7 +114,7 @@ Funds deposited in KASH are not insured. There is no protocol-level insurance fu
 
 ## Safeguards
 
-KASH V3 is designed with layered protections against **external exploits** and **post-deploy privileged misuse**. No design eliminates all risk.
+KASH Aster stack is designed with layered protections against **external exploits** and **post-deploy privileged misuse**. No design eliminates all risk.
 
 **Both KASH-ETH and KASH-BTC vaults are ownerless.** There is no contract owner, no pause, and no post-deploy setters. An incident can only be mitigated by the bot stopping operations and, if needed, users migrating to a redeployed vault.
 

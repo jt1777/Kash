@@ -6,7 +6,7 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./libraries/ProtocolActionCodes.sol";
 import "./interfaces/IPerpExchange.sol";
 
-/// @notice Immutable perp exchange routing contract (V3 bug-bounty hardening).
+/// @notice Immutable perp exchange routing contract (Aster ownerless hardening).
 ///         Bot/keeper call through here; adapter and config are frozen at deploy time.
 contract ExchangeFacade {
     using SafeERC20 for IERC20;

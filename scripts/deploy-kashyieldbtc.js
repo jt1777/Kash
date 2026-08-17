@@ -1,7 +1,7 @@
 // scripts/deploy-kashyieldbtc.js
 // Deploys ExchangeFacade + KashYieldBtc when the perp adapter is already deployed.
 //
-// ⚠️  KASH-BTC V3 + Aster: use the atomic stack script instead (recommended):
+// ⚠️  KASH-BTC Aster: use the atomic stack script instead (recommended):
 //   npx hardhat run scripts/deploy-kash-btc-aster-stack.js --network arbitrumOne
 //   npm run deploy:btc-aster
 //
@@ -32,7 +32,7 @@ async function main() {
   const [deployer] = await hre.ethers.getSigners();
   const network = hre.network.name;
 
-  console.log("Deploying KashYieldBtc V3 to", network);
+  console.log("Deploying KashYieldBtc (Aster) to", network);
   console.log("Deployer:", deployer.address);
 
   const botAddress = process.env.BOT_ADDRESS;
@@ -45,7 +45,7 @@ async function main() {
 
   if (exchangeName.toUpperCase() === "ASTER") {
     throw new Error(
-      "Aster V3 must use the atomic stack deploy:\n" +
+      "Aster stack must use the atomic stack deploy:\n" +
         "  npx hardhat run scripts/deploy-kash-btc-aster-stack.js --network arbitrumOne\n" +
         "  npm run deploy:btc-aster",
     );
@@ -131,7 +131,7 @@ async function main() {
   console.log("✅ KashTokenBtc:", kashTokenBtcAddress);
 
   console.log("\n====================================");
-  console.log("📋 KASHYIELDBTC V3 (ownerless)");
+  console.log("📋 KASHYIELDBTC (Aster) (ownerless)");
   console.log("====================================");
   console.log("  KashYieldBtc:   ", kashYieldBtcAddress);
   console.log("  KashTokenBtc:   ", kashTokenBtcAddress);
@@ -167,7 +167,7 @@ async function main() {
       feeReceiver,
     },
   };
-  const filepath = path.join(deploymentsDir, `kashyieldbtc-v3-${network}-${Date.now()}.json`);
+  const filepath = path.join(deploymentsDir, `kashyieldbtc-aster-${network}-${Date.now()}.json`);
   fs.writeFileSync(filepath, JSON.stringify(info, null, 2));
   console.log("💾 Saved:", filepath);
 }

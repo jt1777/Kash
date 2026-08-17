@@ -57,7 +57,7 @@ For **KASH-BTC**, **wBTC** must be held on Arbitrum One (`0x2f2a2543B76A4166549F
 
 ## Live contract addresses (Arbitrum One)
 
-Vault and token addresses are **environment-specific**. After a V3 Aster deploy, they appear in:
+Vault and token addresses are **environment-specific**. After a Aster deploy, they appear in:
 
 - The app **footer** (Contract Address links)
 - [`frontend/lib/contracts/addresses.ts`](../frontend/lib/contracts/addresses.ts)
@@ -65,7 +65,7 @@ Vault and token addresses are **environment-specific**. After a V3 Aster deploy,
 
 Programmatic integrators: see [Agent Quickstart](agent-quickstart.md) for ABIs, adapter/facade reads, and Merkle claim flows.
 
-> **Note:** The legacy **Hyperliquid** deployment on the `main` branch uses **different addresses and contract versions** (owner-gated V2). Do not assume addresses from old docs or screenshots apply to V3 Aster vaults.
+> **Note:** The legacy **Hyperliquid** deployment on the `main` branch uses **different addresses and contract versions** (owner-gated HL). Do not assume addresses from old docs or screenshots apply to Aster vaults.
 
 ---
 

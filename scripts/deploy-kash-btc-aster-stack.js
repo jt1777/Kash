@@ -1,5 +1,5 @@
 /**
- * Deploy the full KashYieldBtc V3 + ExchangeFacade + AsterAdapter stack in ONE run.
+ * Deploy the full KashYieldBtc (Aster) + ExchangeFacade + AsterAdapter stack in ONE run.
  *
  * Resolves the circular dependency (adapter ↔ facade ↔ vault) by precomputing
  * all three CREATE addresses from the deployer's current nonce, then deploying

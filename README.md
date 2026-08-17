@@ -2,12 +2,12 @@
 
 Kash is a delta-neutral yield protocol on **Arbitrum One**. ETH and wrapped Bitcoin deposits are posted as collateral on **Aave** to fund a hedged short on **Aster**, an Arbitrum-native perpetuals DEX. An automated operator runs batch settlement, rebalancing, and NAV updates. Deposits are segregated by smart contract; portfolio components are auditable on-chain.
 
-> **`aster` branch:** **V3 ownerless** vaults + **AsterAdapter**. The **`main`** branch retains a legacy **Hyperliquid V2** stack — see [docs/risks.md](docs/risks.md).
+> **`aster` branch:** **ownerless Aster** vaults + **AsterAdapter**. The **`main`** branch retains a legacy **Hyperliquid (HL)** stack — see [docs/risks.md](docs/risks.md).
 
 ## Key Features
 
 - **Two products**: `KashYieldETH` (ETH/wETH → KASH-ETH) and `KashYieldBtc` (wBTC → KASH-BTC)
-- **Ownerless V3**: Bot, `ExchangeFacade`, `AsterAdapter`, spot DEX, oracle, `feeReceiver`, fees, batch timing, and user caps are **immutable** at deploy — no `owner()`, no `pause()`, no post-deploy setters
+- **Ownerless Aster**: Bot, `ExchangeFacade`, `AsterAdapter`, spot DEX, oracle, `feeReceiver`, fees, batch timing, and user caps are **immutable** at deploy — no `owner()`, no `pause()`, no post-deploy setters
 - **Aster on-chain perps**: Positions managed via `AsterAdapter` through `ExchangeFacade` (no cross-chain HL master wallet)
 - **NAV-based pricing**: KASH is minted and redeemed at NAV determined during daily batch processing
 - **Batch overlap guard**: Phase 1 for cycle N+1 reverts while cycle N is still in Phase 1
@@ -28,7 +28,7 @@ Kash is a delta-neutral yield protocol on **Arbitrum One**. ETH and wrapped Bitc
 | `libraries/MerkleVerify.sol` | Merkle verification for claims |
 | `adapters/UniswapV3Adapter.sol` | `ISpotDex` spot swaps |
 
-| Aspect | V3 behaviour |
+| Aspect | Aster stack behaviour |
 |--------|----------------|
 | Batch cycle | Fixed at deploy (`cycleDurationSeconds`, user/processing windows) |
 | NAV | Updated during batch processing; submissions recorded on-chain |
@@ -66,11 +66,11 @@ Configure `frontend/.env.local` with deployed `NEXT_PUBLIC_*` addresses.
 
 ## Security
 
-See [docs/risks.md](docs/risks.md) for the public risk summary (V3 Aster focus).
+See [docs/risks.md](docs/risks.md) for the public risk summary (Aster focus).
 
 ## License
 
-[Business Source License 1.1](LICENSE). On-chain **`VERSION = "3.0.0"`** on V3 vaults.
+[Business Source License 1.1](LICENSE). On-chain **`VERSION = "3.0.0"`** on Aster vaults.
 
 ## Disclaimer
 

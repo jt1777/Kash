@@ -8,10 +8,10 @@ const PROCESSING_WINDOW_START = 3000n;
 const ETH_USD_8 = 3000n * 10n ** 8n;
 
 /**
- * Deploy a minimal KashYieldETH V3 fixture for local batch unit tests.
+ * Deploy a minimal KashYieldETH (Aster) fixture for local batch unit tests.
  * Uses dummy WETH/USDC/facade/spot addresses — only redeem + Phase 1 paths are exercised.
  */
-async function deployKashYieldV3Fixture() {
+async function deployKashYieldAsterFixture() {
   const [bot, user, attacker, feeReceiver] = await ethers.getSigners();
   const dummy = ethers.Wallet.createRandom().address;
 
@@ -90,7 +90,7 @@ module.exports = {
   CYCLE_DURATION,
   USER_WINDOW_END,
   PROCESSING_WINDOW_START,
-  deployKashYieldV3Fixture,
+  deployKashYieldAsterFixture,
   mintKashToUser,
   jumpToCycleOffset,
   startAtUserWindow,

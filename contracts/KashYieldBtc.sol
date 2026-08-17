@@ -73,7 +73,7 @@ event ExpiredMintReleased(uint256 indexed batchCycle, address indexed user, uint
 
 /**
  * @title KashYieldBtc
- * @dev V3 wBTC yield vault — ownerless, immutable config for bug-bounty deployment.
+ * @dev Aster wBTC yield vault — ownerless — ownerless, immutable config for bug-bounty deployment.
  *      Merkle roots are committed once by the bot; no admin can override claims or drain reserves.
  */
 contract KashYieldBtc is ReentrancyGuard {

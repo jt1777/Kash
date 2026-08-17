@@ -1,5 +1,5 @@
 /**
- * Aster round-2 bundle (#3/#8/#9 + fee cap): local Hardhat unit tests (V3 ownerless).
+ * Aster round-2 bundle (#3/#8/#9 + fee cap): local Hardhat unit tests (ownerless Aster).
  */
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
@@ -7,10 +7,10 @@ const { time } = require("@nomicfoundation/hardhat-network-helpers");
 const {
   WAD,
   PROCESSING_WINDOW_START,
-  deployKashYieldV3Fixture,
+  deployKashYieldAsterFixture,
   mintKashToUser,
   jumpToCycleOffset,
-} = require("./helpers/deployKashYieldV3Fixture");
+} = require("./helpers/deployKashYieldAsterFixture");
 
 describe("Aster round-2 bundle", function () {
   it("rejects feeBps > 30 at deploy", async function () {
@@ -43,14 +43,14 @@ describe("Aster round-2 bundle", function () {
   });
 
   it("exposes immutable redeemPayoutBufferBps and no ownerWithdraw/rescue", async function () {
-    const { vault } = await deployKashYieldV3Fixture();
+    const { vault } = await deployKashYieldAsterFixture();
     expect(await vault.redeemPayoutBufferBps()).to.equal(50n);
     expect(vault.interface.hasFunction("ownerWithdrawEth")).to.equal(false);
     expect(vault.interface.hasFunction("rescueERC20")).to.equal(false);
   });
 
   it("sweep keeps lockedClaim; release pays user capped (#9)", async function () {
-    const { bot, user, feeReceiver, vault, kashToken } = await deployKashYieldV3Fixture();
+    const { bot, user, feeReceiver, vault, kashToken } = await deployKashYieldAsterFixture();
     const nav = WAD;
     const redeemKash = 10n * WAD;
     const grossG = ethers.parseEther("0.001");

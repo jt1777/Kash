@@ -114,7 +114,7 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
       await uniAdapter.waitForDeployment();
       console.log("    ✅ UniswapV3Adapter:", await uniAdapter.getAddress());
 
-      // ── Deploy KashYieldETH V3 stack (facade + HL adapter + vault) ────────
+      // ── Deploy KashYieldETH (Aster) stack (facade + HL adapter + vault) ────────
       // Aave pool address is hardcoded in the constructor to the real Arbitrum One
       // address (0x794a...), so no need to pass it — works perfectly on the fork.
       ({ kashYieldEth, hlAdapter } = await deployKashYieldEthStack({
@@ -346,7 +346,7 @@ describe("Mainnet fork — KashYield against real Aave V3 + Uniswap V3", functio
       }
       console.log(`    ✅ Acquired wBTC for user1: ${Number(user1Wbtc) / 1e8} wBTC`);
 
-      // ── Deploy UniswapV3Adapter + KashYieldBtc V3 stack ─────────────────
+      // ── Deploy UniswapV3Adapter + KashYieldBtc (Aster) stack ─────────────────
       const UniswapV3Adapter = await ethers.getContractFactory("UniswapV3Adapter");
       uniAdapter = await UniswapV3Adapter.deploy(UNISWAP_ROUTER_V2, WETH_ADDRESS);
       await uniAdapter.waitForDeployment();

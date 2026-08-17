@@ -2,7 +2,7 @@
  * @deprecated Use the atomic stack deploy instead:
  *   npx hardhat run scripts/deploy-kash-btc-aster-stack.js --network arbitrumOne
  *
- * AsterAdapter, ExchangeFacade, and KashYieldBtc V3 reference each other at
+ * AsterAdapter, ExchangeFacade, and KashYieldBtc (Aster) reference each other at
  * construction. Split deploys require fragile nonce coordination between runs.
  */
 require("dotenv").config();

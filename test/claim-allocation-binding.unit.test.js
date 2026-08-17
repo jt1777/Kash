@@ -1,5 +1,5 @@
 /**
- * FIX-1 — claim amounts must match on-chain Phase-2 allocations (Aster V3).
+ * FIX-1 — claim amounts must match on-chain Phase-2 allocations (Aster).
  * Run: ARBITRUM_MAINNET_RPC_URL= npx hardhat test test/claim-allocation-binding.unit.test.js
  */
 const { expect } = require("chai");
@@ -7,17 +7,17 @@ const { ethers } = require("hardhat");
 const {
   WAD,
   PROCESSING_WINDOW_START,
-  deployKashYieldV3Fixture,
+  deployKashYieldAsterFixture,
   mintKashToUser,
   jumpToCycleOffset,
-} = require("./helpers/deployKashYieldV3Fixture");
+} = require("./helpers/deployKashYieldAsterFixture");
 const {
   allocRedeemNetAmounts,
   buildRedeemMerkleTree,
 } = require("./helpers/redeemMerkle");
 const { buildMintMerkleTree } = require("./helpers/mintMerkle");
 
-describe("Claim allocation binding (FIX-1, Aster V3)", function () {
+describe("Claim allocation binding (FIX-1, Aster)", function () {
   async function settleRedeemBatch(vault, bot, user, kashToken) {
     const nav = WAD;
     const redeemKash = 10n * WAD;
@@ -85,7 +85,7 @@ describe("Claim allocation binding (FIX-1, Aster V3)", function () {
   }
 
   it("valid redeem claim succeeds when proof amount matches allocation", async function () {
-    const { bot, user, vault, kashToken } = await deployKashYieldV3Fixture();
+    const { bot, user, vault, kashToken } = await deployKashYieldAsterFixture();
     const { cycle, entries, proofs } = await settleRedeemBatch(vault, bot, user, kashToken);
     const userAddr = await user.getAddress();
     const leaf = entries[0];
@@ -100,7 +100,7 @@ describe("Claim allocation binding (FIX-1, Aster V3)", function () {
   });
 
   it("redeem claim reverts when proof amount differs from allocation", async function () {
-    const { bot, user, vault, kashToken } = await deployKashYieldV3Fixture();
+    const { bot, user, vault, kashToken } = await deployKashYieldAsterFixture();
     const { cycle, entries } = await settleRedeemBatch(vault, bot, user, kashToken);
     const userAddr = await user.getAddress();
     const leaf = entries[0];
@@ -114,7 +114,7 @@ describe("Claim allocation binding (FIX-1, Aster V3)", function () {
   });
 
   it("redeem claim reverts for address with no allocation even with a valid-looking proof", async function () {
-    const { bot, user, attacker, vault, kashToken } = await deployKashYieldV3Fixture();
+    const { bot, user, attacker, vault, kashToken } = await deployKashYieldAsterFixture();
     const { cycle, entries, proofs } = await settleRedeemBatch(vault, bot, user, kashToken);
     const attackerAddr = await attacker.getAddress();
     const leaf = entries[0];
@@ -127,7 +127,7 @@ describe("Claim allocation binding (FIX-1, Aster V3)", function () {
   });
 
   it("valid mint claim succeeds when proof amount matches allocation", async function () {
-    const { bot, user, vault, kashToken } = await deployKashYieldV3Fixture();
+    const { bot, user, vault, kashToken } = await deployKashYieldAsterFixture();
     const { cycle, entries, proofs } = await settleMintBatch(vault, bot, user);
     const userAddr = await user.getAddress();
     const leaf = entries[0];
@@ -141,7 +141,7 @@ describe("Claim allocation binding (FIX-1, Aster V3)", function () {
   });
 
   it("mint claim reverts when proof amount differs from allocation", async function () {
-    const { bot, user, vault } = await deployKashYieldV3Fixture();
+    const { bot, user, vault } = await deployKashYieldAsterFixture();
     const { cycle, entries } = await settleMintBatch(vault, bot, user);
     const userAddr = await user.getAddress();
     const leaf = entries[0];

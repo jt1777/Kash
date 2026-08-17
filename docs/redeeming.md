@@ -32,7 +32,7 @@ Mint and redeem limits are tracked **separately** — a full mint batch does not
 
 ## Batch timing and capacity
 
-Batch timing is **immutable on V3** — see [Depositing — Batch timing](depositing.md#batch-timing-and-capacity).
+Batch timing is **immutable on Aster vaults** — see [Depositing — Batch timing](depositing.md#batch-timing-and-capacity).
 
 At deploy, the typical schedule is:
 

@@ -1,7 +1,7 @@
 // scripts/deploy-kashyieldeth.js
-// Deploys ExchangeFacade + KashYieldETH V3 when the perp adapter is already deployed.
+// Deploys ExchangeFacade + KashYieldETH (Aster) when the perp adapter is already deployed.
 //
-// ⚠️  KASH-ETH V3 + Aster: use the atomic stack script instead (recommended):
+// ⚠️  KASH-ETH Aster: use the atomic stack script instead (recommended):
 //   npx hardhat run scripts/deploy-kash-eth-aster-stack.js --network arbitrumOne
 //   npm run deploy:eth-aster
 //
@@ -32,7 +32,7 @@ async function main() {
   const [deployer] = await hre.ethers.getSigners();
   const network = hre.network.name;
 
-  console.log("Deploying KashYieldETH V3 to", network);
+  console.log("Deploying KashYieldETH (Aster) to", network);
   console.log("Deployer:", deployer.address);
 
   const botAddress = process.env.BOT_ADDRESS;
@@ -45,7 +45,7 @@ async function main() {
 
   if (exchangeName.toUpperCase() === "ASTER") {
     throw new Error(
-      "Aster V3 must use the atomic stack deploy:\n" +
+      "Aster stack must use the atomic stack deploy:\n" +
         "  npx hardhat run scripts/deploy-kash-eth-aster-stack.js --network arbitrumOne\n" +
         "  npm run deploy:eth-aster",
     );
@@ -131,7 +131,7 @@ async function main() {
   console.log("✅ KashTokenEth:", kashTokenEthAddress);
 
   console.log("\n====================================");
-  console.log("📋 KASHYIELDETH V3 (ownerless)");
+  console.log("📋 KASHYIELDETH (Aster) (ownerless)");
   console.log("====================================");
   console.log("  KashYieldETH:   ", kashYieldEthAddress);
   console.log("  KashTokenEth:   ", kashTokenEthAddress);
@@ -167,7 +167,7 @@ async function main() {
       feeReceiver,
     },
   };
-  const filepath = path.join(deploymentsDir, `kashyieldeth-v3-${network}-${Date.now()}.json`);
+  const filepath = path.join(deploymentsDir, `kashyieldeth-aster-${network}-${Date.now()}.json`);
   fs.writeFileSync(filepath, JSON.stringify(info, null, 2));
   console.log("💾 Saved:", filepath);
 }

@@ -1,10 +1,10 @@
-# Deploying KashYield (V3 — Aster)
+# Deploying KashYield (Aster)
 
-This guide covers compiling and deploying **V3 ownerless** KashYield contracts on **Arbitrum One** with **Aster** as the perp DEX.
+This guide covers compiling and deploying **ownerless Aster** KashYield contracts on **Arbitrum One** with **Aster** as the perp DEX.
 
 **Post-deploy bot setup and operator runbooks** live in the private **kash-ops** repository (`docs/DEPLOYMENT.md` there, Aster batch path under `bot/src/batch/aster/`).
 
-> **Legacy:** The `main` branch still documents a **Hyperliquid V2** owner-gated deployment path. That stack is **not** the same as V3 Aster — do not reuse HL adapter scripts or addresses for V3.
+> **Legacy:** The `main` branch still documents a **Hyperliquid (HL)** owner-gated deployment path. That stack is **not** the same as Aster — do not reuse HL adapter scripts or addresses for Aster.
 
 ---
 
@@ -16,9 +16,9 @@ This guide covers compiling and deploying **V3 ownerless** KashYield contracts o
 
 ---
 
-## V3 properties (both products)
+## Ownerless deploy properties (both products)
 
-| Property | V3 behavior |
+| Property | Aster stack behavior |
 |----------|-------------|
 | Governance | **Ownerless** — no `owner()`, no `pause()`, no post-deploy setters |
 | Bot | **`botAddress`** immutable at deploy |
@@ -131,9 +131,9 @@ For manual Standard-Json-Input verification, see compiled artifacts under `artif
 
 ---
 
-## Legacy Hyperliquid path (not V3 Aster)
+## Legacy Hyperliquid path (not Aster)
 
-The `main` branch and scripts `deploy-hyperliquid-adapter.js` + `deploy-kashyieldeth.js` (with `EXCHANGE_NAME=HL`) target the **older owner-gated HL stack**. They are **not** used for V3 Aster bug-bounty deployments on this branch.
+The `main` branch and scripts `deploy-hyperliquid-adapter.js` + `deploy-kashyieldeth.js` (with `EXCHANGE_NAME=HL`) target the **older owner-gated HL stack**. They are **not** used for Aster bug-bounty deployments on this branch.
 
 ---
 

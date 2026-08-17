@@ -83,7 +83,7 @@ event ExpiredMintReleased(uint256 indexed batchCycle, address indexed user, uint
 
 /**
  * @title KashYieldETH
- * @dev V3 ETH yield vault — ownerless, immutable config for bug-bounty deployment.
+ * @dev Aster ETH yield vault — ownerless — ownerless, immutable config for bug-bounty deployment.
  *      Merkle roots are committed once by the bot; no admin can override claims or drain reserves.
  *      Deposits accepted as native ETH (msg.value) or wrapped WETH (approve + transferFrom).
  */

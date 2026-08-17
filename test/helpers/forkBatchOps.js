@@ -57,7 +57,7 @@ async function deployAndWireExchangeFacade({
 }
 
 /**
- * Deploy KashYieldBtc V3 stack: facade + HL adapter + vault with immutable wiring.
+ * Deploy KashYieldBtc (Aster) stack: facade + HL adapter + vault with immutable wiring.
  * uniAdapter must already be deployed.
  */
 async function deployKashYieldBtcStack({
@@ -140,7 +140,7 @@ async function deployKashYieldBtcStack({
 }
 
 /**
- * Deploy KashYieldETH V3 stack: facade + HL adapter + vault with immutable wiring.
+ * Deploy KashYieldETH (Aster) stack: facade + HL adapter + vault with immutable wiring.
  * uniAdapter must already be deployed.
  */
 async function deployKashYieldEthStack({

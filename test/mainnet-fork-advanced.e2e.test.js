@@ -71,7 +71,7 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
 
     // Seed a mock oracle with the real Chainlink ETH/USD price so this suite can
     // later move the price (setMockEthPrice) without redeploying the immutable
-    // V3 vault — its oracle address is fixed at construction time.
+    // Aster vault — its oracle address is fixed at construction time.
     const realOracle = await ethers.getContractAt(
       ["function latestRoundData() view returns (uint80,int256,uint256,uint256,uint80)",
        "function decimals() view returns (uint8)"],
@@ -83,7 +83,7 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
     mockEthOracle = await MockChainlinkOracle.deploy(realAnswer, realDecimals);
     await mockEthOracle.waitForDeployment();
 
-    // Deploy KashYieldETH V3 stack (facade + HL adapter + vault)
+    // Deploy KashYieldETH (Aster) stack (facade + HL adapter + vault)
     ({ kashYieldEth, hlAdapter } = await deployKashYieldEthStack({
       deployer: owner,
       bot,
@@ -191,7 +191,7 @@ describe("Mainnet fork — Advanced KashYield scenarios", function () {
   }
 
   async function setMockEthPrice(price18) {
-    // KashYieldETH V3's oracle address is immutable, so the mock deployed in
+    // KashYieldETH (Aster)'s oracle address is immutable, so the mock deployed in
     // before() stays wired — just update its answer.
     // KashYieldETH normalizes oracle answers by `10 ** (18 - decimals)`.
     // The mock uses an 8-decimal Chainlink-style answer for parity with Arbitrum ETH/USD.

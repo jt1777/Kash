@@ -12,11 +12,11 @@ The **protocol fee** is KASH's own charge on user flows. It is the **only fee ta
 
 | | |
 |---|---|
-| **Rate** | **`feeBps`** fixed at deploy (typically **0.05% / 5 bps**) — read `feeBps()` on the vault; not changeable after launch on V3 |
+| **Rate** | **`feeBps`** fixed at deploy (typically **0.05% / 5 bps**) — read `feeBps()` on the vault; not changeable after launch on Aster vaults |
 | **When charged** | Once per batch, when mints and redeems are settled (~processing window) — not when the request is submitted |
 | **On deposits** | Fee is taken from deposited ETH or wBTC before KASH is minted. KASH is minted from the **post-fee** USD value at settlement NAV. |
 | **On redemptions** | Fee is taken from the gross asset value of the redemption before payout. The **net amount after the fee** is what you claim. |
-| **Where it goes** | Sent to the immutable **`feeReceiver`** address at Phase 2 settlement (V3 has no owner reserve or owner withdrawal) |
+| **Where it goes** | Sent to the immutable **`feeReceiver`** address at Phase 2 settlement (Aster vaults have no owner reserve or owner withdrawal) |
 
 **Example — deposit:** A deposit of 1 ETH when ETH = $2,000 and NAV = $1.00 incurs a protocol fee of 0.05% of 1 ETH → 0.0005 ETH. KASH is minted from the remaining value.
 

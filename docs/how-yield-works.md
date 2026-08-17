@@ -58,7 +58,7 @@ The contract does **not** auto-compute NAV from all legs in one on-chain functio
 
 ## The daily batch cycle
 
-Every **24 hours** (cycle length is **fixed at deploy** on V3 — confirm live times in the app):
+Every **24 hours** (cycle length is **fixed at deploy** on Aster vaults — confirm live times in the app):
 
 | Phase | Typical time (UTC) | What happens |
 |-------|-------------------|--------------|
@@ -68,7 +68,7 @@ Every **24 hours** (cycle length is **fixed at deploy** on V3 — confirm live t
 
 Submit before the processing window cutoff to be included in that day's batch.
 
-**V3 note:** Phase 1 for cycle **N+1** **reverts** if cycle **N** is still in Phase 1 (batch overlap guard).
+**Aster note:** Phase 1 for cycle **N+1** **reverts** if cycle **N** is still in Phase 1 (batch overlap guard).
 
 ---
 

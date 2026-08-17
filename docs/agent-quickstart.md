@@ -4,7 +4,7 @@ This page is for autonomous agents, agent developers, and scripts that want to e
 
 KASH is not a guaranteed-yield product. Before allocating capital, verify contract state, NAV, fee, batch window, and risk assumptions yourself.
 
-This guide targets **V3 ownerless vaults** on the **`aster` branch** ( **Aster** perp DEX ). Legacy **Hyperliquid V2** vaults on `main` differ — see [Risks](risks.md).
+This guide targets **ownerless Aster vaults** on the **`aster` branch** ( **Aster** perp DEX ). Legacy **Hyperliquid (HL)** vaults on `main` differ — see [Risks](risks.md).
 
 ---
 
@@ -20,7 +20,7 @@ This guide targets **V3 ownerless vaults** on the **`aster` branch** ( **Aster**
 | KASH-ETH | `NEXT_PUBLIC_KASH_YIELD_ETH_ADDRESS` | `NEXT_PUBLIC_KASH_TOKEN_ETH` | Native ETH or WETH |
 | KASH-BTC | `NEXT_PUBLIC_KASH_YIELD_BTC_ADDRESS` | `NEXT_PUBLIC_KASH_TOKEN_BTC` | wBTC (`0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f`) |
 
-**Infrastructure (per product, V3 Aster stack):**
+**Infrastructure (per product, Aster stack):**
 
 | Contract | Purpose |
 |----------|---------|
@@ -54,7 +54,7 @@ Before sending a transaction, read from the vault (KashYield ABI):
 - Current **batch cycle** (`getCurrentBatchCycle()`) and **batch phase** (`batchPhase(cycle)`)
 - **Batch info** for the cycle (`getBatchInfo`)
 
-**V3 notes:**
+**Aster notes:**
 
 - There is **no `pause()`** and **no `owner()`** — do not gate on pause.
 - `botAddress`, `feeReceiver`, cycle timing, and caps are **immutable** — verify deploy config once.
