@@ -20,7 +20,7 @@ KASH uses a **batch system**. Deposits are not processed instantly. Instead:
 2. Once per day, the batch is processed (around **23:40 UTC**)
 3. After processing completes, KASH tokens become **claimable** — use the **Claim KASH** button in the app (or call `claimMint` on-chain with a Merkle proof)
 
-KASH tokens must be claimed within **30 days** of batch settlement.
+KASH tokens **must be claimed within 30 days** of batch settlement by clicking the Claim Kash-btc or Kash-eth button in the Deposit box.  After 30 days, you must open a ticket with Technical Support to claim your tokens.
 
 **Minimum deposit:** the minimum deposit size is 10 USDC worth of ETH or wBTC.
 
@@ -40,42 +40,42 @@ The app shows batch capacity for the current cycle as a status indicator: **Avai
 
 ## Batch timing and capacity
 
-Batch **cycle length** and **processing windows** are configurable on-chain to accommodate demand. The operator can adjust parameters such as `cycleDurationSeconds` and batch processing windows.
+Batch **cycle length** and **processing windows** are configurable by the operator to accommodate demand. 
 
-At launch, the typical schedule is:
+At launch, the schedule is:
 
-| Phase | Typical time (UTC) |
+| Phase | Time (UTC) |
 |-------|-------------------|
-| User window | Submissions accepted throughout the cycle (e.g. until ~23:40) |
-| Processing window | Batch runs (~23:40–23:59) |
+| User window Open | Submissions accepted throughout the cycle (e.g. until ~23:40) |
+| Processing window | Batch runs (~23:40–23:59) and submissions not accepted |
 
 If demand grows, cycles may be shortened or scheduling updated so more batches run per day. Confirm the live schedule in the app before submitting a request.
 
 ---
 
-## Step-by-step: deposit ETH
+## Step-by-step: Mint KASH-ETH
 
-1. Open the app and ensure the **ETH** tab is selected
-2. Enter the amount of ETH to deposit in the **Deposit** form
-3. Click **Deposit ETH**
-4. Confirm the transaction in the wallet
+1. Open the app and ensure the **KASH-ETH** tab is selected
+2. Enter the amount of ETH to deposit in the **Mint Kash** form
+3. Click **Approve ETH** and sign the approval to spend Eth in your wallet
+4. Click **Submit Mint Request** on the app then confirm the transaction in the wallet
 5. Wait for the daily batch to process (by 23:59 UTC)
 6. After settlement, click **Claim KASH-ETH** in the Deposit form to receive your tokens
 7. Click the "Add to wallet" link in the "Your KASH Balance" box to display KASH-ETH tokens in the wallet
-8. A mint request may be cancelled at any time prior to the batch process run time; deposited ETH will be returned to the wallet
+8. A mint request may be cancelled at any time prior to the batch processing run time; deposited ETH will be returned to the wallet
 
 ---
 
-## Step-by-step: deposit wBTC
+## Step-by-step: Mint KASH-BTC
 
-1. Open the app and select the **BTC** tab
-2. Enter the amount of wBTC to deposit
-3. On first use, **Approve** the contract to spend wBTC — confirm this transaction
-4. Click **Deposit wBTC** and confirm the deposit transaction
-5. Wait for the daily batch
+1. Open the app and select the **KASH-BTC** tab
+2. Enter the amount of wBTC to deposit in the **Mint Kash** form
+3. Click **Approve wBTC** and sign the approval to spend wBTC in your wallet
+4. Click **Submit Mint Request** on the app then confirm the transaction in the wallet
+5. Wait for the daily batch to process (by 23:59 UTC)
 6. After settlement, click **Claim KASH-BTC** in the Deposit form to receive your tokens
 7. Click the "Add to wallet" link in the "Your KASH Balance" box to display KASH-BTC tokens in the wallet
-8. A mint request may be cancelled at any time prior to the batch process run time; deposited wBTC will be returned to the wallet
+8. A mint request may be cancelled at any time prior to the batch processing run time; deposited wBTC will be returned to the wallet
 
 ---
 
@@ -93,11 +93,11 @@ There is a **0.05% fee (5 basis points)** on deposits and redemptions. This is d
 
 ## Checking a position
 
-After KASH tokens are claimed, the following are visible in the app:
+The folowing statistics are always shown on the App page: 
 
 - Current **NAV** — the USD value of each KASH token
 - Current **APY** (annual yield) of the strategy
-- User's **KASH balance** in the stats panel
+- User's **KASH balance** in the stats panel (in there is any balance)
 
 ---
 
@@ -105,9 +105,9 @@ After KASH tokens are claimed, the following are visible in the app:
 
 The minimum holding period is **one day** — a deposit in one batch may be redeemed in the next.
 
-However, depositing for just one day is likely to result in a small **net loss**. Each time the protocol puts on or takes off its yield strategy (opening and closing positions across the lending and trading protocols), it incurs transaction fees. Over a single day, those costs will typically outweigh any funding rate income earned.
+However, depositing for just one day is likely to result in a small **net loss**. Each time the protocol puts on or takes off its yield strategy (opening and closing positions across the lending and trading protocols), it incurs transaction fees. Over a single day, those costs will outweigh any funding rate income earned.
 
-KASH is designed for **medium to long-term holding**. The longer the holding period, the more yield accrues relative to the one-time cost of entering and exiting the strategy.
+KASH is designed for **medium to long-term holding**. The longer the holding period, the more yield accrues relative to the costs of entering and exiting the strategy.
 
 ---
 

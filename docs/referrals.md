@@ -9,7 +9,7 @@ KASH will offer a referral program so existing users can invite others and earn 
 ## How it works
 
 1. **Get your code** — Each wallet will have a unique referral code and shareable link in the app.
-2. **Share it** — Send your link to someone new to KASH. If they open the app from your link, your code can be applied automatically.
+2. **Share it** — Send your link to someone new to KASH. If they open the app from your link, your code will be applied automatically.
 3. **First mint only** — A new user enters a referral code (or uses your link) on their **first deposit**. That binds their wallet to you as their referrer.
 4. **Ongoing rewards** — When that wallet later deposits or redeems, you earn a portion of the [protocol fee](fees.md) on those flows.
 

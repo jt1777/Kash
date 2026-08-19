@@ -16,11 +16,11 @@ This guide covers the prerequisites for making a first deposit.
 
 ## Step 1 — Add Arbitrum One to the wallet
 
-KASH is deployed on **Arbitrum One** — not on Ethereum mainnet.  Arbitrum One is a Layer 2 (L2) network built on top of Ethereum. Instead of running every transaction on Ethereum mainnet (often called “L1”), Arbitrum processes them on a separate chain and periodically posts the results back to Ethereum for security. That design keeps fees much lower and confirmations faster, while still inheriting Ethereum’s security model.
+KASH is deployed on **Arbitrum One** (or just Arbitrum) — not on Ethereum mainnet.  Arbitrum One is a Layer 2 (L2) network built on top of Ethereum. Instead of running every transaction on Ethereum mainnet (often called “L1”), Arbitrum processes them on a separate chain and periodically posts the results back to Ethereum for security. That design keeps fees much lower and confirmations faster, while still inheriting Ethereum’s security model.
 
-Wallets default to Ethereum L1, so **Arbitrum One must be added as a network** before connecting to the app or sending a deposit. On Arbitrum One, **ETH** is still used to pay gas (the same asset as on mainnet, but on a different chain).
+Wallets default to Ethereum L1, so **Arbitrum One must be selected as a network** before connecting to the app or sending a deposit. On Arbitrum One, **ETH** is still used to pay gas (the same asset as on mainnet, but on a different chain).
 
-If Arbitrum One is not already configured, add it manually:
+If Arbitrum is not already selected, choose it from the list of popular networks or add it manually if it is not listed as an option:
 
 | Setting | Value |
 |---------|-------|
@@ -53,18 +53,7 @@ For **KASH-BTC**, **wBTC** must be held on Arbitrum One (`0x2f2a2543B76A4166549F
 1. On the homepage, click **Launch App**
 2. Click **Connect Wallet** in the top-right corner
 3. Select the wallet and approve the connection
-4. Ensure the wallet is on **Arbitrum One** — the app will show **Wrong network** if another chain is selected
-
----
-
-## Live contract addresses (Arbitrum One)
-
-| Product | Vault | KASH token |
-|---------|-------|------------|
-| KASH-ETH | `0x083926c2dAbcF1D5bdDF86B6A99A329c5a25E4D3` | `0xa7367CD2CB979Fd56162983E929d38f40D5cFd36` |
-| KASH-BTC | `0x6F4E93376D9FBaf86bB1c2F8502cEb6b407E2043` | `0x42023147E2dEA2a803d60d26E4aDf7CD4ea00aB3` |
-
-Programmatic integrators: see [Agent Quickstart](agent-quickstart.md) for adapter/facade addresses, ABIs, and Merkle claim flows.
+4. Ensure the wallet is on **Arbitrum One** (Arbitrum) — the app will show **Wrong network** if another chain is selected
 
 ---
 
@@ -72,7 +61,7 @@ Programmatic integrators: see [Agent Quickstart](agent-quickstart.md) for adapte
 
 Once connected, two tabs are available:
 
-- **KASH-ETH** — deposit ETH, earn yield
+- **KASH-ETH** — deposit ETH or wETH, earn yield
 - **KASH-BTC** — deposit wBTC, earn yield
 
 Select the desired product.

@@ -12,7 +12,7 @@ Like deposits, redemptions go through the **daily batch**:
 2. KASH tokens are locked in the contract until the batch runs
 3. At the next batch (around **23:59 UTC**), KASH is burned and the redeem amount becomes claimable
 
-After settlement, use the app's **Claim** button to receive ETH or wBTC.
+After settlement, use the app's **Claim** button to receive ETH or wBTC.  **Redeemed tokens must be claimed within 30 days**
 
 ---
 
@@ -32,14 +32,14 @@ Mint and redeem limits are tracked **separately** — a full mint batch does not
 
 ## Batch timing and capacity
 
-Batch **cycle length** and **processing windows** are configurable on-chain to accommodate demand. The operator can adjust parameters such as `cycleDurationSeconds` and batch processing windows.
+Batch **cycle length** and **processing windows** are configurable by the operator to accommodate demand.
 
-At launch, the typical schedule is:
+At launch, the schedule is:
 
-| Phase | Typical time (UTC) |
+| Phase | Time (UTC) |
 |-------|-------------------|
-| User window | Submissions accepted throughout the cycle (e.g. until ~23:40) |
-| Processing window | Batch runs (~23:40–23:59) |
+| User window Open | Submissions accepted throughout the cycle (e.g. until ~23:40) |
+| Processing window | Batch runs (~23:40–23:59), submissions not accepted |
 
 If demand grows, cycles may be shortened or scheduling updated so more batches run per day. Confirm the live schedule in the app before submitting a request.
 
@@ -47,7 +47,9 @@ If demand grows, cycles may be shortened or scheduling updated so more batches r
 
 ## Yield on exit
 
-On redemption, assets are returned based on the **current NAV** at the time of the batch. Because NAV increases as the protocol earns yield, the redemption value typically exceeds the original deposit value.
+On redemption, assets are returned based on the **current NAV** at the time of the batch. Because NAV increases as the protocol earns yield, the redemption value should typically exceed the original deposit value.
+
+Redeeming involves costs — including the **protocol fee** and the shared costs of unwinding the yield strategy during the batch — so the amount you receive is **NAV minus costs**, not the full gross NAV value.
 
 **Example:**
 - A deposit of 1 ETH when KASH-ETH NAV = $1.00 → 1,800 KASH received
@@ -60,11 +62,11 @@ Yield is the difference in NAV between entry and exit.
 ## Step-by-step: redeem
 
 1. Open the app and select the correct tab (ETH or BTC)
-2. In the **Redeem** form, enter the amount of KASH tokens to redeem
-3. If prompted, **Approve** the contract to spend KASH tokens
-4. Click **Redeem** and confirm the transaction
+2. In the **Redeem Assets** form, enter the amount of KASH tokens to redeem
+3. If prompted, click **Approve KASH** and sign in your wallet to approve to spend the KASH tokens
+4. Click **Submit Redeem Request** and confirm the transaction
 5. Wait for the daily batch (by 23:59 UTC)
-6. Click **Claim** after settlement to receive ETH or wBTC
+6. Click **Claim** after settlement to receive your ETH or wBTC
 
 ---
 

@@ -4,13 +4,13 @@ KASH is being rolled out in three phases. Each phase adds new **Plays** to the o
 
 ---
 
-## Phase 1 — Positive funding (pre-audit beta, live on Arbitrum)
+## Phase 1 — Positive funding (pre-audit beta, **live** on Arbitrum)
 
 **Status:** Deployed on Arbitrum One (KASH-ETH and KASH-BTC). **Pre-audit — test amounts only.**
 
-Phase 1 runs on what we call the **Hyperliquid contracts** — the current deployment that executes the strategy through Hyperliquid's perpetual futures exchange. These contracts are live, processing real batches, but have not yet undergone a full third-party audit. Users should treat this as a beta and limit deposits accordingly.
+Phase 1 runs on **Hyperliquid contracts** — the current deployment that executes the strategy through Hyperliquid's perpetual futures exchange. These contracts are live, processing real batches, but have not yet undergone a full third-party audit. Users should treat this as a beta and limit deposits accordingly.
 
-A second deployment — the **Aster contracts** — is in development. Aster is an Arbitrum-native perpetuals exchange, which means the entire execution loop (collateral pool → borrow → short → settle) stays on Arbitrum without any cross-chain custody step. This removes a significant class of security risk present in the Hyperliquid deployment and includes additional security improvements over the current architecture. The Aster contracts will become the recommended deployment once testing is complete.
+A second deployment — the **Aster contracts** — is in development. Aster is an Arbitrum-native perpetuals exchange, which means the entire execution loop (collateral pool → borrow → short → settle) stays on Arbitrum without any cross-chain custody step. This **removes** a significant class of security risk present in the Hyperliquid deployment and includes additional security improvements over the current architecture.  The Aster contracts will also accept **USDC** and **USDT** as acceptable deposit assets.
 
 Phase 1 implements a single Play designed for **positive funding rates** — the common case in bull markets where longs pay shorts on perpetuals exchanges.
 
@@ -21,7 +21,7 @@ Phase 1 implements a single Play designed for **positive funding rates** — the
 3. Yield accrues primarily from **positive funding** on the short, plus lending interest on collateral
 4. NAV is updated once per day; KASH tokens are minted or redeemed in Phase 2 of the batch
 
-**Automation:** Batch processing is **fully automated** — a deterministic bot runs the Playbook end-to-end, with no manual ops required for routine mints and redemptions. An AI agent is deployed to monitor and assess performance and funding rate dynamics.
+**Automation:** Batch processing is **fully automated** — a deterministic bot runs the Playbook end-to-end, with no manual ops required for routine mints and redemptions. An AI agent is deployed to monitor, assess performance and execute recovery if any issues arise during the batch process.
 
 **Scope:** Two vault products (ETH and BTC), fixed strategy parameters, and a single Play. The on-chain **KashYield** contracts define deposits, batch phases, NAV, and protocol integrations.
 
@@ -35,9 +35,9 @@ Phase 2 keeps the **same core smart contracts** as Phase 1. Deposits, redemption
 
 **New Play — negative funding:** A second Play optimized for **negative funding rates**, when shorts pay longs. Instead of relying on a short-only delta-neutral posture, this Play adjusts how collateral, borrow, and perp exposure are managed so the protocol can still earn when funding flips.
 
-**AI agent management:** An **AI Agent** replaces the fixed, rule-based bot as the batch orchestrator. Each day the agent is given discretion to:
+**AI agent management:** An **AI Agent** replaces the fixed, rule-based bot as the batch orchestrator. Each day the agent will be given discretion to:
 
-- Manage contract/user assets by running either the **positive funding Play** (Phase 1 strategy) or thhe **negative funding Play** (new strategy).
+- Manage contract/user assets by running either the **positive funding Play** (Phase 1 strategy) or the **negative funding Play** (new strategy).
 - Choose timing and sizing within guardrails defined by the Playbook and contract constraints
 
 The agent reads market signals (funding rates, portfolio state, batch net mint/redeem) and selects the appropriate Play — human operators no longer pick the strategy by hand for each batch.  By this phase, the agent ideally will have built up enough skill and experience to manage contract assets.
@@ -48,7 +48,7 @@ The agent reads market signals (funding rates, portfolio state, batch net mint/r
 
 **Status:** Future.
 
-Phase 3 introduces a **new vault contract** alongside the existing KashYield products. This vault accepts **stablecoin deposits only** (e.g. USDC), lowering friction for users who do not want to deposit ETH or wBTC directly.
+Phase 3 introduces a **new vault contract** alongside the existing KashYield products. This vault accepts **stablecoin deposits only** (e.g. USDC & USDT), lowering friction for users who do not want to deposit ETH or wBTC directly.
 
 **Broader investible universe:** Capital is no longer limited to ETH/wBTC. The Playbook can allocate across a wider set of assets and venues subject to risk limits configured for the new product.
 
