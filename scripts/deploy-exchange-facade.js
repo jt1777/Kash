@@ -18,9 +18,13 @@ const { ethers } = hre;
 
 async function main() {
   const network = hre.network.name;
-  const primaryAsset = process.env.PRIMARY_ASSET || ethers.ZeroAddress;
-  const isEthAsset = (process.env.IS_ETH_ASSET || "").toLowerCase() === "true";
-  const isEth = primaryAsset === ethers.ZeroAddress || isEthAsset;
+  // Product is determined only by PRIMARY_ASSET (constructor arg). Do not let
+  // IS_ETH_ASSET from a prior ETH deploy override a non-zero WBTC address.
+  const primaryAsset =
+    process.env.PRIMARY_ASSET && ethers.isAddress(process.env.PRIMARY_ASSET)
+      ? process.env.PRIMARY_ASSET
+      : ethers.ZeroAddress;
+  const isEth = primaryAsset === ethers.ZeroAddress;
   const kashYield =
     process.env.KASH_YIELD_ADDRESS ||
     (isEth ? process.env.KASH_YIELD_ETH_ADDRESS : process.env.KASH_YIELD_BTC_ADDRESS);

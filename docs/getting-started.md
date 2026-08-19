@@ -61,8 +61,8 @@ For **KASH-BTC**, **wBTC** must be held on Arbitrum One (`0x2f2a2543B76A4166549F
 
 | Product | Vault | KASH token |
 |---------|-------|------------|
-| KASH-ETH | `0xC5C8B1Dc1fFF6728869C8BCCe6105Caa6Df9E68d` | `0xf29483f62502D714c14CB3141944C6D8CCDF9962` |
-| KASH-BTC | `0x86B0095f866c05F53363AE31F994E9540033fC2E` | `0x4f628402227a2Fe292641db7aDa1Fae744568445` |
+| KASH-ETH | `0x083926c2dAbcF1D5bdDF86B6A99A329c5a25E4D3` | `0xa7367CD2CB979Fd56162983E929d38f40D5cFd36` |
+| KASH-BTC | `0x6F4E93376D9FBaf86bB1c2F8502cEb6b407E2043` | `0x42023147E2dEA2a803d60d26E4aDf7CD4ea00aB3` |
 
 Programmatic integrators: see [Agent Quickstart](agent-quickstart.md) for adapter/facade addresses, ABIs, and Merkle claim flows.
 
