@@ -1,0 +1,38 @@
+{
+  "batchCycle": "20684",
+  "root": "0xaf0bbc8cd2dde3e57479f76a7766c65b49799c6bfe026010dedaec1ccf331e4a",
+  "leaves": [
+    {
+      "user": "0x92f26be24b656B8079962c4c9F47571D57a7f2D8",
+      "kashAmount": "67375845935790597064",
+      "proof": [
+        "0x60c16d17cffb80197e5b1a4762f685661a305b3a2a2d7d64bf2210f80943396a",
+        "0x101226dd5f3b424064659084b666ad2932f97ca1f5ebfe57bff4c7ced60931b6"
+      ]
+    },
+    {
+      "user": "0x164EcCd50ACDA2f88C4fa339a393085F27704C51",
+      "kashAmount": "31935561689725975241",
+      "proof": [
+        "0x15bb783ab57037c04dda95dde80767b54c8feea0bef2474005fec5430abce828",
+        "0x101226dd5f3b424064659084b666ad2932f97ca1f5ebfe57bff4c7ced60931b6"
+      ]
+    },
+    {
+      "user": "0x1BC77DFf44c9cD2E7AeFAca78E729Dd8d3511381",
+      "kashAmount": "67599110623983193133",
+      "proof": [
+        "0x1150f832aba774f24879f7c52cf2e299e6976e28c4df555d5fabae9cc24f7c63",
+        "0x023659e550509ac6df04b04567d295be6c837e56d5720e37e45fb48e95eae388"
+      ]
+    },
+    {
+      "user": "0xE2e2BE5667F5B3C345b5966e52e1F0Be9C711e48",
+      "kashAmount": "67558183222408828261",
+      "proof": [
+        "0xc252df62ee196ca20f780149797c87645bd9f54464a2d2abdcabb0df5003c628",
+        "0x023659e550509ac6df04b04567d295be6c837e56d5720e37e45fb48e95eae388"
+      ]
+    }
+  ]
+}

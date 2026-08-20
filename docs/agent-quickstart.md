@@ -146,18 +146,18 @@ After **`BatchProcessed`** for a cycle where you had a pending mint, KASH is all
 
 **Pull-claim model:** Phase 2 batch settlement commits a `mintMerkleRoot` on-chain. KASH is **not** transferred automatically — each minter must call `claimMint` with a Merkle proof. Claims expire **30 days** after root commit (`CLAIM_EXPIRY_SECONDS`; see `batchClaimInfo(batchCycle).claimDeadline`).
 
-**Proof manifests** are published by the operator after each batch (same JSON shape as redeem proofs):
+**Proof manifests** are published by the operator after each batch (same top-level shape as redeem proofs; mint leaves use **`kashAmount`**, redeem leaves use **`amount`**):
 
 ```json
 {
   "batchCycle": "492518",
   "root": "0x…",
-  "leaves": [{ "user": "0x…", "amount": "…", "proof": ["0x…", "…"] }]
+  "leaves": [{ "user": "0x…", "kashAmount": "…", "proof": ["0x…", "…"] }]
 }
 ```
 
 - Hosted paths: `NEXT_PUBLIC_MINT_PROOF_BASE_URL/{product}-mint-batch-{cycle}.json` or `/mint-proofs/{product}-mint-batch-{cycle}.json` (`product` = `eth` or `btc`)
-- Leaf hash: `keccak256(abi.encode(batchCycle, user, kashAmount))` — `amount` in the manifest is KASH wei (18 decimals)
+- Leaf hash: `keccak256(abi.encode(batchCycle, user, kashAmount))` — `kashAmount` in the manifest is KASH wei (18 decimals)
 - If no manifest is available, the frontend can rebuild a single-user proof from chain events (see `frontend/lib/mintProofs.ts`)
 
 KASH-ETH example:
