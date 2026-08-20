@@ -4,20 +4,15 @@ import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 
 const WAD = 10n ** 18n;
 
-/** Mirror bot mintMerkle.ts — per-user fee rounding (not batchTotalMintValueUSD aggregate). */
+/** Mirror on-chain Phase 2: fee-once on batchTotalMintValueUSD, then / exactNAV. */
 export function computeTotalMintKash(
-  mintUSD: bigint[],
+  batchTotalMintUSD: bigint,
   feeBps: bigint,
   exactNAV: bigint,
 ): bigint {
-  if (exactNAV === 0n) return 0n;
-  let total = 0n;
-  for (const usd of mintUSD) {
-    if (usd === 0n) continue;
-    const afterFee = (usd * (10000n - feeBps)) / 10000n;
-    total += (afterFee * WAD) / exactNAV;
-  }
-  return total;
+  if (exactNAV === 0n || batchTotalMintUSD === 0n) return 0n;
+  const amountAfterFeeTotal = (batchTotalMintUSD * (10000n - feeBps)) / 10000n;
+  return (amountAfterFeeTotal * WAD) / exactNAV;
 }
 
 async function readSettlementNav(
@@ -199,7 +194,7 @@ export async function buildMintClaimProofFromChain(
   ]);
   if (settlementNav == null) return null;
 
-  const totalMintKash = computeTotalMintKash(batch.amountInUSD, feeBps, settlementNav);
+  const totalMintKash = computeTotalMintKash(batch.totalMintUSD, feeBps, settlementNav);
   if (totalMintKash === 0n) return null;
 
   const entries = allocMintKashAmounts(
