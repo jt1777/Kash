@@ -90,10 +90,11 @@ describe("Claim allocation binding (FIX-1)", function () {
     const totalMintKash = (amountAfterFeeTotal * nav) / (10n ** 18n);
     const userAddr = await user.getAddress();
     const req = await kashYield.getPendingMintRequest(userAddr, batchCycle);
+    const totalMintBtc = BigInt((await kashYield.batchTotalMintBtc(batchCycle)).toString());
     const entries = allocMintKashAmounts(
       [userAddr],
-      [BigInt(req.amountInUSD.toString())],
-      totalMintUSD,
+      [BigInt(req.amountIn.toString())],
+      totalMintBtc,
       totalMintKash,
     );
     const { root, proofs } = buildMintMerkleTree(batchCycle, entries);
@@ -170,5 +171,50 @@ describe("Claim allocation binding (FIX-1)", function () {
     await expect(
       kashYield.connect(user).claimMint(batchCycle, wrongAmount, evilProof),
     ).to.be.revertedWithCustomError(kashYield, "InvalidProof");
+  });
+
+  it("prices all minters at the Phase 1 oracle, not request-time", async function () {
+    const { bot, user, attacker, wbtc, kashYield } = await deployBtcFixture();
+    const oracle = await ethers.getContractAt("MockChainlinkOracle", await kashYield.btcOracle());
+    const batchCycle = await kashYield.getCurrentBatchCycle();
+    const amt = ethers.parseUnits("0.01", 8);
+    await wbtc.transfer(user.address, amt);
+    await wbtc.transfer(attacker.address, amt);
+    await wbtc.connect(user).approve(await kashYield.getAddress(), amt);
+    await wbtc.connect(attacker).approve(await kashYield.getAddress(), amt);
+
+    await oracle.setAnswer(80_000n * 10n ** 8n);
+    await kashYield.connect(user).requestMint(amt);
+    await oracle.setAnswer(120_000n * 10n ** 8n);
+    await kashYield.connect(attacker).requestMint(amt);
+
+    await kashYield.connect(bot).performUpkeep("0x");
+    const phase1Price = await kashYield.batchMintBtcPrice(batchCycle);
+    expect(phase1Price).to.equal(ethers.parseEther("120000"));
+    expect(await kashYield.batchTotalMintValueUSD(batchCycle)).to.equal(
+      (amt * 2n * phase1Price) / (10n ** 8n),
+    );
+
+    await kashYield.connect(bot).markBatchOpsDone(batchCycle, 0n);
+    const nav = ethers.parseEther("1");
+    const totalMintUSD = BigInt((await kashYield.batchTotalMintValueUSD(batchCycle)).toString());
+    const feeBps = BigInt((await kashYield.feeBps()).toString());
+    const totalMintKash = ((totalMintUSD * (10000n - feeBps)) / 10000n * nav) / (10n ** 18n);
+    const totalMintBtc = BigInt((await kashYield.batchTotalMintBtc(batchCycle)).toString());
+    const userAddr = await user.getAddress();
+    const attackerAddr = await attacker.getAddress();
+    const entries = allocMintKashAmounts(
+      [userAddr, attackerAddr],
+      [amt, amt],
+      totalMintBtc,
+      totalMintKash,
+    );
+    const { root } = buildMintMerkleTree(batchCycle, entries);
+    await kashYield.connect(bot).processBatchPhase2ForCycle(batchCycle, ethers.ZeroHash, root);
+
+    const allocUser = await kashYield.batchMintKashAllocation(batchCycle, userAddr);
+    const allocAttacker = await kashYield.batchMintKashAllocation(batchCycle, attackerAddr);
+    expect(allocUser).to.equal(allocAttacker);
+    expect(allocUser + allocAttacker).to.equal(totalMintKash);
   });
 });

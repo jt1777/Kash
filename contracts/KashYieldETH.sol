@@ -207,6 +207,7 @@ contract KashYieldETH is ReentrancyGuard {
     mapping(uint256 => uint256) public batchTotalRedeemValueUSD;
     mapping(uint256 => uint256) public batchTotalRedeemKash;
     mapping(uint256 => uint256) public batchTotalMintEth;
+    mapping(uint256 => uint256) public batchMintEthPrice;
     mapping(uint256 => address[]) public batchMintUsers;
     mapping(uint256 => address[]) public batchRedeemUsers;
     mapping(uint256 => mapping(address => bool)) public isInBatchMint;
@@ -390,10 +391,6 @@ contract KashYieldETH is ReentrancyGuard {
         req.user = msg.sender;
         req.amountIn += actualAmount;
         req.batchCycle = batchCycle;
-        uint256 ethPrice = getEthPrice();
-        uint256 usdIncrement = (actualAmount * ethPrice) / (10 ** ETH_DECIMALS);
-        req.amountInUSD += usdIncrement;
-        batchTotalMintValueUSD[batchCycle] += usdIncrement;
         batchTotalMintEth[batchCycle] += actualAmount;
         if (!wasActive) {
             if (activeMintUsers[batchCycle] >= maxMintUsers) revert MintCapReached();
@@ -441,9 +438,7 @@ contract KashYieldETH is ReentrancyGuard {
         MintRequest storage req = userMintRequests[msg.sender][batchCycle];
         if (req.amountIn == 0) revert NoRequest();
         uint256 amount = req.amountIn;
-        uint256 usdAmount = req.amountInUSD;
         batchTotalMintEth[batchCycle] -= amount;
-        batchTotalMintValueUSD[batchCycle] -= usdAmount;
         unchecked { activeMintUsers[batchCycle]--; }
         delete userMintRequests[msg.sender][batchCycle];
         (bool ok, ) = payable(msg.sender).call{value: amount}("");
@@ -492,8 +487,15 @@ contract KashYieldETH is ReentrancyGuard {
         if (batchPhase[batchCycle] != 0) revert PhaseAlreadyStarted();
 
         uint256 indicativeNAV = currentNAV;
-        uint256 totalMintUSD = batchTotalMintValueUSD[batchCycle];
-        uint256 totalRedeemUSD = batchTotalRedeemValueUSD[batchCycle];
+        // Single ETH price for the whole batch — every minter is valued at the
+        // same price regardless of when in the user window they deposited.
+        uint256 ethPrice = getEthPrice();
+        batchMintEthPrice[batchCycle] = ethPrice;
+        uint256 totalMintUSD = (batchTotalMintEth[batchCycle] * ethPrice) / (10 ** ETH_DECIMALS);
+        batchTotalMintValueUSD[batchCycle] = totalMintUSD;
+        // Single NAV for the whole batch — redeems valued at indicativeNAV.
+        uint256 totalRedeemUSD = (batchTotalRedeemKash[batchCycle] * indicativeNAV) / 1e18;
+        batchTotalRedeemValueUSD[batchCycle] = totalRedeemUSD;
         batchIndicativeNAV[batchCycle] = indicativeNAV;
 
         int256 netPositionUSD = int256(totalMintUSD) - int256(totalRedeemUSD);
@@ -558,18 +560,18 @@ contract KashYieldETH is ReentrancyGuard {
         }
     }
 
-    function _storeMintKashAllocations(uint256 batchCycle, uint256 totalMintKash, uint256 totalMintUSD) private {
-        if (totalMintKash == 0 || totalMintUSD == 0) return;
+    function _storeMintKashAllocations(uint256 batchCycle, uint256 totalMintKash, uint256 totalMintEth) private {
+        if (totalMintKash == 0 || totalMintEth == 0) return;
         address[] memory minters = batchMintUsers[batchCycle];
         uint256 kashLeft = totalMintKash;
-        uint256 usdLeft = totalMintUSD;
+        uint256 ethLeft = totalMintEth;
         for (uint256 i = 0; i < minters.length; i++) {
             MintRequest memory req = userMintRequests[minters[i]][batchCycle];
-            if (req.amountInUSD == 0) continue;
-            uint256 kash = usdLeft == req.amountInUSD
+            if (req.amountIn == 0) continue;
+            uint256 kash = ethLeft == req.amountIn
                 ? kashLeft
-                : (totalMintKash * req.amountInUSD) / totalMintUSD;
-            usdLeft -= req.amountInUSD;
+                : (totalMintKash * req.amountIn) / totalMintEth;
+            ethLeft -= req.amountIn;
             kashLeft -= kash;
             batchMintKashAllocation[batchCycle][minters[i]] = kash;
         }
@@ -591,7 +593,7 @@ contract KashYieldETH is ReentrancyGuard {
         uint256 totalRedeemKash = batchTotalRedeemKash[batchCycle];
         (, uint256 totalRedeemEthNeeded, uint256 totalRedeemFeeEth) =
             _allocRedeemEth(batchCycle, redeemers, totalRedeemKash, batchTotalRedeemValueUSD[batchCycle]);
-        _storeMintKashAllocations(batchCycle, totalMintKash, totalMintUSD);
+        _storeMintKashAllocations(batchCycle, totalMintKash, batchTotalMintEth[batchCycle]);
         uint256 totalProtocolFeeEth = totalMintFeeEth + totalRedeemFeeEth;
         uint256 buffer = (totalRedeemEthNeeded * redeemPayoutBufferBps) / 10000;
         if (address(this).balance + buffer < totalRedeemEthNeeded + lockedClaimEth) revert InsufficientEthForRedeems();
@@ -937,9 +939,7 @@ contract KashYieldETH is ReentrancyGuard {
         MintRequest storage req = userMintRequests[msg.sender][batchCycle];
         if (req.user != msg.sender || req.amountIn == 0) revert InvalidRequest();
         uint256 amount = req.amountIn;
-        uint256 usdAmount = req.amountInUSD;
         batchTotalMintEth[batchCycle] -= amount;
-        batchTotalMintValueUSD[batchCycle] -= usdAmount;
         unchecked { activeMintUsers[batchCycle]--; }
         delete userMintRequests[msg.sender][batchCycle];
         (bool ok, ) = payable(msg.sender).call{value: amount}("");

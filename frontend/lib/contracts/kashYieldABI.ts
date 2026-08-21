@@ -1212,6 +1212,25 @@ export const kashYieldABI = [
         "type": "uint256"
       }
     ],
+    "name": "batchMintEthPrice",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
     "name": "batchTotalMintValueUSD",
     "outputs": [
       {
@@ -2892,6 +2911,25 @@ export const kashYieldABI = [
       }
     ],
     "name": "batchTotalMintBtc",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "name": "batchMintBtcPrice",
     "outputs": [
       {
         "internalType": "uint256",

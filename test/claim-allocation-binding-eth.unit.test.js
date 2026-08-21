@@ -88,10 +88,11 @@ describe("Claim allocation binding — ETH (FIX-1)", function () {
     const totalMintKash = (amountAfterFeeTotal * nav) / (10n ** 18n);
     const userAddr = await user.getAddress();
     const req = await kashYield.getPendingMintRequest(userAddr, batchCycle);
+    const totalMintEth = BigInt((await kashYield.batchTotalMintEth(batchCycle)).toString());
     const entries = allocMintKashAmounts(
       [userAddr],
-      [BigInt(req.amountInUSD.toString())],
-      totalMintUSD,
+      [BigInt(req.amountIn.toString())],
+      totalMintEth,
       totalMintKash,
     );
     const { root, proofs } = buildMintMerkleTree(batchCycle, entries);

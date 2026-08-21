@@ -59,17 +59,17 @@ function buildMintMerkleTree(batchCycle, entries) {
   return { root: layers[layers.length - 1][0], proofs: proofMap };
 }
 
-/** Pro-rata KASH mint allocation with last-minter dust rule (mirrors redeem helper). */
-function allocMintKashAmounts(minters, amountInUSD, totalMintUSD, totalMintKash) {
+/** Pro-rata KASH mint allocation by asset deposit share; last minter absorbs dust. */
+function allocMintKashAmounts(minters, amountInAssets, totalMintAsset, totalMintKash) {
   const amounts = new Array(minters.length).fill(0n);
-  let usdLeft = totalMintUSD;
+  let assetLeft = totalMintAsset;
   let kashLeft = totalMintKash;
 
   for (let i = 0; i < minters.length; i++) {
-    const usd = amountInUSD[i];
-    if (usd === 0n) continue;
-    const share = usdLeft === usd ? kashLeft : (totalMintKash * usd) / totalMintUSD;
-    usdLeft -= usd;
+    const asset = amountInAssets[i];
+    if (asset === 0n) continue;
+    const share = assetLeft === asset ? kashLeft : (totalMintKash * asset) / totalMintAsset;
+    assetLeft -= asset;
     kashLeft -= share;
     amounts[i] = share;
   }

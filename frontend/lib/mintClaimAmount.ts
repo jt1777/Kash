@@ -102,24 +102,46 @@ export function buildMintMerkleTree(
 
 export function allocMintKashAmounts(
   minters: string[],
-  amountInUSD: bigint[],
-  totalMintUSD: bigint,
+  amountInAssets: bigint[],
+  totalMintAsset: bigint,
   totalMintKash: bigint,
 ): MintLeaf[] {
   const amounts: bigint[] = new Array(minters.length).fill(0n);
-  let usdLeft = totalMintUSD;
+  let assetLeft = totalMintAsset;
   let kashLeft = totalMintKash;
 
   for (let i = 0; i < minters.length; i++) {
-    const usd = amountInUSD[i];
-    if (usd === 0n) continue;
-    const share = usdLeft === usd ? kashLeft : (totalMintKash * usd) / totalMintUSD;
-    usdLeft -= usd;
+    const asset = amountInAssets[i];
+    if (asset === 0n) continue;
+    const share = assetLeft === asset ? kashLeft : (totalMintKash * asset) / totalMintAsset;
+    assetLeft -= asset;
     kashLeft -= share;
     amounts[i] = share;
   }
 
   return minters.map((user, i) => ({ user, amount: amounts[i] }));
+}
+
+async function readBatchTotalMintAsset(
+  client: PublicClient,
+  kashYield: `0x${string}`,
+  batchCycle: bigint,
+): Promise<bigint> {
+  try {
+    return await client.readContract({
+      address: kashYield,
+      abi: kashYieldABI,
+      functionName: 'batchTotalMintBtc',
+      args: [batchCycle],
+    });
+  } catch {
+    return await client.readContract({
+      address: kashYield,
+      abi: kashYieldABI,
+      functionName: 'batchTotalMintEth',
+      args: [batchCycle],
+    });
+  }
 }
 
 async function loadBatchMintData(
@@ -151,8 +173,9 @@ async function loadBatchMintData(
   if (!processed || totalMintClaimable === 0n) return null;
 
   const minters: `0x${string}`[] = [];
-  const amountInUSD: bigint[] = [];
+  const amountInAssets: bigint[] = [];
   const count = Number(mintUsersCount);
+  const totalMintAsset = await readBatchTotalMintAsset(client, kashYield, batchCycle);
 
   for (let i = 0; i < count; i++) {
     const minter = await client.readContract({
@@ -168,10 +191,10 @@ async function loadBatchMintData(
       args: [minter, batchCycle],
     });
     minters.push(minter);
-    amountInUSD.push(req.amountInUSD);
+    amountInAssets.push(req.amountIn);
   }
 
-  return { minters, amountInUSD, totalMintUSD, mintRoot };
+  return { minters, amountInAssets, totalMintUSD, totalMintAsset, mintRoot };
 }
 
 export async function buildMintClaimProofFromChain(
@@ -198,8 +221,8 @@ export async function buildMintClaimProofFromChain(
 
   const entries = allocMintKashAmounts(
     batch.minters,
-    batch.amountInUSD,
-    batch.totalMintUSD,
+    batch.amountInAssets,
+    batch.totalMintAsset,
     totalMintKash,
   );
   const { root, proofs } = buildMintMerkleTree(batchCycle, entries);

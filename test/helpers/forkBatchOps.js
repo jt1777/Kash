@@ -152,6 +152,14 @@ async function computeBatchGrossRedeemAsset(kashYield, batchCycle, nav) {
   return total;
 }
 
+async function readBatchTotalMintAsset(kashYield, batchCycle) {
+  try {
+    return BigInt((await kashYield.batchTotalMintBtc(batchCycle)).toString());
+  } catch {
+    return BigInt((await kashYield.batchTotalMintEth(batchCycle)).toString());
+  }
+}
+
 async function buildMintMerkleRoot(kashYield, batchCycle, nav) {
   const { allocMintKashAmounts, buildMintMerkleTree } = require("./mintMerkle");
   const totalMintUSD = BigInt((await kashYield.batchTotalMintValueUSD(batchCycle)).toString());
@@ -161,16 +169,17 @@ async function buildMintMerkleRoot(kashYield, batchCycle, nav) {
   const totalMintKash = (amountAfterFeeTotal * nav) / (10n ** 18n);
   const info = await kashYield.getBatchInfo(batchCycle);
   const mintCount = Number(info[3]);
+  const totalMintAsset = await readBatchTotalMintAsset(kashYield, batchCycle);
   const rows = await Promise.all(
     Array.from({ length: mintCount }, async (_, i) => {
       const addr = await kashYield.batchMintUsers(batchCycle, i);
       const req = await kashYield.getPendingMintRequest(addr, batchCycle);
-      return { addr, amountInUSD: BigInt(req.amountInUSD.toString()) };
+      return { addr, amountIn: BigInt(req.amountIn.toString()) };
     }),
   );
   const minters = rows.map((r) => r.addr);
-  const amountInUSD = rows.map((r) => r.amountInUSD);
-  const entries = allocMintKashAmounts(minters, amountInUSD, totalMintUSD, totalMintKash);
+  const amountInAssets = rows.map((r) => r.amountIn);
+  const entries = allocMintKashAmounts(minters, amountInAssets, totalMintAsset, totalMintKash);
   return buildMintMerkleTree(batchCycle, entries).root;
 }
 
@@ -221,15 +230,16 @@ async function claimMintForUser(kashYield, user, batchCycle, nav) {
   const totalMintKash = (amountAfterFeeTotal * nav) / (10n ** 18n);
   const info = await kashYield.getBatchInfo(batchCycle);
   const mintCount = Number(info[3]);
+  const totalMintAsset = await readBatchTotalMintAsset(kashYield, batchCycle);
   const minters = [];
-  const amountInUSD = [];
+  const amountInAssets = [];
   for (let i = 0; i < mintCount; i++) {
     const addr = await kashYield.batchMintUsers(batchCycle, i);
     const req = await kashYield.getPendingMintRequest(addr, batchCycle);
     minters.push(addr);
-    amountInUSD.push(BigInt(req.amountInUSD.toString()));
+    amountInAssets.push(BigInt(req.amountIn.toString()));
   }
-  const entries = allocMintKashAmounts(minters, amountInUSD, totalMintUSD, totalMintKash);
+  const entries = allocMintKashAmounts(minters, amountInAssets, totalMintAsset, totalMintKash);
   const { proofs } = buildMintMerkleTree(batchCycle, entries);
   const userAddr = await user.getAddress();
   const leaf = entries.find((e) => e.user.toLowerCase() === userAddr.toLowerCase());
