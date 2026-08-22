@@ -153,7 +153,7 @@ There is no owner key — no pause abuse, no rotating integrations, no arbitrary
 1. Read **`getNAV()`** and **`totalSupply()`** on the KASH token — total vault NAV ≈ NAV × supply ÷ 10¹⁸.
 2. On Arbiscan, open the vault **Read Contract** tab and check **`botAddress()`** — that operator runs batch txs.
 3. Read **`exchangeFacade()`** → on the facade, **`perpExchangeAddress()`** should be your **`AsterAdapter`**; adapter **`clearingHouse()`** / **`vault()`** point at Aster protocol contracts on Arbitrum.
-4. For a full recompute, use the component checklist in the landing **Verify** section (Aave collateral, USDC debt, vault balances, Aster position value, Chainlink prices) — same inputs the bot uses off-chain.
+4. For a full recompute, follow [Verify NAV](verify-NAV.md) (Aave collateral, USDC debt, vault balances, Aster adapter reads, Chainlink prices).
 
 **Planned improvements:** Chainlink Automation for decentralised upkeep triggering; multi-signature bot control — see [Centralisation risk](#centralisation-risk).
 
