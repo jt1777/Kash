@@ -13,6 +13,7 @@
 ## How It Works
 
 * [How Yield Works](how-yield-works.md)
+* [Verify NAV](verify-NAV.md)
 * [Fees](fees.md)
 * [Risks & Safeguards](risks.md)
 
