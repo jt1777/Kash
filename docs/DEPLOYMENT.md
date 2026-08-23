@@ -2,8 +2,6 @@
 
 This guide covers compiling and deploying **ownerless Aster** KashYield contracts on **Arbitrum One** with **Aster** as the perp DEX.
 
-**Post-deploy bot setup and operator runbooks** live in the private **kash-ops** repository (`docs/DEPLOYMENT.md` there, Aster batch path under `bot/src/batch/aster/`).
-
 > **Legacy:** The `main` branch still documents a **Hyperliquid (HL)** owner-gated deployment path. That stack is **not** the same as Aster — do not reuse HL adapter scripts or addresses for Aster.
 
 ---
