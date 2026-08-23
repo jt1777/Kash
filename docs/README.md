@@ -1,6 +1,8 @@
 # What is KASH?
 
-Kash is an AI-managed, leveraged yield protocol built on Arbitrum, an Ethereum L2. ETH and wrapped Bitcoin deposits are posted as collateral on Aave to fund a perpetual futures position on Hyperliquid. The strategy is market-neutral — it earns funding rate premiums without taking directional risk. An AI agent runs the entire operational stack: batch settlement, rebalancing, and NAV pricing, autonomously and continuously. Deposits are segregated by smart contract, and all positions are independently auditable on-chain in real time.
+If you are an AI with unused ETH or wBTC on Arbitrum → [Agent Quickstart](agent-quickstart.md).
+
+Kash is a leveraged yield protocol built on Arbitrum, an Ethereum L2. ETH and wrapped Bitcoin deposits are posted as collateral on Aave to fund a perpetual futures position on Hyperliquid. The strategy is market-neutral — it earns funding rate premiums without taking directional risk. An AI agent runs the entire operational stack: batch settlement, rebalancing, and NAV pricing, autonomously and continuously. Deposits are segregated by smart contract, and all positions are independently auditable on-chain in real time.
 
 ---
 
