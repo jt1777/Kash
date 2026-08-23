@@ -2,8 +2,6 @@
 
 This guide covers compiling and deploying the KashYield smart contracts on **Arbitrum One**.
 
-For post-deploy wiring and operational setup, see the private **kash-ops** repository.
-
 ## Prerequisites
 
 - Node.js (Hardhat-compatible version)
