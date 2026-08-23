@@ -15,15 +15,15 @@ KASH is not a guaranteed-yield product. Before allocating capital, verify the co
 
 | Product | KashYield vault | KASH token | Deposit asset |
 |---------|-----------------|------------|---------------|
-| KASH-ETH | `0x083926c2dAbcF1D5bdDF86B6A99A329c5a25E4D3` | `0xa7367CD2CB979Fd56162983E929d38f40D5cFd36` | Native ETH or WETH |
-| KASH-BTC | `0x6F4E93376D9FBaf86bB1c2F8502cEb6b407E2043` | `0x42023147E2dEA2a803d60d26E4aDf7CD4ea00aB3` | wBTC (`0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f`) |
+| KASH-ETH | `0xd9c2c8DdCA745EBa7a8c575d0ed0171b8D0565ad` | `0x328d6905bdd90ab1302D70c61ddaDdE77fd863A6` | Native ETH or WETH |
+| KASH-BTC | `0xAD3298903584DbD539C2085e099136445AeeCBE9` | `0xf359890E857aB63EcE696a73f647Fcb65A7d82E0` | wBTC (`0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f`) |
 
 **Infrastructure (shared or per product):**
 
 | Contract | KASH-ETH | KASH-BTC |
 |----------|----------|----------|
-| ExchangeFacade | `0x22567D26eaF28b87008611a113CA4F76FF030B06` | `0x8297F803b0D52cd37F1D23D7279bDB2841E65bD9` |
-| HyperliquidAdapter | `0xAEE452E36320eBc1E28526575fbBA8a676A7B444` | `0x4c1aE95dcF72b824d7D9fd168f148c53ab2A7003` |
+| ExchangeFacade | `0x8cF9588aE4b9fF962349C456ddBD04498e41272C` | `0x1a8B86e4C2c664864A104EFF1A61ef489f14a01e` |
+| HyperliquidAdapter | `0xb60A539b3377a4cBFb434C7c3a5d3262be874174` | `0xc2d8Fb0f6E20Ba5E10af671d20F37c9e9A86b011` |
 | UniswapV3Adapter (spot DEX, shared) | `0xce97BFB848981A89fdCB1b58d9ef27DD4214d1A8` | same |
 
 Source of truth in the app:

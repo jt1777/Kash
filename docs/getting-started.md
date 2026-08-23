@@ -68,6 +68,17 @@ Select the desired product.
 
 ---
 
+## Live contract addresses (Arbitrum One)
+
+| Product | Vault | KASH token |
+|---------|-------|------------|
+| KASH-ETH | `0xd9c2c8DdCA745EBa7a8c575d0ed0171b8D0565ad` | `0x328d6905bdd90ab1302D70c61ddaDdE77fd863A6` |
+| KASH-BTC | `0xAD3298903584DbD539C2085e099136445AeeCBE9` | `0xf359890E857aB63EcE696a73f647Fcb65A7d82E0` |
+
+Programmatic integrators: see [Agent Quickstart](agent-quickstart.md) for adapter/facade addresses, ABIs, and Merkle claim flows.
+
+---
+
 ## Ready to deposit
 
 Deposits can proceed via [Depositing](depositing.md).
