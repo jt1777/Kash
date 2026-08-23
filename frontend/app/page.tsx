@@ -26,6 +26,13 @@ const GITBOOK_SPACE =
 const GITBOOK_AGENT_QUICKSTART = `${GITBOOK_SPACE}/agent-integration/agent-quickstart`;
 const GITBOOK_HOW_YIELD_WORKS = `${GITBOOK_SPACE}/how-it-works/how-yield-works`;
 const GITBOOK_RISKS = `${GITBOOK_SPACE}/how-it-works/risks`;
+const GITBOOK_VERIFY_NAV = `${GITBOOK_SPACE}/how-it-works/verify-nav`;
+
+/** Hyperliquid master accounts (bootstrap directDepositMode). Confirm via HyperliquidAdapter.hlAccount() on Arbiscan. */
+const HL_ACCOUNTS = {
+  kashEth: '0x54BF441Eb2BF0d6EDee63040B1eA2Acd78Eb5E35' as `0x${string}`,
+  kashBtc: '0x8ab8A21e70a869B0472b20B1fB903E685B0F7B9F' as `0x${string}`,
+};
 
 function shortenAddress(address: string): string {
   return `${address.slice(0, 6)}…${address.slice(-4)}`;
@@ -61,7 +68,8 @@ export default function Home() {
       kashBtc: 'wBTC on Arbitrum One only (8 decimals) — not USDC or other assets',
     },
     minimums: {
-      mintUsd: '$10 minimum deposit notional (Chainlink oracle USD at request time)',
+      mintUsd:
+        '~$10 notional enforced by frontend UI and batch ops skip threshold — on-chain requestMint has no $10 floor',
       redeemUsd: 'No minimum redeem size',
       minHoldingPeriod: 'One day — deposit in batch N, redeem earliest in batch N+1',
     },
@@ -69,6 +77,8 @@ export default function Home() {
       kashEth: {
         kashYield: CONTRACTS.kashYieldEth,
         kashToken: CONTRACTS.kashTokenEth,
+        hyperliquidAdapter: '0xb60A539b3377a4cBFb434C7c3a5d3262be874174',
+        hlAccount: HL_ACCOUNTS.kashEth,
         mintNativeEth:
           'requestMint(0) with tx.value = depositWei (or WETH: approve + requestMint(wethWei))',
         redeem:
@@ -77,6 +87,8 @@ export default function Home() {
       kashBtc: {
         kashYield: CONTRACTS.kashYieldBtc,
         kashToken: CONTRACTS.kashTokenBtc,
+        hyperliquidAdapter: '0xc2d8Fb0f6E20Ba5E10af671d20F37c9e9A86b011',
+        hlAccount: HL_ACCOUNTS.kashBtc,
         mint:
           'approve(kashYieldBtc, wbtcWei) on wBTC, then requestMint(wbtcWei)',
         redeem:
@@ -84,7 +96,10 @@ export default function Home() {
       },
     },
     scheduleHint:
-      'Mint/redeem requests accepted until batch cutoff (~23:40 UTC); after settlement, call claimMint or claimRedeem with hosted Merkle proofs.',
+      'Mint/redeem requests accepted until batch cutoff (~23:40 UTC). isUserWindow() and isProcessingWindow() are not mutually exclusive — read both. After settlement, call claimMint or claimRedeem with hosted Merkle proofs.',
+    abiNote:
+      'kashYieldABI.ts merges ETH+BTC ABIs; dedupe by name + input types for one product, or use the vault ABI from Arbiscan — duplicate selectors break some libraries (e.g. web3.py).',
+    navVerificationDocs: GITBOOK_VERIFY_NAV,
     reads: [
       'isUserWindow()',
       'isProcessingWindow()',
@@ -747,9 +762,9 @@ export default function Home() {
             </div>
             <ul className="ai-list">
               <li><strong>Deposit assets</strong> — KASH-ETH accepts native ETH or WETH; KASH-BTC accepts wBTC. USDC and other tokens are not supported — swap first if needed.</li>
-              <li><strong>Minimums</strong> — Mint requests below ~$10 oracle USD are rejected by the frontend and skipped by batch ops; redeems have no minimum.</li>
+              <li><strong>Minimums</strong> — ~$10 mint notional is enforced by the frontend and batch ops skip threshold only; a raw <code style={{ color: '#00FFFF' }}>requestMint</code> can still land on-chain below that. Redeems have no minimum.</li>
               <li><strong>Contract-first</strong> — Integrate via KashYield + ERC-20 KASH; optional UI is unrelated to execution.</li>
-              <li><strong>Deterministic scheduling</strong> — Poll <code style={{ color: '#00FFFF' }}>isUserWindow</code>, submit before batch cutoff, await <code style={{ color: '#00FFFF' }}>BatchProcessed</code>.</li>
+              <li><strong>Deterministic scheduling</strong> — Poll <code style={{ color: '#00FFFF' }}>isUserWindow()</code> and <code style={{ color: '#00FFFF' }}>isProcessingWindow()</code> (not mutually exclusive); submit before batch cutoff; await <code style={{ color: '#00FFFF' }}>BatchProcessed</code>.</li>
               <li><strong>Bounded surface area</strong> — Primary flows: mint, redeem, cancel; approvals only where ERC-20 pulls apply.</li>
               <li><strong>Composable ERC-20</strong> — Move KASH like any token; remember redeems move KASH back to the vault during requests.</li>
               <li><strong>Ops reality</strong> — Strategy execution and NAV inputs rely on protocol operators — audit trust assumptions in docs, not buzzwords.</li>
@@ -769,28 +784,23 @@ export default function Home() {
                 <h3>NAV</h3>
                 <div className="proof-card-body">
                   <p>
-                    Read <code style={{ color: '#00FFFF' }}>getNAV()</code> on each KashYield vault and <code style={{ color: '#00FFFF' }}>totalSupply()</code> on the matching KASH token. Multiply: <code style={{ color: '#00FFFF' }}>totalNAV = nav × supply / 10^18</code>.
+                    Read <code style={{ color: '#00FFFF' }}>getNAV()</code> on each KashYield vault and <code style={{ color: '#00FFFF' }}>totalSupply()</code> on the matching KASH token. Multiply: <code style={{ color: '#00FFFF' }}>totalNAV = nav × supply / 10^18</code>. Full steps:{' '}
+                    <a href={GITBOOK_VERIFY_NAV} target="_blank" rel="noopener noreferrer">Verify NAV</a>.
                   </p>
                   <details className="proof-details">
                     <summary>Audit every NAV component</summary>
                     <ol>
                       <li>
-                        <strong>Arbitrum vault balances:</strong> read <code style={{ color: '#00FFFF' }}>provider.getBalance(vault)</code> for ETH and <code style={{ color: '#00FFFF' }}>balanceOf(vault)</code> for WETH, wBTC, and USDC.
+                        <strong>Asset leg (USD):</strong> sum vault ETH/wBTC (minus <code style={{ color: '#00FFFF' }}>ownerEthReserve</code> / <code style={{ color: '#00FFFF' }}>ownerWbtcReserve</code> and locked redeem claims), plus Aave supplied WETH/wBTC, plus <code style={{ color: '#00FFFF' }}>getExchangeAssetBalance()</code> (HL spot on the adapter). Mark to market with vault <code style={{ color: '#00FFFF' }}>getEthPrice()</code> / <code style={{ color: '#00FFFF' }}>getBtcPrice()</code> — <strong>18-decimal USD</strong> (<code style={{ color: '#00FFFF' }}>1e18 = $1</code>). Do not use raw Chainlink <code style={{ color: '#00FFFF' }}>latestRoundData()</code> (8-dec feeds).
                       </li>
                       <li>
-                        <strong>Aave positions:</strong> read the vault&apos;s aToken balances (aWETH / awBTC) and variable debt token balance (USDC borrow) on Aave V3 Pool.
+                        <strong>Net USDC leg (USD):</strong> vault USDC minus <code style={{ color: '#00FFFF' }}>ownerUsdcReserve()</code>, plus HL <code style={{ color: '#00FFFF' }}>marginSummary.accountValue</code> from <code style={{ color: '#00FFFF' }}>{"{type: 'clearinghouseState', user: hlAccount}"}</code>, minus Aave USDC variable debt, minus <code style={{ color: '#00FFFF' }}>totalOwnerCoverUsdc()</code>. Do <strong>not</strong> subtract perp short (or long) size from the asset leg — perp PnL and margin are already inside <code style={{ color: '#00FFFF' }}>accountValue</code>.
                       </li>
                       <li>
-                        <strong>Chainlink prices:</strong> call <code style={{ color: '#00FFFF' }}>latestRoundData()</code> on the ETH/USD and BTC/USD price feeds to value the collateral.
+                        <strong>HL accounts:</strong> KASH-ETH <code style={{ color: '#00FFFF' }}>{HL_ACCOUNTS.kashEth}</code>; KASH-BTC <code style={{ color: '#00FFFF' }}>{HL_ACCOUNTS.kashBtc}</code> (confirm via <code style={{ color: '#00FFFF' }}>HyperliquidAdapter.hlAccount()</code> on Arbiscan).
                       </li>
                       <li>
-                        <strong>Hyperliquid chain:</strong> query the HL info endpoint with <code style={{ color: '#00FFFF' }}>{"{type: 'clearinghouseState', user: hlAccount}"}</code> for the vault&apos;s HL account. Read perp position sizes, USDC spot balance, and <code style={{ color: '#00FFFF' }}>marginSummary</code>.
-                      </li>
-                      <li>
-                        <strong>HL mark prices:</strong> query <code style={{ color: '#00FFFF' }}>{"{type: 'perpetualMetaAndAssetCtxs'}"}</code> for current mark price and funding on ETH-PERP and BTC-PERP.
-                      </li>
-                      <li>
-                        <strong>Recompute:</strong> total portfolio USD = vault assets + Aave collateral − USDC debt + HL spot + HL perp value. NAV = portfolio USD / KASH totalSupply.
+                        <strong>Recompute:</strong> <code style={{ color: '#00FFFF' }}>portfolio USD = asset USD + net USDC USD</code> (both 18-dec), then <code style={{ color: '#00FFFF' }}>NAV = portfolio × 10^18 / totalSupply</code>. Compare to <code style={{ color: '#00FFFF' }}>getNAV()</code> — they should match closely right after an <code style={{ color: '#00FFFF' }}>updateNAV</code> tx; between writes, published NAV is a stale snapshot and may diverge until the next write.
                       </li>
                     </ol>
                   </details>
@@ -805,14 +815,14 @@ export default function Home() {
               <div className="proof-card">
                 <h3>Batches &amp; settlement</h3>
                 <p>
-                  Poll <code style={{ color: '#00FFFF' }}>isUserWindow()</code> frequently (e.g. every 60s) and submit mint/redeem requests well before the window closes. The cutoff is around 23:40 UTC — validate against the deployed contract. After submission, watch for <code style={{ color: '#00FFFF' }}>BatchProcessed</code> and the corresponding <code style={{ color: '#00FFFF' }}>TokensClaimed</code> event after claiming.
+                  Poll <code style={{ color: '#00FFFF' }}>isUserWindow()</code> frequently (e.g. every 60s) and submit mint/redeem requests well before the window closes. The cutoff is around 23:40 UTC — validate against the deployed contract. <code style={{ color: '#00FFFF' }}>isUserWindow()</code> and <code style={{ color: '#00FFFF' }}>isProcessingWindow()</code> are not mutually exclusive — read both. After submission, watch for <code style={{ color: '#00FFFF' }}>BatchProcessed</code>, then <code style={{ color: '#00FFFF' }}>TokensClaimed</code> after you claim.
                 </p>
               </div>
               <div className="proof-card">
                 <h3>TVL</h3>
                 <div className="proof-card-body">
                   <p>
-                    TVL equals the total NAV of each vault. Verify it directly on-chain: for each product, read <code style={{ color: '#00FFFF' }}>getNAV()</code> from KashYield and <code style={{ color: '#00FFFF' }}>totalSupply()</code> from the KASH token, then compute <code style={{ color: '#00FFFF' }}>totalNAV = nav × supply / 10^18</code>.
+                    Published TVL is <code style={{ color: '#00FFFF' }}>getNAV() × totalSupply / 10^18</code> per product — that is what the app shows. For each vault, read <code style={{ color: '#00FFFF' }}>getNAV()</code> on KashYield and <code style={{ color: '#00FFFF' }}>totalSupply()</code> on the KASH token.
                   </p>
                   <details className="proof-details">
                     <summary>Step-by-step TVL verification</summary>
@@ -824,7 +834,7 @@ export default function Home() {
                         KASH-BTC: <code style={{ color: '#00FFFF' }}>getNAV()</code> on <a href={btcVaultHref} target="_blank" rel="noopener noreferrer">{shortenAddress(CONTRACTS.kashYieldBtc)}</a> × <code style={{ color: '#00FFFF' }}>totalSupply()</code> on <a href={btcTokenHref} target="_blank" rel="noopener noreferrer">{shortenAddress(CONTRACTS.kashTokenBtc)}</a>.
                       </li>
                       <li>
-                        Cross-check the sum by adding the Arbitrum vault balances, Aave positions, and the Hyperliquid clearinghouse state for the matching vault account.
+                        Optionally cross-check by rebuilding portfolio USD from vault + Aave + HL (<a href={GITBOOK_VERIFY_NAV} target="_blank" rel="noopener noreferrer">Verify NAV</a>). Published TVL (<code style={{ color: '#00FFFF' }}>getNAV() × totalSupply / 10^18</code>) is the product number; a live rebuild is an independent spot check and may differ between <code style={{ color: '#00FFFF' }}>updateNAV</code> writes — investigate persistent or large gaps.
                       </li>
                       <li>
                         Do not infer yield from marketing copy. Use only on-chain NAV and your own price feeds for TVL.
@@ -910,20 +920,22 @@ export default function Home() {
                 <h3>1. Load facts</h3>
                 <p>
                   Chain ID <strong>{ARBITRUM_ONE_CHAIN_ID}</strong>, RPC <code style={{ color: '#00FFFF' }}>https://arb1.arbitrum.io/rpc</code>, ABI from{' '}
-                  <a href="https://github.com/jt1777/Kash/blob/main/frontend/lib/contracts/kashYieldABI.ts" target="_blank" rel="noopener noreferrer">kashYieldABI.ts</a>.
+                  <a href="https://github.com/jt1777/Kash/blob/main/frontend/lib/contracts/kashYieldABI.ts" target="_blank" rel="noopener noreferrer">kashYieldABI.ts</a>{' '}
+                  (ETH+BTC merged — dedupe by name + input types per product, or use the vault ABI from Arbiscan; duplicate selectors break some libraries such as web3.py).
                 </p>
               </div>
               <div className="proof-card">
                 <h3>2. Preflight reads</h3>
                 <p>
                   Before signing, read <code style={{ color: '#00FFFF' }}>paused()</code>, <code style={{ color: '#00FFFF' }}>isUserWindow()</code>,{' '}
+                  <code style={{ color: '#00FFFF' }}>isProcessingWindow()</code> (not mutually exclusive with user window),{' '}
                   <code style={{ color: '#00FFFF' }}>currentNAV()</code>, <code style={{ color: '#00FFFF' }}>feeBps()</code>, and <code style={{ color: '#00FFFF' }}>getCurrentBatchCycle()</code>.
                 </p>
               </div>
               <div className="proof-card">
                 <h3>3. Mint</h3>
                 <p>
-                  Hold the correct asset on Arbitrum One: native ETH or WETH (KASH-ETH), or wBTC (KASH-BTC). Minimum ~$10 oracle USD per mint. ETH: call{' '}
+                  Hold the correct asset on Arbitrum One: native ETH or WETH (KASH-ETH), or wBTC (KASH-BTC). ~$10 mint notional is enforced by the frontend and batch ops only — not on-chain. ETH: call{' '}
                   <code style={{ color: '#00FFFF' }}>requestMint(0)</code> with <code style={{ color: '#00FFFF' }}>msg.value</code>. wBTC: approve the BTC vault, then call{' '}
                   <code style={{ color: '#00FFFF' }}>requestMint(wbtcAmount)</code> (8 decimals).
                 </p>
@@ -931,8 +943,7 @@ export default function Home() {
               <div className="proof-card">
                 <h3>4. Monitor</h3>
                 <p>
-                  Watch <code style={{ color: '#00FFFF' }}>MintRequested</code>, <code style={{ color: '#00FFFF' }}>RedeemRequested</code>, <code style={{ color: '#00FFFF' }}>BatchProcessed</code>, then{' '}
-                  <code style={{ color: '#00FFFF' }}>mintClaimed</code> / <code style={{ color: '#00FFFF' }}>redeemClaimed</code> and <code style={{ color: '#00FFFF' }}>TokensClaimed</code> after you claim.
+                  Watch events <code style={{ color: '#00FFFF' }}>MintRequested</code>, <code style={{ color: '#00FFFF' }}>RedeemRequested</code>, <code style={{ color: '#00FFFF' }}>BatchProcessed</code>, and <code style={{ color: '#00FFFF' }}>TokensClaimed</code> after you claim. Read <code style={{ color: '#00FFFF' }}>mintClaimed(batchCycle, user)</code> / <code style={{ color: '#00FFFF' }}>redeemClaimed(batchCycle, user)</code> to check claim status (views, not events).
                 </p>
               </div>
               <div className="proof-card proof-card--url-scroll">

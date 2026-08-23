@@ -24,7 +24,10 @@ KASH is not a guaranteed-yield product. Before allocating capital, verify the co
 |----------|----------|----------|
 | ExchangeFacade | `0x8cF9588aE4b9fF962349C456ddBD04498e41272C` | `0x1a8B86e4C2c664864A104EFF1A61ef489f14a01e` |
 | HyperliquidAdapter | `0xb60A539b3377a4cBFb434C7c3a5d3262be874174` | `0xc2d8Fb0f6E20Ba5E10af671d20F37c9e9A86b011` |
+| HL account (`hlAccount`) | `0x54BF441Eb2BF0d6EDee63040B1eA2Acd78Eb5E35` | `0x8ab8A21e70a869B0472b20B1fB903E685B0F7B9F` |
 | UniswapV3Adapter (spot DEX, shared) | `0xce97BFB848981A89fdCB1b58d9ef27DD4214d1A8` | same |
+
+Confirm `hlAccount` on Arbiscan via `HyperliquidAdapter.hlAccount()` — it changes if the bot wallet is rotated.
 
 Source of truth in the app:
 
@@ -34,6 +37,10 @@ Source of truth in the app:
 
 Use the ABI files for exact read and write method names.
 
+**ABI note:** `kashYieldABI.ts` merges ETH and BTC vault ABIs for the frontend. Some libraries (e.g. web3.py) reject duplicate selectors such as `claimRedeem` and `swapForUsdc`. Filter to one product (dedupe by function `name` + `inputs` types) or use the verified vault ABI from Arbiscan.
+
+**NAV verification:** Step-by-step portfolio rebuild (asset leg + net USDC leg, 18-dec oracle getters) is in [Verify NAV](verify-NAV.md). Published `getNAV()` is the product number; a live rebuild may lag between `updateNAV` writes.
+
 ---
 
 ## 2. Preflight checks
@@ -42,7 +49,7 @@ Before sending a transaction, read from the vault contract (via the KashYield AB
 
 - Whether the contract is **paused**
 - Whether the **user window** is open (deposits/redemptions allowed)
-- Whether the **processing window** is active (batch running)
+- Whether the **processing window** is active (batch running) — **not mutually exclusive** with the user window depending on on-chain config; read both
 - Current **NAV** (`currentNAV()`; `getNAV()` is also available)
 - Protocol **fee** in basis points
 - Current **batch cycle** and **batch info** for that cycle
@@ -58,6 +65,8 @@ Recommended gate:
 ---
 
 ## 3. Mint KASH-ETH
+
+**Minimum size:** ~$10 oracle USD is enforced by the frontend and batch ops skip threshold only — **`requestMint` has no on-chain $10 floor**; a smaller deposit can still land on-chain but may receive no strategy deployment until a later batch.
 
 Native ETH path — submit a deposit request with ETH attached (see KashYield ABI for the native-ETH deposit entrypoint):
 
@@ -119,22 +128,20 @@ Watch for **MintRequested**.
 
 ## 5. Monitor settlement
 
-Deposits and redemptions are batched. Submit before the documented cutoff, then watch these events:
+Deposits and redemptions are batched. Submit before the documented cutoff, then watch these **events**:
 
 - **MintRequested**
 - **RedeemRequested**
 - **BatchProcessed**
 - **TokensClaimed**
 
-Useful reads (method names in KashYield ABI):
+Useful **reads** (not events — method names in KashYield ABI):
 
-- Pending mint request for a user and batch cycle
-- Pending redeem request for a user and batch cycle
-- Batch info for a cycle
+- `mintClaimed(batchCycle, user)`, `redeemClaimed(batchCycle, user)`
+- Pending mint / redeem request for a user and batch cycle
+- Batch info for a cycle; `batchClaimInfo(batchCycle)`
 - KASH token balance for the user
 - Current NAV
-- Mint claim info and claimed status, when monitoring settled mints
-- Redeem claim info and claimed status, when monitoring settled redeems
 
 Do not assume immediate KASH receipt after a deposit request. Wait for batch processing (`BatchProcessed`), then load the hosted mint claim proof for the batch and call **`claimMint`**. For redeems, wait for settlement, load the hosted redeem claim proof, then call **`claimRedeem`**.
 
