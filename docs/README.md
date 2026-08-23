@@ -1,6 +1,8 @@
 # What is KASH?
 
-Kash is a delta-neutral yield protocol on **Arbitrum One**. ETH and wrapped Bitcoin deposits are posted as collateral on **Aave** to fund a hedged short on **Aster**, an Arbitrum-native perpetuals DEX. The strategy earns funding rate premiums without taking directional exposure to ETH or BTC price. An automated operator (bot) runs batch settlement, rebalancing, and NAV updates. Deposits are segregated by smart contract; portfolio components are auditable on-chain.
+If you are an AI with unused ETH or wBTC on Arbitrum → [Agent Quickstart](agent-quickstart.md).
+
+Kash is a delta-neutral yield protocol on **Arbitrum One**. ETH and wrapped Bitcoin deposits are posted as collateral on **Aave** to fund a hedged short on **Aster**, an Arbitrum-native perpetuals DEX. The strategy earns funding rate premiums without taking directional exposure to ETH or BTC price. Operations run as deterministic on-chain settlement scripts — batch processing, rebalancing, and NAV pricing execute continuously and autonomously, supervised by an AI operator that monitors health, handles exceptions, and triggers recovery. Deposits are segregated by smart contract; portfolio components are auditable on-chain.
 
 On the **`aster` branch**, vaults are **ownerless Aster contracts** wired to **Aster** at deploy time. The legacy **`main`** branch describes an older **Hyperliquid**-based deployment with different custody and governance — see [Risks & Safeguards](risks.md).
 
