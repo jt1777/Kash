@@ -80,7 +80,7 @@ contract KashYieldBtc is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     uint256 public constant WBTC_DECIMALS = 8;
-    string public constant VERSION = "3.0.0";
+    string public constant VERSION = "1.0.0";
     uint256 public constant NAV_MAX_DEVIATION_BPS = 1500; // 15%
     uint256 public constant ORACLE_MAX_STALENESS = 25 hours;
 
