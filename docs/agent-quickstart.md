@@ -29,13 +29,14 @@ KASH is not a guaranteed-yield product. Before allocating capital, verify the co
 
 Confirm `hlAccount` on Arbiscan via `HyperliquidAdapter.hlAccount()` — it changes if the bot wallet is rotated.
 
-Source of truth in the app:
+Live addresses are the table above (and `HyperliquidAdapter.hlAccount()` on Arbiscan). Do not treat `frontend/lib/contracts/addresses.ts` as the source of truth — that file is filled from deploy env and is `0x0` without Vercel secrets.
 
-- Contract addresses: [`frontend/lib/contracts/addresses.ts`](../frontend/lib/contracts/addresses.ts)
-- KashYield ABI: [`frontend/lib/contracts/kashYieldABI.ts`](../frontend/lib/contracts/kashYieldABI.ts)
-- KASH ERC-20 ABI: [`frontend/lib/contracts/kashTokenABI.ts`](../frontend/lib/contracts/kashTokenABI.ts)
+ABIs for method names:
 
-Use the ABI files for exact read and write method names.
+* KashYield: [`frontend/lib/contracts/kashYieldABI.ts`](https://github.com/jt1777/Kash/tree/main/frontend/lib/contracts/kashYieldABI.ts)
+* KASH ERC-20: [`frontend/lib/contracts/kashTokenABI.ts`](https://github.com/jt1777/Kash/tree/main/frontend/lib/contracts/kashTokenABI.ts)
+
+WETH (KASH-ETH deposits): `0x82aF49447D8a07e3bd95BD0d56f35241523fBab1`.
 
 **ABI note:** `kashYieldABI.ts` merges ETH and BTC vault ABIs for the frontend. Some libraries (e.g. web3.py) reject duplicate selectors such as `claimRedeem` and `swapForUsdc`. Filter to one product (dedupe by function `name` + `inputs` types) or use the verified vault ABI from Arbiscan.
 
@@ -104,6 +105,8 @@ Watch for the **MintRequested** event (user, amount, batch cycle).
 
 ## 4. Mint KASH-BTC
 
+Same ~$10 skip threshold as KASH-ETH (frontend + batch ops only; no on-chain floor).
+
 KASH-BTC uses wBTC. Approve the BTC vault first, then submit the deposit request:
 
 ```ts
@@ -163,9 +166,16 @@ After **`BatchProcessed`** for a cycle where you had a pending mint, KASH is all
 }
 ```
 
-- Hosted paths: `NEXT_PUBLIC_MINT_PROOF_BASE_URL/{product}-mint-batch-{cycle}.json` or `/mint-proofs/{product}-mint-batch-{cycle}.json` (`product` = `eth` or `btc`)
+Public proof manifests (use these; do not wait on a frontend env var):
+
+* Mint: `https://rgmuqtp7bm5kimpv.public.blob.vercel-storage.com/mint-proofs/{eth|btc}-mint-batch-{batchCycle}.json`
+* Redeem: `https://rgmuqtp7bm5kimpv.public.blob.vercel-storage.com/redeem-proofs/{eth|btc}-batch-{batchCycle}.json`
+
+These URLs are **current production** (Vercel Blob). If you get a 404, the store prefix may have changed — re-check the live base from the [KASH landing page](https://www.kash-token.io) agent JSON (`mintClaimProofs` / `redeemClaimProofs`), or from kash-ops: `cd bot && npm run mint-proof:blob-url` / `npm run redeem-proof:blob-url` (requires `BLOB_READ_WRITE_TOKEN` in `bot/.env`).
+
+The app also tries `NEXT_PUBLIC_MINT_PROOF_BASE_URL` / `NEXT_PUBLIC_REDEEM_PROOF_BASE_URL` and `/mint-proofs/…` / `/redeem-proofs/…` — those are for the website, not for agents. If no hosted manifest is available, rebuild a single-user proof from chain events (`frontend/lib/mintProofs.ts`).
+
 - Leaf hash: `keccak256(abi.encode(batchCycle, user, kashAmount))` — `kashAmount` in the manifest is KASH wei (18 decimals)
-- If no manifest is available, the frontend can rebuild a single-user proof from chain events (see `frontend/lib/mintProofs.ts`)
 
 KASH-ETH example:
 
@@ -196,8 +206,6 @@ Useful reads before claiming:
 - `getPendingMintRequest(user, batchCycle)` — confirms your deposit was in that batch
 
 Watch for **`TokensClaimed`** after a successful claim.
-
-The frontend resolves proofs from hosted manifests (`NEXT_PUBLIC_MINT_PROOF_BASE_URL` or `/mint-proofs/{product}-mint-batch-{cycle}.json`) and can rebuild from chain when manifests are unavailable.
 
 ---
 
@@ -243,19 +251,23 @@ await wallet.writeContract({
 
 Watch for **RedeemRequested**, then batch settlement.
 
-After settlement, claim the underlying asset with the Merkle proof published for the batch (see §6 for the analogous **`claimMint`** flow for deposits):
+After settlement, claim the underlying asset with the Merkle proof published for the batch (see §6 for public proof URLs and the analogous **`claimMint`** flow for deposits):
 
-- Redeem proof manifests: `NEXT_PUBLIC_REDEEM_PROOF_BASE_URL/{product}-batch-{cycle}.json` or `/redeem-proofs/{product}-batch-{cycle}.json`
 - Leaf hash: `keccak256(abi.encode(batchCycle, user, claimAmount))` — ETH/wBTC wei (18 / 8 decimals respectively)
 
+`claimRedeem` is the same on both vaults. In the merged frontend ABI the amount argument is named `ethAmount`; it is still **asset wei** (18-dec ETH or 8-dec wBTC).
+
 ```ts
+// ETH: claimAmount is wei. BTC: claimAmount is wBTC base units (8 decimals).
 await wallet.writeContract({
-  address: kashYieldBtc,
+  address: kashYieldEth, // or kashYieldBtc
   abi: kashYieldAbi,
   functionName: 'claimRedeem',
   args: [batchCycle, claimAmount, proof],
 });
 ```
+
+Earliest redeem is the batch **after** the deposit batch (deposit in N, redeem in N+1 or later).
 
 ---
 
