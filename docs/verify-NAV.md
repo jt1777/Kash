@@ -69,16 +69,16 @@ Sum **user-owned** collateral across three places, then mark to market:
 2. **On Aave V3** — supplied WETH or wBTC collateral for the vault address (Aave pool: `aavePoolAddress()` on the vault).
 3. **On Hyperliquid (via adapter)** — spot ETH/wBTC synced on the adapter (`getExchangeAssetBalance()` on the vault).
 
-Convert the total to USD using the vault’s Chainlink oracle:
+Convert the total to USD using the vault’s price getters (Chainlink feed scaled to 18-dec USD):
 
-- KASH-ETH: `getEthPrice()` (8 decimals)
-- KASH-BTC: `getBtcPrice()` (8 decimals)
+- KASH-ETH: `getEthPrice()` (18 decimals; `1e18` = $1.00)
+- KASH-BTC: `getBtcPrice()` (18 decimals; `1e18` = $1.00)
 
 ```
-asset USD  =  total ETH/wBTC units  ×  oracle price  ÷  10^assetDecimals
+asset USD (18 dec)  =  total ETH/wBTC units  ×  getEthPrice()/getBtcPrice()  ÷  10^assetDecimals  ÷  1e18
 ```
 
-(assetDecimals = 18 for ETH, 8 for wBTC; oracle is 8 decimals.)
+(`assetDecimals` = 18 for ETH, 8 for wBTC. The underlying Chainlink feed is 8 decimals; the vault getters scale it to 18-dec USD.)
 
 ### Net USDC leg (USD)
 
@@ -88,6 +88,9 @@ net USDC (6 decimals)  =  USDC on vault  +  HL account equity  −  Aave USDC de
 
 - **USDC on vault** — ERC-20 `balanceOf(vault)` minus `ownerUsdcReserve()`.
 - **HL account equity** — Hyperliquid **perp account value** (includes unrealized PnL and spot USDC). This is read from the Hyperliquid public API for the vault’s HL account (the adapter’s `hlAccount()` or equivalent). The on-chain adapter may lag until synced; the bot refreshes from the API before NAV writes.
+
+(Do not subtract Hyperliquid short (or long) size from the asset leg. Perp PnL and margin are already inside HL `accountValue`. The asset leg only includes vault + Aave + adapter spot (`getExchangeAssetBalance()`).)
+
 - **Aave USDC debt** — variable USDC borrow against the vault on Aave V3 (includes accrued interest).
 
 Convert to 18-decimal USD: `net USDC USD = net USDC × 10^12` (USDC has 6 decimals).
