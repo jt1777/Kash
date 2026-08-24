@@ -1,0 +1,63 @@
+{
+  "name": "KASH",
+  "description": "Batched ETH/wBTC yield on Arbitrum One. Delta-neutral funding-rate arbitrage — agents mint, verify, and redeem directly from the vault contracts with no UI required.",
+  "version": "2.0.0",
+  "status": "public beta",
+  "chain": {
+    "name": "Arbitrum One",
+    "chainId": 42161,
+    "rpc": "https://arb1.arbitrum.io/rpc"
+  },
+  "products": {
+    "eth": {
+      "asset": "ETH",
+      "vault": "0xd9c2c8DdCA745EBa7a8c575d0ed0171b8D0565ad",
+      "token": "0x328d6905bdd90ab1302D70c61ddaDdE77fd863A6",
+      "tokenGetter": "kashTokenEth()"
+    },
+    "btc": {
+      "asset": "wBTC",
+      "assetAddress": "0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f",
+      "vault": "0xAD3298903584DbD539C2085e099136445AeeCBE9",
+      "token": "0xf359890E857aB63EcE696a73f647Fcb65A7d82E0",
+      "tokenGetter": "kashTokenBtc()"
+    }
+  },
+  "nav": {
+    "formula": "totalNAV = getNAV() * totalSupply() / 1e18",
+    "getters": {
+      "nav": "getNAV()",
+      "currentNav": "currentNAV()",
+      "ethPrice": "getEthPrice()",
+      "btcPrice": "getBtcPrice()"
+    },
+    "note": "Published NAV = last updateNAV write. A live rebuild can differ until the next write. Prices are 18-decimal USD."
+  },
+  "batch": {
+    "cadence": "daily",
+    "claimAfter": "23:40 UTC",
+    "minDeposit": "~$10 USDC (mint skip threshold, not an on-chain floor)",
+    "fee": "5 bps"
+  },
+  "flow": {
+    "mint": "submit ETH/wBTC -> batched daily -> claim KASH after batch",
+    "redeem": "submit KASH -> batched daily -> claim ETH/wBTC",
+    "cycleRule": "deposit N redeems in cycle N+1"
+  },
+  "docs": {
+    "site": "https://www.kash-token.io",
+    "quickstart": "https://kash-2.gitbook.io/kash-enhanced-yield-protocol/agent-integration/agent-quickstart",
+    "verifyNav": "https://kash-2.gitbook.io/kash-enhanced-yield-protocol/how-it-works/verify-nav",
+    "abi": "https://github.com/jt1777/Kash/blob/main/frontend/lib/contracts/kashYieldABI.ts"
+  },
+  "proofs": {
+    "mint": "https://rgmuqtp7bm5kimpv.public.blob.vercel-storage.com/mint-proofs/{eth|btc}-mint-batch-{batchCycle}.json",
+    "redeem": "https://rgmuqtp7bm5kimpv.public.blob.vercel-storage.com/redeem-proofs/{eth|btc}-batch-{batchCycle}.json"
+  },
+  "integrationNotes": [
+    "The vault token getter is kashTokenEth()/kashTokenBtc(), NOT the standard ERC-4626 token(). A generic ERC-4626 reader will revert.",
+    "Never skip isUserWindow() or paused() before submitting a mint/redeem.",
+    "Do not treat indicative PA yield on the site as a promise — it is a forward estimate.",
+    "Not financial advice. Smart-contract, market, and counterparty risk apply. DYOR."
+  ]
+}

@@ -1,0 +1,22 @@
+# KASH
+
+> KASH is batched ETH/wBTC yield on Arbitrum One — delta-neutral funding-rate arbitrage. Agents mint, verify, and redeem directly from the vault contracts with no UI required. Public beta.
+
+## Key resources
+
+- [Agent brief](https://www.kash-token.io/agent-brief.json): machine-readable canonical facts — vault/token addresses, getters, NAV formula, batch clock, fees.
+- [Agent quickstart](https://kash-2.gitbook.io/kash-enhanced-yield-protocol/agent-integration/agent-quickstart): how to mint and redeem programmatically.
+- [Verify NAV](https://kash-2.gitbook.io/kash-enhanced-yield-protocol/how-it-works/verify-nav): how to independently verify the NAV.
+- [Documentation](https://kash-2.gitbook.io/kash-enhanced-yield-protocol): full protocol docs.
+
+## Products
+
+- KASH-ETH — vault `0xd9c2c8DdCA745EBa7a8c575d0ed0171b8D0565ad`
+- KASH-BTC — vault `0xAD3298903584DbD539C2085e099136445AeeCBE9`
+
+Chain: Arbitrum One (42161).
+
+## Notes
+
+- The vault token getter is `kashTokenEth()` / `kashTokenBtc()`, not the standard ERC-4626 `token()`.
+- Not financial advice. Smart-contract, market, and counterparty risk apply. DYOR.
