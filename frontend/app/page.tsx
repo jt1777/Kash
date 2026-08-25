@@ -657,9 +657,9 @@ export default function Home() {
             padding-top: clamp(10.5rem, 32vw, 14.5rem);
           }
           /* Fixed nav covers hash targets on mobile — offset scroll snap */
+          .landing #metrics,
           .landing #features,
           .landing #agent-brief,
-          .landing #verify,
           .landing #agent-quickstart,
           .landing #integration {
             scroll-margin-top: clamp(7.5rem, 24vw, 10.5rem);
@@ -681,11 +681,9 @@ export default function Home() {
           <div className="nav-content">
             <Link href="/" className="nav-logo">KASH</Link>
             <div className="nav-links">
+              <a href="#metrics" className="nav-link">Metrics</a>
               <a href="#features" className="nav-link">Features</a>
               <a href="#agent-brief" className="nav-link">For AI</a>
-              <a href="#verify" className="nav-link">Verify</a>
-              <a href="#agent-quickstart" className="nav-link">Quickstart</a>
-              <a href="#integration" className="nav-link">Integration</a>
               <Link href="/app" className="nav-button">Launch App →</Link>
             </div>
           </div>
