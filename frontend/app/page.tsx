@@ -698,7 +698,7 @@ export default function Home() {
             <h2>Enhanced Yield Protocol</h2>
             <p className="subtitle">
               Programmable treasury yield on Arbitrum: deposit ETH or wBTC, receive KASH tokens, redeem through daily batches.
-              Returns based on funding rates — verify contracts and risk disclosure before allocating capital.
+              Returns based on funding rates — verify contracts and read risk disclosure before allocating capital.
             </p>
             <p className="hero-human-hint" role="note">
               <strong>FOR HUMANS:</strong> read{' '}
@@ -708,9 +708,8 @@ export default function Home() {
               {' '}to begin.
             </p>
             <div>
-              <Link href="/app" className="cta-button">🚀 Launch App</Link>
               <a href="https://kash-2.gitbook.io/kash-enhanced-yield-protocol" target="_blank" rel="noopener noreferrer" className="secondary-cta">Documentation</a>
-              <a href="https://github.com/jt1777/Kash" className="secondary-cta" target="_blank" rel="noopener noreferrer">GitHub →</a>
+              <Link href="/app" className="cta-button">🚀 Launch App</Link>
             </div>
           </div>
         </section>
