@@ -299,6 +299,16 @@ export default function Home() {
           border-color: #00FFFF;
           background: rgba(0, 255, 255, 0.08);
         }
+        .landing .hero-actions {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          justify-content: center;
+          gap: 16px;
+        }
+        .landing .hero-actions .secondary-cta {
+          margin-left: 0;
+        }
         .landing .code-section {
           background: rgba(0, 0, 0, 0.4);
           padding: clamp(60px, 10vw, 100px) 0;
@@ -664,11 +674,11 @@ export default function Home() {
           .landing #integration {
             scroll-margin-top: clamp(7.5rem, 24vw, 10.5rem);
           }
-          .landing .secondary-cta { display: block; margin: 16px 0 0 0; }
+          .landing .secondary-cta { display: block; margin: 0; }
           .landing .nav-content { justify-content: center; }
           .landing .nav-links { justify-content: center; }
-          .landing .hero .container > div:last-child { display: flex; flex-direction: column; align-items: center; gap: 12px; }
-          .landing .hero .container > div:last-child a { margin-left: 0; }
+          .landing .hero-actions { flex-direction: column; gap: 12px; }
+          .landing .hero-actions a { margin-left: 0; }
         }
         @media (max-width: 480px) {
           .landing .container { padding: 0 16px; }
@@ -705,7 +715,7 @@ export default function Home() {
               <Link href="/app" className="hero-human-hint-action">Launch App</Link>
               {' '}to begin.
             </p>
-            <div>
+            <div className="hero-actions">
               <a href="https://kash-2.gitbook.io/kash-enhanced-yield-protocol" target="_blank" rel="noopener noreferrer" className="secondary-cta">Documentation</a>
               <Link href="/app" className="cta-button">🚀 Launch App</Link>
             </div>
