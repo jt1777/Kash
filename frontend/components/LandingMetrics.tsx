@@ -14,7 +14,7 @@ export function LandingMetrics() {
 
   if (products.length === 0) {
     return (
-      <section className="metrics">
+      <section className="metrics" id="metrics">
         <div className="container">
           <p className="section-caption">
             Vault addresses are not configured in this environment. Set the KASH env addresses to display live metrics.
@@ -25,7 +25,7 @@ export function LandingMetrics() {
   }
 
   return (
-    <section className="metrics">
+    <section className="metrics" id="metrics">
       <div className="container">
         <h2 className="section-title">Live metrics</h2>
         <p className="section-caption">

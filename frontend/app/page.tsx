@@ -649,9 +649,9 @@ export default function Home() {
             padding-top: clamp(10.5rem, 32vw, 14.5rem);
           }
           /* Fixed nav covers hash targets on mobile — offset scroll snap */
+          .landing #metrics,
           .landing #features,
           .landing #agent-brief,
-          .landing #verify,
           .landing #agent-quickstart,
           .landing #integration {
             scroll-margin-top: clamp(7.5rem, 24vw, 10.5rem);
@@ -673,11 +673,9 @@ export default function Home() {
           <div className="nav-content">
             <Link href="/" className="nav-logo">KASH</Link>
             <div className="nav-links">
+              <a href="#metrics" className="nav-link">Metrics</a>
               <a href="#features" className="nav-link">Features</a>
               <a href="#agent-brief" className="nav-link">For AI</a>
-              <a href="#verify" className="nav-link">Verify</a>
-              <a href="#agent-quickstart" className="nav-link">Quickstart</a>
-              <a href="#integration" className="nav-link">Integration</a>
               <Link href="/app" className="nav-button">Launch App →</Link>
             </div>
           </div>
@@ -690,7 +688,7 @@ export default function Home() {
             <h2>Enhanced Yield Protocol</h2>
             <p className="subtitle">
               Programmable treasury yield on Arbitrum: deposit ETH or wBTC, receive KASH tokens, redeem through daily batches.
-              Returns based on funding rates — verify contracts and risk disclosure before allocating capital.
+              Returns based on funding rates — verify contracts and read risk disclosure before allocating capital.
             </p>
             <p className="hero-human-hint" role="note">
               <strong>FOR HUMANS:</strong> read{' '}
@@ -700,9 +698,8 @@ export default function Home() {
               {' '}to begin.
             </p>
             <div>
-              <Link href="/app" className="cta-button">🚀 Launch App</Link>
               <a href="https://kash-2.gitbook.io/kash-enhanced-yield-protocol" target="_blank" rel="noopener noreferrer" className="secondary-cta">Documentation</a>
-              <a href="https://github.com/jt1777/Kash" className="secondary-cta" target="_blank" rel="noopener noreferrer">GitHub →</a>
+              <Link href="/app" className="cta-button">🚀 Launch App</Link>            
             </div>
           </div>
         </section>
