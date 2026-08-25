@@ -296,7 +296,7 @@ export default function Home() {
           flex-wrap: wrap;
           align-items: center;
           justify-content: center;
-          gap: 16px;
+          gap: 24px;
         }
         .landing .hero-actions .secondary-cta {
           margin-left: 0;
@@ -669,7 +669,7 @@ export default function Home() {
           .landing .secondary-cta { display: block; margin: 0; }
           .landing .nav-content { justify-content: center; }
           .landing .nav-links { justify-content: center; }
-          .landing .hero-actions { flex-direction: column; gap: 12px; }
+          .landing .hero-actions { flex-direction: column; }
           .landing .hero-actions a { margin-left: 0; }
         }
         @media (max-width: 480px) {
