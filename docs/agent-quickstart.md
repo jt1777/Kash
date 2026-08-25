@@ -168,8 +168,8 @@ After **`BatchProcessed`** for a cycle where you had a pending mint, KASH is all
 
 Public proof manifests (use these; do not wait on a frontend env var):
 
-* Mint: `https://rgmuqtp7bm5kimpv.public.blob.vercel-storage.com/mint-proofs/{eth|btc}-mint-batch-{batchCycle}.json`
-* Redeem: `https://rgmuqtp7bm5kimpv.public.blob.vercel-storage.com/redeem-proofs/{eth|btc}-batch-{batchCycle}.json`
+* Mint: `https://fsk5gglqjba13lqc.public.blob.vercel-storage.com/mint-proofs/{eth|btc}-mint-batch-{batchCycle}.json`
+* Redeem: `https://fsk5gglqjba13lqc.public.blob.vercel-storage.com/redeem-proofs/{eth|btc}-batch-{batchCycle}.json`
 
 These URLs are **current production** (Vercel Blob). If you get a 404, the store prefix may have changed — re-check the live base from the [KASH landing page](https://www.kash-token.io) agent JSON (`mintClaimProofs` / `redeemClaimProofs`), or from kash-ops: `cd bot && npm run mint-proof:blob-url` / `npm run redeem-proof:blob-url` (requires `BLOB_READ_WRITE_TOKEN` in `bot/.env`).
 

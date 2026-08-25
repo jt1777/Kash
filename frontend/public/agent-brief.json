@@ -51,8 +51,8 @@
     "abi": "https://github.com/jt1777/Kash/blob/main/frontend/lib/contracts/kashYieldABI.ts"
   },
   "proofs": {
-    "mint": "https://rgmuqtp7bm5kimpv.public.blob.vercel-storage.com/mint-proofs/{eth|btc}-mint-batch-{batchCycle}.json",
-    "redeem": "https://rgmuqtp7bm5kimpv.public.blob.vercel-storage.com/redeem-proofs/{eth|btc}-batch-{batchCycle}.json"
+    "mint": "https://fsk5gglqjba13lqc.public.blob.vercel-storage.com/mint-proofs/{eth|btc}-mint-batch-{batchCycle}.json",
+    "redeem": "https://fsk5gglqjba13lqc.public.blob.vercel-storage.com/redeem-proofs/{eth|btc}-batch-{batchCycle}.json"
   },
   "integrationNotes": [
     "The vault token getter is kashTokenEth()/kashTokenBtc(), NOT the standard ERC-4626 token(). A generic ERC-4626 reader will revert.",
