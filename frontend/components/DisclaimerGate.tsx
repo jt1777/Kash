@@ -70,14 +70,6 @@ export function DisclaimerGate({ children, riskDocsUrl }: DisclaimerGateProps) {
                   rates, liquidity, counterparties) and can be zero or negative.
                 </li>
                 <li>
-                  <strong>Batch settlement.</strong> Mints and redeems are not instant; settlement
-                  follows the on-chain batch schedule.
-                </li>
-                <li>
-                  <strong>Operator dependency.</strong> Batch processing and NAV updates are initiated by
-                  off-chain infrastructure that can fail or be delayed.
-                </li>
-                <li>
                   <strong>Your responsibility.</strong> Verify contract addresses, NAV, fees, and risks
                   on-chain before depositing. Only use funds you can afford to lose.
                 </li>

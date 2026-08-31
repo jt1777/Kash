@@ -56,5 +56,5 @@ export const config: Config = getDefaultConfig({
     [arbitrum.id]: http(arbitrumOneRpc),
   },
   wallets,
-  ssr: false,
+  ssr: true,
 });

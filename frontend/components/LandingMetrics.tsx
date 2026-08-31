@@ -29,7 +29,7 @@ export function LandingMetrics() {
       <div className="container">
         <h2 className="section-title">Live metrics</h2>
         <p className="section-caption">
-          Indicative yield and on-chain NAV for each KASH product. Refresh market rates with the button in the app; these values read the chain directly.
+          Indicative yield and on-chain NAV for each KASH product.
         </p>
         <div className="metrics-grid">
           {products.map((product) => {

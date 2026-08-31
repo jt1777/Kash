@@ -10,9 +10,11 @@ type SiteFooterProps = {
   className?: string;
   /** When provided, renders a "Contract Address" link to Arbiscan. Omit to hide the link. */
   contractAddress?: `0x${string}`;
+  /** Quiet machine-entry pointers on the marketing landing only. */
+  showAgentLinks?: boolean;
 };
 
-export function SiteFooter({ className, contractAddress }: SiteFooterProps) {
+export function SiteFooter({ className, contractAddress, showAgentLinks }: SiteFooterProps) {
   const verified = contractAddress ? isArbiscanVerifiedKashYield(contractAddress) : false;
 
   return (
@@ -40,6 +42,22 @@ export function SiteFooter({ className, contractAddress }: SiteFooterProps) {
             </a>
           )}
         </div>
+        {showAgentLinks && (
+          <p className={styles.agentLinks}>
+            Agents:{' '}
+            <a href="/llms.txt">llms.txt</a>
+            {' · '}
+            <a href="/agent-brief.json">agent-brief.json</a>
+            {' · '}
+            <a
+              href="https://kash-2.gitbook.io/kash-enhanced-yield-protocol/agent-integration/agent-quickstart"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Quickstart
+            </a>
+          </p>
+        )}
         <p className={styles.disclaimer}></p>
       </div>
     </footer>
