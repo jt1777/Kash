@@ -5,7 +5,7 @@ import {
   arbiscanAddressUrl,
   isArbiscanVerifiedKashToken,
 } from '@/lib/contracts/addresses';
-import { kashTokenABI } from '@/lib/contracts/kashTokenABI';
+import { vaultAbi } from '@/lib/contracts/vaultAbi';
 import { formatEther } from 'viem';
 import { useVaultMetrics, type VaultMetricsProduct } from '@/hooks/useVaultMetrics';
 import { formatNavForApp } from '@/lib/vaultMetrics/formatNav';
@@ -30,7 +30,7 @@ export function StatsCard({ product = 'eth' }: { product?: VaultMetricsProduct }
 
   const { data: kashBalance, refetch: refetchKashBalance, isFetching: isKashBalanceFetching } = useReadContract({
     address: kashToken,
-    abi: kashTokenABI,
+    abi: vaultAbi(product),
     functionName: 'balanceOf',
     args: address ? [address] : undefined,
   });
@@ -49,8 +49,8 @@ export function StatsCard({ product = 'eth' }: { product?: VaultMetricsProduct }
             onClick={() => void refetchNav()}
             disabled={isNavFetching}
             className="text-xs font-medium text-indigo-600 hover:text-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition flex items-center gap-1"
-            title="Refresh latest bot-updated NAV"
-            aria-label="Refresh latest bot-updated NAV"
+            title="Refresh on-chain NAV"
+            aria-label="Refresh on-chain NAV"
           >
             <svg
               className={`w-4 h-4 shrink-0 ${isNavFetching ? 'animate-spin' : ''}`}
@@ -73,7 +73,7 @@ export function StatsCard({ product = 'eth' }: { product?: VaultMetricsProduct }
           {formatNavForApp(nav)}
         </p>
         <p className="text-xs text-gray-500 mt-1">
-          Per KASH token, updated by the NAV bot
+          Per KASH share, computed on-chain from Aster, Aave, and Chainlink
         </p>
       </div>
 

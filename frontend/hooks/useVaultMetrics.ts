@@ -7,8 +7,7 @@ import {
   hasBtcProduct,
   hasEthProduct,
 } from '@/lib/contracts/addresses';
-import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
-import { kashTokenABI } from '@/lib/contracts/kashTokenABI';
+import { vaultAbi } from '@/lib/contracts/vaultAbi';
 import type { StrategyYieldProduct } from '@/lib/strategyYield';
 import { useStrategyYield } from '@/hooks/useStrategyYield';
 
@@ -49,7 +48,7 @@ export function useVaultMetrics(product: VaultMetricsProduct) {
     isLoading: isNavLoading,
   } = useReadContract({
     address: kashYield,
-    abi: kashYieldABI,
+    abi: vaultAbi(product),
     functionName: 'getNAV',
     query: { enabled },
   });
@@ -60,7 +59,7 @@ export function useVaultMetrics(product: VaultMetricsProduct) {
     isLoading: isSupplyLoading,
   } = useReadContract({
     address: kashToken,
-    abi: kashTokenABI,
+    abi: vaultAbi(product),
     functionName: 'totalSupply',
     query: { enabled },
   });

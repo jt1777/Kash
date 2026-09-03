@@ -38,8 +38,9 @@ function getEtherscanApiKey(): string {
 }
 
 // Function selectors (first 4 bytes of calldata) for our contract
-const SELECTOR_REQUEST_MINT = '0x49733d04';
-const SELECTOR_REQUEST_REDEEM = '0xaa2f892d';
+const SELECTOR_REQUEST_DEPOSIT = '0x85b77f45';
+const SELECTOR_REQUEST_DEPOSIT_ETH = '0xd9e71686';
+const SELECTOR_REQUEST_REDEEM = '0x7d41c86e';
 
 export type ActivityItem = {
   type: 'mint' | 'redeem';
@@ -102,7 +103,11 @@ export async function GET(request: NextRequest) {
       const input = (tx.input || '').toLowerCase();
       const selector = input.slice(0, 10);
 
-      if (selector !== SELECTOR_REQUEST_MINT && selector !== SELECTOR_REQUEST_REDEEM) continue;
+      if (
+        selector !== SELECTOR_REQUEST_DEPOSIT &&
+        selector !== SELECTOR_REQUEST_DEPOSIT_ETH &&
+        selector !== SELECTOR_REQUEST_REDEEM
+      ) continue;
 
       const ts = parseInt(tx.timeStamp, 10);
       const batchCycle = Math.floor(ts / cycleDuration);
@@ -118,7 +123,7 @@ export async function GET(request: NextRequest) {
       }
 
       activities.push({
-        type: selector === SELECTOR_REQUEST_MINT ? 'mint' : 'redeem',
+        type: selector === SELECTOR_REQUEST_REDEEM ? 'redeem' : 'mint',
         hash: tx.hash,
         timestamp: ts,
         blockNumber: tx.blockNumber,

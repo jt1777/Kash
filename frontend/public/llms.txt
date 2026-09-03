@@ -1,0 +1,43 @@
+# KASH Aster 4626/7540 vaults
+
+Network: Arbitrum One (42161)
+
+Vault = ERC-20 share token. No separate KASH token. No Merkle proofs.
+
+## Addresses (env)
+
+- ETH vault / share: NEXT_PUBLIC_KASH_YIELD_ETH_ADDRESS (also KASH_TOKEN_ETH)
+- BTC vault / share: NEXT_PUBLIC_KASH_YIELD_BTC_ADDRESS (also KASH_TOKEN_BTC)
+- asset ETH: WETH 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1
+- asset BTC: wBTC 0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f
+
+## ABI
+
+One per vault: frontend/lib/contracts/kashVaultEthABI.ts and kashVaultBtcABI.ts. Do not merge.
+
+## Deposit
+
+ETH: requestDepositETH(controller) payable, or approve WETH then requestDeposit(assets, controller, owner)
+BTC: approve wBTC then requestDeposit(assets, controller, owner)
+requestId = getCurrentBatchCycle()
+Watch DepositRequest. No shares yet.
+
+## Claim deposit
+
+After BatchProcessed and claimOpenAt: deposit(assets, receiver[, controller]) or mint(shares, receiver[, controller])
+FIFO oldest cycle. preview* reverts. maxDeposit is claimable, not a deposit cap.
+
+## Redeem
+
+requestRedeem(shares, controller, owner) — vault locks shares; N+1 hold (lastMintCycle)
+Claim: redeem(shares, receiver[, controller]) pays WETH/wBTC
+
+## Reads
+
+paused, isUserWindow, isProcessingWindow, getNAV, feeBps, getCurrentBatchCycle
+pendingDepositRequest(cycle, controller), claimableDepositRequest(cycle, controller)
+asset(), share(), totalAssets(), convertToShares, convertToAssets, balanceOf
+
+## Events
+
+DepositRequest, RedeemRequest, Deposit, Withdraw, BatchProcessed, OperatorSet, Paused, Unpaused, BotAddressSet, NavCorrected, NavMonitorTripped

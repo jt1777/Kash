@@ -1,14 +1,13 @@
 'use client';
 
 import { useState, useMemo, useEffect } from 'react';
-import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadContract, useBalance, useEstimateFeesPerGas, usePublicClient, useReadContracts } from 'wagmi';
+import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadContract, useBalance, useEstimateFeesPerGas, usePublicClient } from 'wagmi';
 import { CONTRACTS, ARBITRUM_ONE_BLOCK_EXPLORER, HARDHAT_CHAIN_ID } from '@/lib/contracts/addresses';
 import { ContractVerifiedBadge } from '@/components/ContractVerifiedBadge';
 import { BatchUserCapStatus } from '@/components/BatchUserCapStatus';
-import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
 import { kashTokenABI } from '@/lib/contracts/kashTokenABI';
+import { vaultAbi } from '@/lib/contracts/vaultAbi';
 import { usePendingBatchRequest, type PendingBatchRequest } from '@/lib/usePendingBatchRequest';
-import { resolveMintClaimProof, formatMintClaimAmount } from '@/lib/mintProofs';
 import { useBatchUserCap } from '@/lib/useBatchUserCap';
 import {
   batchCapNotice,
@@ -118,8 +117,6 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
   const [claimingCycle, setClaimingCycle] = useState<string | null>(null);
   const [pendingClaimCycle, setPendingClaimCycle] = useState<bigint | null>(null);
   const [claimErrors, setClaimErrors] = useState<Record<string, string>>({});
-  const [claimPayouts, setClaimPayouts] = useState<Record<string, bigint | null>>({});
-  const [claimPayoutsLoading, setClaimPayoutsLoading] = useState(false);
 
   const { data: balance } = useBalance({ address });
   const nativeBalance = balance?.value ?? 0n;
@@ -153,9 +150,11 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
     token: isBtc ? (CONTRACTS.mockWbtc as `0x${string}`) : undefined,
   });
 
+  const vault = vaultAbi(product);
+
   const { data: currentBatchCycle } = useReadContract({
     address: kashYield,
-    abi: kashYieldABI,
+    abi: vault,
     functionName: 'getCurrentBatchCycle',
   });
 
@@ -164,7 +163,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
     mintUsersCount,
     batchUserCap,
     mintBlocked,
-  } = useBatchUserCap(kashYield);
+  } = useBatchUserCap(kashYield, product);
 
   const {
     requests: mintRequests,
@@ -176,6 +175,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
     userAddress: address,
     currentBatchCycle,
     kind: 'mint',
+    product,
   });
 
   const kashSymbol = isBtc ? 'KASH-BTC' : 'KASH-ETH';
@@ -202,7 +202,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
 
   const { data: cycleDurationSecondsRaw } = useReadContract({
     address: kashYield,
-    abi: kashYieldABI,
+    abi: vault,
     functionName: 'cycleDurationSeconds',
   });
   const cycleDuration = cycleDurationSecondsRaw !== undefined ? Number(cycleDurationSecondsRaw) : 86400;
@@ -210,96 +210,24 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
 
   const { data: currentCycleMintRequest } = useReadContract({
     address: kashYield,
-    abi: kashYieldABI,
-    functionName: 'getPendingMintRequest',
-    args: address && currentBatchCycle !== undefined ? [address, currentBatchCycle] : undefined,
+    abi: vault,
+    functionName: 'pendingDepositRequest',
+    args: address && currentBatchCycle !== undefined ? [currentBatchCycle, address] : undefined,
     query: { refetchInterval: 15000 },
   });
 
-  const userInCurrentMintBatch = (currentCycleMintRequest?.amountIn ?? 0n) > 0n;
+  const userInCurrentMintBatch = (currentCycleMintRequest ?? 0n) > 0n;
   const mintBatchCapBlocked = mintBlocked(userInCurrentMintBatch);
   const canCancelMint = Boolean(cancellableMint && cancellableMint.amount > 0n);
   const hasStuckMint = Boolean(stuckMint && stuckMint.amount > 0n);
 
-  const processedMintRequests = useMemo(
-    () => mintRequests.filter((r) => r.processed && r.amount > 0n),
-    [mintRequests],
-  );
-
-  const mintClaimedContracts = useMemo(() => {
-    if (!address || processedMintRequests.length === 0) return [];
-    return processedMintRequests.map((r) => ({
-      address: kashYield,
-      abi: kashYieldABI,
-      functionName: 'mintClaimed' as const,
-      args: [r.batchCycle, address] as const,
-    }));
-  }, [kashYield, address, processedMintRequests]);
-
-  const { data: mintClaimedResults, refetch: refetchClaimStatuses } = useReadContracts({
-    contracts: mintClaimedContracts,
-    query: {
-      enabled: mintClaimedContracts.length > 0,
-      refetchInterval: 15_000,
-    },
-  });
-
   const claimableMints = useMemo((): PendingBatchRequest[] => {
-    const unclaimed: PendingBatchRequest[] = [];
-    for (let i = 0; i < processedMintRequests.length; i++) {
-      const req = processedMintRequests[i];
-      const claimed =
-        mintClaimedResults?.[i]?.status === 'success' &&
-        mintClaimedResults[i].result === true;
-      if (!claimed) unclaimed.push(req);
-    }
-    return unclaimed.sort((a, b) => (a.batchCycle > b.batchCycle ? -1 : 1));
-  }, [processedMintRequests, mintClaimedResults]);
+    return mintRequests
+      .filter((r) => r.claimableAmount > 0n)
+      .sort((a, b) => (a.batchCycle > b.batchCycle ? -1 : 1));
+  }, [mintRequests]);
 
   const needsClaim = claimableMints.length > 0;
-
-  useEffect(() => {
-    if (!address || claimableMints.length === 0) {
-      setClaimPayouts({});
-      setClaimPayoutsLoading(false);
-      return;
-    }
-    let cancelled = false;
-    setClaimPayouts({});
-    setClaimPayoutsLoading(true);
-    const loadPayouts = async () => {
-      try {
-        const entries = await Promise.all(
-          claimableMints.map(async (req) => {
-            const key = req.batchCycle.toString();
-            try {
-              const proof = await resolveMintClaimProof({
-                product,
-                batchCycle: req.batchCycle,
-                userAddress: address,
-                kashYield,
-                publicClient,
-              });
-              return [key, proof && proof.amount > 0n ? proof.amount : null] as const;
-            } catch {
-              return [key, null] as const;
-            }
-          }),
-        );
-        if (!cancelled) {
-          setClaimPayouts(Object.fromEntries(entries));
-        }
-      } finally {
-        if (!cancelled) {
-          setClaimPayoutsLoading(false);
-        }
-      }
-    };
-    void loadPayouts();
-    return () => {
-      cancelled = true;
-    };
-  }, [address, claimableMints, product, publicClient, kashYield]);
 
   const { writeContract: approve, data: approveHash, isPending: isApprovePending, error: approveError } = useWriteContract();
   const mintWriteResult = useWriteContract();
@@ -317,6 +245,8 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
   const handleClaimMint = async (batchCycle: bigint) => {
     if (!address) return;
     const cycleKey = batchCycle.toString();
+    const req = claimableMints.find((r) => r.batchCycle === batchCycle);
+    const assets = req?.claimableAmount ?? 0n;
     setClaimErrors((prev) => {
       const next = { ...prev };
       delete next[cycleKey];
@@ -324,17 +254,15 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
     });
     setClaimingCycle(cycleKey);
     try {
-      const proofData = await resolveMintClaimProof({
-        product,
-        batchCycle,
-        userAddress: address,
-        kashYield,
-        publicClient,
-      });
-      if (!proofData) {
+      if (assets <= 0n) {
+        setClaimErrors((prev) => ({ ...prev, [cycleKey]: 'Nothing claimable for this batch.' }));
+        setClaimingCycle(null);
+        return;
+      }
+      if (req && req.claimOpenAt > 0n && BigInt(Math.floor(Date.now() / 1000)) < req.claimOpenAt) {
         setClaimErrors((prev) => ({
           ...prev,
-          [cycleKey]: 'Could not build claim proof for this batch. Contact the operator.',
+          [cycleKey]: 'Claim hold is still open. Try again after the hold window.',
         }));
         setClaimingCycle(null);
         return;
@@ -351,35 +279,34 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
       try {
         simulation = await publicClient.simulateContract({
           address: kashYield,
-          abi: kashYieldABI,
-          functionName: 'claimMint',
-          args: [batchCycle, proofData.amount, proofData.proof],
+          abi: vault,
+          functionName: 'deposit',
+          args: [assets, address, address],
           account: address,
         });
       } catch (simErr) {
         const msg =
           simErr instanceof Error
             ? simErr.message
-            : 'Claim would revert on-chain (invalid proof or already claimed).';
+            : 'Claim would revert on-chain (claims not open or already claimed).';
         setClaimErrors((prev) => ({ ...prev, [cycleKey]: msg }));
         setClaimingCycle(null);
         return;
       }
-      // Pin gas from simulation so MetaMask does not re-estimate with a revert-inflated limit.
       const estimatedGas = simulation.request.gas ?? 200_000n;
       const gasLimit = (estimatedGas * 130n) / 100n;
       setPendingClaimCycle(batchCycle);
       claimMint({
         address: kashYield,
-        abi: kashYieldABI,
-        functionName: 'claimMint',
-        args: [batchCycle, proofData.amount, proofData.proof],
+        abi: vault,
+        functionName: 'deposit',
+        args: [assets, address, address],
         gas: gasLimit,
       });
     } catch (e) {
       setClaimErrors((prev) => ({
         ...prev,
-        [cycleKey]: e instanceof Error ? e.message : 'Failed to load claim proof',
+        [cycleKey]: e instanceof Error ? e.message : 'Failed to claim deposit',
       }));
       setClaimingCycle(null);
       setPendingClaimCycle(null);
@@ -402,11 +329,10 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
       setAmount('');
       setShowMintConfirm(false);
       resetMint();
-      refetchClaimStatuses();
       refetchPendingLookback();
       dispatchActivityRefresh();
     }
-  }, [isClaimSuccess, refetchClaimStatuses, refetchPendingLookback, resetMint]);
+  }, [isClaimSuccess, refetchPendingLookback, resetMint]);
 
   useEffect(() => {
     if (isMintSuccess) {
@@ -477,25 +403,25 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
   };
 
   const handleMint = async () => {
-    if (!parsedAmount || exceedsBalance || exceedsWbtcBalance || mintBelowMinUsd || mintUsdUnavailable) return;
+    if (!parsedAmount || !address || exceedsBalance || exceedsWbtcBalance || mintBelowMinUsd || mintUsdUnavailable) return;
     setShowMintConfirm(false);
 
     try {
       if (depositToken.symbol === 'ETH' && !isBtc) {
         mint({
           address: kashYield,
-          abi: kashYieldABI,
-          functionName: 'requestMint',
-          args: [BigInt(0)],
+          abi: vault,
+          functionName: 'requestDepositETH',
+          args: [address],
           value: parsedAmount,
           ...gasOptions,
         });
       } else {
         mint({
           address: kashYield,
-          abi: kashYieldABI,
-          functionName: 'requestMint',
-          args: [parsedAmount],
+          abi: vault,
+          functionName: 'requestDeposit',
+          args: [parsedAmount, address, address],
           ...gasOptions,
         });
       }
@@ -505,12 +431,12 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
   };
 
   const handleCancelMint = () => {
-    if (!cancellableMint) return;
+    if (!cancellableMint || !address) return;
     cancelMint({
       address: kashYield,
-      abi: kashYieldABI,
-      functionName: 'cancelMintRequest',
-      args: [cancellableMint.batchCycle],
+      abi: vault,
+      functionName: 'cancelDepositRequest',
+      args: [cancellableMint.batchCycle, address],
       ...gasOptions,
     });
   };
@@ -608,7 +534,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
             </p>
             <p className="text-xs text-gray-500 mt-4 leading-relaxed">
               and will receive KASH tokens at an NAV determined at the end of the next batch cycle.
-              After the batch settles, use the <span className="font-medium">Claim {kashSymbol}</span> button on this form to receive your tokens (Merkle pull claim).
+              After the batch settles, use the <span className="font-medium">Claim {kashSymbol}</span> button on this form to receive your shares.
             </p>
             <div className="flex flex-col sm:flex-row gap-3 mt-6">
               <button
@@ -739,11 +665,15 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
           <ul className="space-y-2">
             {claimableMints.map((req) => {
               const cycleKey = req.batchCycle.toString();
-              const payout = claimPayouts[cycleKey];
+              const payout = req.claimableAmount;
               const claimErr = claimErrors[cycleKey];
+              const holdOpen = req.claimOpenAt > 0n && BigInt(Math.floor(Date.now() / 1000)) < req.claimOpenAt;
               const isThisClaimPending =
                 claimingCycle === cycleKey &&
                 (isClaimPending || isClaimConfirming || pendingClaimCycle === req.batchCycle);
+              const payoutLabel = isBtc
+                ? `${Number(formatUnits(payout, 8)).toFixed(8)} wBTC`
+                : `${Number(formatEther(payout)).toFixed(6)} ETH`;
               return (
                 <li
                   key={cycleKey}
@@ -751,25 +681,18 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
                 >
                   <p className="text-sm text-gray-700">
                     <span className="font-medium text-green-800">Batch {cycleKey}</span>
-                    {payout != null ? (
-                      <>
-                        {' · '}
-                        Claim <span className="font-medium">{formatMintClaimAmount(payout)}</span> {kashSymbol}
-                      </>
-                    ) : claimPayoutsLoading ? (
-                      <> · Loading claim amount…</>
-                    ) : (
-                      <> · Could not load claim amount. Try again or contact the operator.</>
-                    )}
+                    {' · '}
+                    Claim {kashSymbol} for <span className="font-medium">{payoutLabel}</span> deposited
+                    {holdOpen ? ' · claim hold still open' : ''}
                   </p>
                   {claimErr ? <p className="text-sm text-red-600">{claimErr}</p> : null}
                   <button
                     type="button"
                     onClick={() => void handleClaimMint(req.batchCycle)}
-                    disabled={isThisClaimPending || payout == null || claimPayoutsLoading}
+                    disabled={isThisClaimPending || payout <= 0n || holdOpen}
                     className="w-full px-4 py-2 bg-green-700 text-white rounded-lg text-sm font-medium hover:bg-green-800 disabled:bg-gray-300 disabled:cursor-not-allowed cursor-pointer transition-colors"
                   >
-                    {isThisClaimPending ? 'Claiming…' : `Claim ${kashSymbol}`}
+                    {isThisClaimPending ? 'Claiming…' : holdOpen ? 'Claim hold' : `Claim ${kashSymbol}`}
                   </button>
                 </li>
               );

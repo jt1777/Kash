@@ -5,13 +5,14 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./libraries/ProtocolActionCodes.sol";
 import "./interfaces/IPerpExchange.sol";
+import "./interfaces/IVaultBot.sol";
 
 /// @notice Immutable perp exchange routing contract (Aster ownerless hardening).
 ///         Bot/keeper call through here; adapter and config are frozen at deploy time.
 contract ExchangeFacade {
     using SafeERC20 for IERC20;
 
-    address public immutable botAddress;
+    address private immutable _fallbackBot;
     address public immutable keeperRegistry;
     address public immutable usdcAddress;
     address public immutable primaryAsset;
@@ -21,8 +22,16 @@ contract ExchangeFacade {
 
     event ProtocolInteraction(uint8 indexed action, address indexed asset, uint256 amount);
 
+    /// @dev Live bot is the vault's `botAddress()` so `setBotAddress` rotates facade ops too.
+    function botAddress() public view returns (address) {
+        try IVaultBot(kashYieldAddress).botAddress() returns (address live) {
+            if (live != address(0)) return live;
+        } catch {}
+        return _fallbackBot;
+    }
+
     modifier onlyBotOrKeeper() {
-        require(msg.sender == botAddress || msg.sender == keeperRegistry, "Only bot/keeper");
+        require(msg.sender == botAddress() || msg.sender == keeperRegistry, "Only bot/keeper");
         _;
     }
 
@@ -39,7 +48,7 @@ contract ExchangeFacade {
         require(_usdc != address(0), "Invalid USDC");
         require(_kashYield != address(0), "Invalid kashYield");
         require(_adapterAddress != address(0), "Invalid adapter");
-        botAddress = _bot;
+        _fallbackBot = _bot;
         keeperRegistry = _keeper;
         usdcAddress = _usdc;
         primaryAsset = _primaryAsset;

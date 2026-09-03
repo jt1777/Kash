@@ -3,7 +3,7 @@
 import { useAccount, useReadContracts, useWriteContract, useWaitForTransactionReceipt, useEstimateFeesPerGas, useReadContract } from 'wagmi';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { ARBITRUM_ONE_CHAIN_ID, ARBITRUM_ONE_BLOCK_EXPLORER, CONTRACTS } from '@/lib/contracts/addresses';
-import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
+import { vaultAbi, vaultAbiForAddress } from '@/lib/contracts/vaultAbi';
 
 const ACTIVITY_REFRESH_EVENT = 'kash-activity-refresh';
 
@@ -99,12 +99,12 @@ export function RecentActivity() {
   // Read cycle duration from each contract so the API uses the correct batch cycle calculation
   const { data: ethCycleDurationRaw } = useReadContract({
     address: CONTRACTS.kashYieldEth,
-    abi: kashYieldABI,
+    abi: vaultAbi('eth'),
     functionName: 'cycleDurationSeconds',
   });
   const { data: btcCycleDurationRaw } = useReadContract({
     address: CONTRACTS.kashYieldBtc as `0x${string}` | undefined,
-    abi: kashYieldABI,
+    abi: vaultAbi('btc'),
     functionName: 'cycleDurationSeconds',
     query: { enabled: !!CONTRACTS.kashYieldBtc },
   });
@@ -141,8 +141,13 @@ export function RecentActivity() {
     }
   }, [address, isArbitrumOne, load, activityExternalRefreshNonce]);
 
-  // For each activity: getBatchInfo, batchPhase, and getPendingMintRequest/getPendingRedeemRequest
-  const readConfigs: { address: `0x${string}`; abi: typeof kashYieldABI; functionName: 'getBatchInfo' | 'batchPhase' | 'getPendingMintRequest' | 'getPendingRedeemRequest'; args: [bigint] | [string, bigint] }[] = [];
+  // For each activity: batchProcessed, batchPhase, pendingDepositRequest/pendingRedeemRequest
+  const readConfigs: {
+    address: `0x${string}`;
+    abi: ReturnType<typeof vaultAbiForAddress>;
+    functionName: 'batchProcessed' | 'batchPhase' | 'pendingDepositRequest' | 'pendingRedeemRequest';
+    args: readonly [bigint] | readonly [bigint, `0x${string}`];
+  }[] = [];
   const activityToConfigIndex: number[] = [];
   const activityToConfigIndexRef = useRef<number[]>([]);
   activities.forEach((a, i) => {
@@ -151,12 +156,13 @@ export function RecentActivity() {
     const contract = contractAddress as `0x${string}`;
     const cycle = BigInt(a.batchCycle);
     const batchIdx = readConfigs.length;
-    readConfigs.push({ address: contract, abi: kashYieldABI, functionName: 'getBatchInfo', args: [cycle] });
-    readConfigs.push({ address: contract, abi: kashYieldABI, functionName: 'batchPhase', args: [cycle] });
+    const abi = vaultAbiForAddress(contract);
+    readConfigs.push({ address: contract, abi, functionName: 'batchProcessed', args: [cycle] });
+    readConfigs.push({ address: contract, abi, functionName: 'batchPhase', args: [cycle] });
     if (a.type === 'mint') {
-      readConfigs.push({ address: contract, abi: kashYieldABI, functionName: 'getPendingMintRequest', args: [address, cycle] });
+      readConfigs.push({ address: contract, abi, functionName: 'pendingDepositRequest', args: [cycle, address] });
     } else {
-      readConfigs.push({ address: contract, abi: kashYieldABI, functionName: 'getPendingRedeemRequest', args: [address, cycle] });
+      readConfigs.push({ address: contract, abi, functionName: 'pendingRedeemRequest', args: [cycle, address] });
     }
     activityToConfigIndex[i] = batchIdx;
   });
@@ -172,26 +178,22 @@ export function RecentActivity() {
   const hasRequestByIndex = new Map<number, boolean>();
   const isProcessingByIndex = new Map<number, boolean>();
   if (readResults && address) {
-    type BatchResult = { status: 'success'; result: readonly [bigint, bigint, boolean, bigint, bigint, bigint] };
-    type PendingResult = { status: 'success'; result: { amountIn?: bigint; kashAmount?: bigint } };
+    type ProcessedResult = { status: 'success'; result: boolean };
+    type PendingResult = { status: 'success'; result: bigint };
     for (let i = 0; i < activities.length; i++) {
       const batchIdx = activityToConfigIndex[i];
       if (batchIdx === undefined) continue;
-      const batchR = readResults[batchIdx] as BatchResult | undefined;
+      const processedR = readResults[batchIdx] as ProcessedResult | undefined;
       const phaseRaw = readResults[batchIdx + 1];
       const pendingR = readResults[batchIdx + 2] as PendingResult | undefined;
-      const processed = batchR?.status === 'success' && batchR.result
-        ? batchR.result[2]
-        : false;
+      const processed = processedR?.status === 'success' ? Boolean(processedR.result) : false;
       const phase =
         phaseRaw?.status === 'success' && (phaseRaw as { result?: unknown }).result != null
           ? Number((phaseRaw as { result: number | bigint }).result)
           : 0;
-      const hasRequest = pendingR?.status === 'success' && pendingR.result
-        ? activities[i].type === 'mint'
-          ? (pendingR.result.amountIn ?? 0n) > 0n
-          : (pendingR.result.kashAmount ?? 0n) > 0n
-        : false;
+      const pendingAmt =
+        pendingR?.status === 'success' && pendingR.result != null ? BigInt(pendingR.result) : 0n;
+      const hasRequest = pendingAmt > 0n;
       const isProcessing = !processed && hasRequest && phase > 0;
       canCancelByIndex.set(i, !processed && hasRequest && phase === 0);
       // Only show "Transaction cancelled" when we've positively confirmed it was once pending
@@ -216,19 +218,14 @@ export function RecentActivity() {
     setCancelEligibleHashes(prev => {
       const updated = new Set(prev);
       let changed = false;
-      type BatchResult = { status: 'success'; result: readonly [bigint, bigint, boolean, bigint, bigint, bigint] };
-      type PendingResult = { status: 'success'; result: { amountIn?: bigint; kashAmount?: bigint } };
+      type PendingResult = { status: 'success'; result: bigint };
       for (let i = 0; i < activities.length; i++) {
         const batchIdx = indexMap[i];
         if (batchIdx === undefined) continue;
-        const batchR = readResults[batchIdx] as BatchResult | undefined;
         const pendingR = readResults[batchIdx + 2] as PendingResult | undefined;
-        const processed = batchR?.status === 'success' && batchR.result ? batchR.result[2] : false;
-        const hasRequest = pendingR?.status === 'success' && pendingR.result
-          ? activities[i].type === 'mint'
-            ? (pendingR.result.amountIn ?? 0n) > 0n
-            : (pendingR.result.kashAmount ?? 0n) > 0n
-          : false;
+        const pendingAmt =
+          pendingR?.status === 'success' && pendingR.result != null ? BigInt(pendingR.result) : 0n;
+        const hasRequest = pendingAmt > 0n;
         // Add hash when there is a request (pending or already processed) so we can show
         // "Settled · claim KASH" / "Settled · claim wBTC/ETH" after batch runs, even if the user didn't
         // have the page open while it was still pending.
@@ -319,29 +316,29 @@ export function RecentActivity() {
   }, [isCancelPending, cancelTxHash, cancelTarget]);
 
   const handleCancelMint = (item: ActivityItem, resolvedCycle: number) => {
-    if (item.contractAddress == null) return;
+    if (item.contractAddress == null || !address) return;
     setCancelFeedback(null);
     cancelFeedbackContextRef.current = { type: 'mint', contractAddress: item.contractAddress };
     setCancelTarget({ contractAddress: item.contractAddress, batchCycle: resolvedCycle, type: 'mint' });
     writeCancel({
       address: item.contractAddress as `0x${string}`,
-      abi: kashYieldABI,
-      functionName: 'cancelMintRequest',
-      args: [BigInt(resolvedCycle)],
+      abi: vaultAbiForAddress(item.contractAddress as `0x${string}`),
+      functionName: 'cancelDepositRequest',
+      args: [BigInt(resolvedCycle), address],
       ...gasOptions,
     });
   };
 
   const handleCancelRedeem = (item: ActivityItem, resolvedCycle: number) => {
-    if (item.contractAddress == null) return;
+    if (item.contractAddress == null || !address) return;
     setCancelFeedback(null);
     cancelFeedbackContextRef.current = { type: 'redeem', contractAddress: item.contractAddress };
     setCancelTarget({ contractAddress: item.contractAddress, batchCycle: resolvedCycle, type: 'redeem' });
     writeCancel({
       address: item.contractAddress as `0x${string}`,
-      abi: kashYieldABI,
+      abi: vaultAbiForAddress(item.contractAddress as `0x${string}`),
       functionName: 'cancelRedeemRequest',
-      args: [BigInt(resolvedCycle)],
+      args: [BigInt(resolvedCycle), address],
       ...gasOptions,
     });
   };

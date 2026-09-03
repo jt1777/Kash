@@ -1,8 +1,8 @@
-# Deploying KashYield (Aster)
+# Deploying KashVault (Aster 4626/7540)
 
-This guide covers compiling and deploying **ownerless Aster** KashYield contracts on **Arbitrum One** with **Aster** as the perp DEX.
+This guide covers compiling and deploying **bounded-owner ERC-4626/7540 Aster** vaults on **Arbitrum One** with **Aster** as the perp DEX. The vault **is** the share token.
 
-> **Legacy:** The `main` branch still documents a **Hyperliquid (HL)** owner-gated deployment path. That stack is **not** the same as Aster — do not reuse HL adapter scripts or addresses for Aster.
+> **Legacy:** `KashYieldETH` / `KashYieldBtc` (Merkle, ownerless) remain in-tree for the pre-4626 aster tree. Live HL on `main` is unchanged. New deploys use `KashVaultEth` / `KashVaultBtc`.
 
 ---
 
@@ -10,23 +10,22 @@ This guide covers compiling and deploying **ownerless Aster** KashYield contract
 
 - Node.js (Hardhat-compatible version)
 - `npm install` at repo root
-- Copy `.env.example` to `.env` — deployer key, RPC, `BOT_ADDRESS`, `FEE_RECEIVER_ADDRESS`, Aster protocol addresses, spot DEX
+- Copy `.env.example` to `.env` — deployer key, RPC, `BOT_ADDRESS`, `OWNER_ADDRESS`, `FEE_RECEIVER_ADDRESS`, Aster protocol addresses, spot DEX
 
 ---
 
-## Ownerless deploy properties (both products)
+## Bounded-owner deploy properties (both products)
 
-| Property | Aster stack behavior |
-|----------|-------------|
-| Governance | **Ownerless** — no `owner()`, no `pause()`, no post-deploy setters |
-| Bot | **`botAddress`** immutable at deploy |
-| Perp DEX | **`ExchangeFacade`** + **`AsterAdapter`** immutable |
-| Spot DEX | **`spotDexAddress`** immutable (e.g. UniswapV3Adapter) |
-| Fees | **`feeBps`** + **`feeReceiver`** immutable |
-| Batch timing | **`cycleDurationSeconds`**, **`userWindowEnd`**, **`processingWindowStart`** immutable |
-| User caps | **`maxMintUsers`**, **`maxRedeemUsers`** immutable |
+| Property | Aster 4626 vault |
+|----------|------------------|
+| Owner | Immutable cold key: `pause`, `unpause`, `setBotAddress`, `setWatcherAddress`, `correctNAV` (±5% of cycle-start NAV) |
+| Watcher | Optional: `pause` only |
+| Bot | Rotatable via owner `setBotAddress`; mechanical only (no NAV / redeem-pool injection) |
+| Perp DEX | **`ExchangeFacade`** + **`AsterAdapter`** (facade reads live `vault.botAddress()`) |
+| Fees | **`feeBps`** immutable (cap 30 bps; default 5) |
+| Libraries | Deploy `KashVaultNavLib`, `KashVaultOpsLib`, `KashVaultBatchLib` first, then link the vault |
 
-Changing any of the above requires **redeploying the full stack** and migrating users.
+Changing immutables requires **redeploying the full stack** and migrating users.
 
 ---
 
@@ -34,23 +33,26 @@ Changing any of the above requires **redeploying the full stack** and migrating 
 
 ```bash
 npx hardhat compile
+node scripts/export-kash-vault-abi.js
 ```
 
 ---
 
 ## Recommended deploy path — Aster atomic stack
 
-Each product deploys **AsterAdapter → ExchangeFacade → KashYield + KASH token** in **one script** using nonce-predicted addresses:
+Each product deploys **3 libraries → AsterAdapter → ExchangeFacade → KashVault** in **one script** using nonce-predicted addresses:
 
 ```bash
 # ETH product
 npm run deploy:eth-aster
-# or: npx hardhat run scripts/deploy-kash-eth-aster-stack.js --network arbitrumOne
+# or: npx hardhat run scripts/deploy-kash-vault-eth-aster-stack.js --network arbitrumOne
 
 # BTC product
 npm run deploy:btc-aster
-# or: npx hardhat run scripts/deploy-kash-btc-aster-stack.js --network arbitrumOne
+# or: npx hardhat run scripts/deploy-kash-vault-btc-aster-stack.js --network arbitrumOne
 ```
+
+Set `KASH_TOKEN_*` to the **same address** as the vault (share = vault). Link libraries on the vault factory.
 
 ### Required env (see `.env.example`)
 

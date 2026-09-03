@@ -18,9 +18,12 @@ export const CONTRACTS = {
     process.env.NEXT_PUBLIC_KASH_YIELD_ETH_ADDRESS,
     process.env.KASH_YIELD_ETH_ADDRESS,
   ),
+  // Vault = share token (4626/7540). Token env falls back to the vault address.
   kashTokenEth: pickAddr(
     process.env.NEXT_PUBLIC_KASH_TOKEN_ETH,
     process.env.KASH_TOKEN_ETH,
+    process.env.NEXT_PUBLIC_KASH_YIELD_ETH_ADDRESS,
+    process.env.KASH_YIELD_ETH_ADDRESS,
   ),
   kashYieldBtc: pickAddr(
     process.env.NEXT_PUBLIC_KASH_YIELD_BTC_ADDRESS,
@@ -29,6 +32,8 @@ export const CONTRACTS = {
   kashTokenBtc: pickAddr(
     process.env.NEXT_PUBLIC_KASH_TOKEN_BTC,
     process.env.KASH_TOKEN_BTC,
+    process.env.NEXT_PUBLIC_KASH_YIELD_BTC_ADDRESS,
+    process.env.KASH_YIELD_BTC_ADDRESS,
   ),
   mockWbtc: pickAddr(
     process.env.NEXT_PUBLIC_MOCK_WBTC,
@@ -86,8 +91,6 @@ export function isConfiguredAddress(address: `0x${string}`): boolean {
   return address !== ZERO_ADDRESS && /^0x[0-9a-fA-F]{40}$/.test(address);
 }
 
-export const hasBtcProduct = (): boolean =>
-  isConfiguredAddress(CONTRACTS.kashYieldBtc) && isConfiguredAddress(CONTRACTS.kashTokenBtc);
+export const hasBtcProduct = (): boolean => isConfiguredAddress(CONTRACTS.kashYieldBtc);
 
-export const hasEthProduct = (): boolean =>
-  isConfiguredAddress(CONTRACTS.kashYieldEth) && isConfiguredAddress(CONTRACTS.kashTokenEth);
+export const hasEthProduct = (): boolean => isConfiguredAddress(CONTRACTS.kashYieldEth);

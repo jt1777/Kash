@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useReadContract } from 'wagmi';
 import { CONTRACTS } from '@/lib/contracts/addresses';
-import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
+import { vaultAbi } from '@/lib/contracts/vaultAbi';
 
 function getUtcTimeString(): string {
   const now = new Date();
@@ -25,13 +25,13 @@ export function StatusIndicator({ product = 'eth' }: { product?: Product }) {
   }, []);
   const { data: isUserWindow } = useReadContract({
     address: kashYield,
-    abi: kashYieldABI,
+    abi: vaultAbi(product),
     functionName: 'isUserWindow',
   });
 
   const { data: isProcessingWindow } = useReadContract({
     address: kashYield,
-    abi: kashYieldABI,
+    abi: vaultAbi(product),
     functionName: 'isProcessingWindow',
   });
 

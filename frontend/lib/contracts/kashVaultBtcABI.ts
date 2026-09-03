@@ -1,94 +1,132 @@
-// Legacy KashYieldETH + KashYieldBtc merged ABI (pre-4626). New vaults use kashVaultEthABI.ts / kashVaultBtcABI.ts.
-export const kashYieldABI = [
+// Auto-generated from artifacts/contracts/KashVaultBtc.sol/KashVaultBtc.json — do not edit by hand.
+// Regenerate: npx hardhat compile && node scripts/export-kash-vault-abi.js
+export const kashVaultBtcABI = [
   {
     "inputs": [
       {
-        "internalType": "address",
-        "name": "_botAddress",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "_weth",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "_usdc",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "_exchangeFacade",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "_spotDex",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "_ethOracle",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "_keeperRegistry",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "_feeReceiver",
-        "type": "address"
-      },
-      {
-        "internalType": "uint256",
-        "name": "_cycleDurationSeconds",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "_userWindowEnd",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "_processingWindowStart",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "_maxSwapSlippageBps",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "_feeBps",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "_maxMintUsers",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "_maxRedeemUsers",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "_redeemPayoutBufferBps",
-        "type": "uint256"
+        "components": [
+          {
+            "internalType": "address",
+            "name": "owner",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "bot",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "watcher",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "asset",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "usdc",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "exchangeFacade",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "spotDex",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "assetOracle",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "keeperRegistry",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "feeReceiver",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "aavePool",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "aToken",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "variableDebtUsdc",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "asterClearingHouse",
+            "type": "address"
+          },
+          {
+            "internalType": "uint256",
+            "name": "cycleDurationSeconds",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "userWindowEnd",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "processingWindowStart",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "maxSwapSlippageBps",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "feeBps",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "maxDepositUsers",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "maxRedeemUsers",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "redeemPayoutBufferBps",
+            "type": "uint256"
+          }
+        ],
+        "internalType": "struct KashVault.Init",
+        "name": "i",
+        "type": "tuple"
       }
     ],
-    "stateMutability": "payable",
+    "stateMutability": "nonpayable",
     "type": "constructor"
   },
   {
     "inputs": [],
-    "name": "AlreadyClaimed",
+    "name": "AlreadyPaused",
     "type": "error"
   },
   {
@@ -108,12 +146,108 @@ export const kashYieldABI = [
   },
   {
     "inputs": [],
+    "name": "ClaimsNotOpen",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ContractPaused",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "spender",
+        "type": "address"
+      },
+      {
+        "internalType": "uint256",
+        "name": "allowance",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "needed",
+        "type": "uint256"
+      }
+    ],
+    "name": "ERC20InsufficientAllowance",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "sender",
+        "type": "address"
+      },
+      {
+        "internalType": "uint256",
+        "name": "balance",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "needed",
+        "type": "uint256"
+      }
+    ],
+    "name": "ERC20InsufficientBalance",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "approver",
+        "type": "address"
+      }
+    ],
+    "name": "ERC20InvalidApprover",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "receiver",
+        "type": "address"
+      }
+    ],
+    "name": "ERC20InvalidReceiver",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "sender",
+        "type": "address"
+      }
+    ],
+    "name": "ERC20InvalidSender",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "spender",
+        "type": "address"
+      }
+    ],
+    "name": "ERC20InvalidSpender",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "ExceedsAllocation",
     "type": "error"
   },
   {
     "inputs": [],
-    "name": "ExceedsMintEthForCycle",
+    "name": "ExceedsMintAssetForCycle",
     "type": "error"
   },
   {
@@ -123,17 +257,7 @@ export const kashYieldABI = [
   },
   {
     "inputs": [],
-    "name": "InsufficientEthForRedeems",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "InsufficientEthInContract",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "InsufficientKashEth",
+    "name": "InsufficientAssetsForRedeems",
     "type": "error"
   },
   {
@@ -143,22 +267,7 @@ export const kashYieldABI = [
   },
   {
     "inputs": [],
-    "name": "InvalidMerkleRoot",
-    "type": "error"
-  },
-  {
-    "inputs": [],
     "name": "InvalidNAV",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "InvalidPrice",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "InvalidProof",
     "type": "error"
   },
   {
@@ -178,6 +287,16 @@ export const kashYieldABI = [
   },
   {
     "inputs": [],
+    "name": "NAVDeviationTooLarge",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "NPlusOneHoldNotMet",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "NoRequest",
     "type": "error"
   },
@@ -188,7 +307,17 @@ export const kashYieldABI = [
   },
   {
     "inputs": [],
+    "name": "NotPaused",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "OnlyBotOrKeeper",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OnlyOwner",
     "type": "error"
   },
   {
@@ -199,6 +328,11 @@ export const kashYieldABI = [
   {
     "inputs": [],
     "name": "PhaseAlreadyStarted",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "PreviewNotSupported",
     "type": "error"
   },
   {
@@ -229,12 +363,12 @@ export const kashYieldABI = [
   },
   {
     "inputs": [],
-    "name": "SlippageExceeded",
+    "name": "SettlementDeviationTooLarge",
     "type": "error"
   },
   {
     "inputs": [],
-    "name": "UseBotPhase2",
+    "name": "Unauthorized",
     "type": "error"
   },
   {
@@ -251,6 +385,31 @@ export const kashYieldABI = [
     "inputs": [],
     "name": "ZeroAmount",
     "type": "error"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "owner",
+        "type": "address"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "spender",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "value",
+        "type": "uint256"
+      }
+    ],
+    "name": "Approval",
+    "type": "event"
   },
   {
     "anonymous": false,
@@ -306,6 +465,93 @@ export const kashYieldABI = [
       }
     ],
     "name": "BatchProcessed",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "previousBot",
+        "type": "address"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "newBot",
+        "type": "address"
+      }
+    ],
+    "name": "BotAddressSet",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "controller",
+        "type": "address"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "receiver",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "assets",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "shares",
+        "type": "uint256"
+      }
+    ],
+    "name": "Deposit",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "controller",
+        "type": "address"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "owner",
+        "type": "address"
+      },
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "requestId",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "address",
+        "name": "sender",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "assets",
+        "type": "uint256"
+      }
+    ],
+    "name": "DepositRequest",
     "type": "event"
   },
   {
@@ -388,6 +634,25 @@ export const kashYieldABI = [
     "anonymous": false,
     "inputs": [
       {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "newNAV",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "anchorNAV",
+        "type": "uint256"
+      }
+    ],
+    "name": "NavCorrected",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
         "indexed": true,
         "internalType": "uint256",
         "name": "batchCycle",
@@ -395,24 +660,24 @@ export const kashYieldABI = [
       },
       {
         "indexed": false,
-        "internalType": "bytes32",
-        "name": "root",
-        "type": "bytes32"
-      },
-      {
-        "indexed": false,
         "internalType": "uint256",
-        "name": "totalMintClaimable",
+        "name": "settlementNAV",
         "type": "uint256"
       },
       {
         "indexed": false,
         "internalType": "uint256",
-        "name": "claimDeadline",
+        "name": "anchorNAV",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "deviationBps",
         "type": "uint256"
       }
     ],
-    "name": "MintMerkleRootCommitted",
+    "name": "NavMonitorTripped",
     "type": "event"
   },
   {
@@ -421,79 +686,36 @@ export const kashYieldABI = [
       {
         "indexed": true,
         "internalType": "address",
-        "name": "user",
+        "name": "controller",
+        "type": "address"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "operator",
         "type": "address"
       },
       {
         "indexed": false,
-        "internalType": "uint256",
-        "name": "amountIn",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "batchCycle",
-        "type": "uint256"
+        "internalType": "bool",
+        "name": "approved",
+        "type": "bool"
       }
     ],
-    "name": "MintRequested",
+    "name": "OperatorSet",
     "type": "event"
   },
   {
     "anonymous": false,
     "inputs": [
       {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "newNAV",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "usdcBalance",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "assetBalance",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "perpPnL",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "timestamp",
-        "type": "uint256"
+        "indexed": true,
+        "internalType": "address",
+        "name": "account",
+        "type": "address"
       }
     ],
-    "name": "NAVProposedAndUpdated",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "newNAV",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "timestamp",
-        "type": "uint256"
-      }
-    ],
-    "name": "NAVUpdateExecuted",
+    "name": "Paused",
     "type": "event"
   },
   {
@@ -526,30 +748,36 @@ export const kashYieldABI = [
     "inputs": [
       {
         "indexed": true,
+        "internalType": "address",
+        "name": "controller",
+        "type": "address"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "owner",
+        "type": "address"
+      },
+      {
+        "indexed": true,
         "internalType": "uint256",
-        "name": "batchCycle",
+        "name": "requestId",
         "type": "uint256"
       },
       {
         "indexed": false,
-        "internalType": "bytes32",
-        "name": "root",
-        "type": "bytes32"
+        "internalType": "address",
+        "name": "sender",
+        "type": "address"
       },
       {
         "indexed": false,
         "internalType": "uint256",
-        "name": "totalNetClaimable",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "claimDeadline",
+        "name": "shares",
         "type": "uint256"
       }
     ],
-    "name": "RedeemMerkleRootCommitted",
+    "name": "RedeemRequest",
     "type": "event"
   },
   {
@@ -558,23 +786,23 @@ export const kashYieldABI = [
       {
         "indexed": true,
         "internalType": "address",
-        "name": "user",
+        "name": "from",
+        "type": "address"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "to",
         "type": "address"
       },
       {
         "indexed": false,
         "internalType": "uint256",
-        "name": "kashAmount",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "batchCycle",
+        "name": "value",
         "type": "uint256"
       }
     ],
-    "name": "RedeemRequested",
+    "name": "Transfer",
     "type": "event"
   },
   {
@@ -583,30 +811,75 @@ export const kashYieldABI = [
       {
         "indexed": true,
         "internalType": "address",
-        "name": "user",
+        "name": "account",
+        "type": "address"
+      }
+    ],
+    "name": "Unpaused",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "previousWatcher",
         "type": "address"
       },
       {
         "indexed": true,
         "internalType": "address",
-        "name": "token",
+        "name": "newWatcher",
+        "type": "address"
+      }
+    ],
+    "name": "WatcherAddressSet",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "controller",
+        "type": "address"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "receiver",
         "type": "address"
       },
       {
         "indexed": false,
         "internalType": "uint256",
-        "name": "amount",
+        "name": "assets",
         "type": "uint256"
       },
       {
         "indexed": false,
-        "internalType": "bool",
-        "name": "isMint",
-        "type": "bool"
+        "internalType": "uint256",
+        "name": "shares",
+        "type": "uint256"
       }
     ],
-    "name": "TokensClaimed",
+    "name": "Withdraw",
     "type": "event"
+  },
+  {
+    "inputs": [],
+    "name": "BPS_DENOM",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
   },
   {
     "inputs": [],
@@ -623,20 +896,7 @@ export const kashYieldABI = [
   },
   {
     "inputs": [],
-    "name": "ETH_ADDRESS",
-    "outputs": [
-      {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "ETH_DECIMALS",
+    "name": "CLAIM_HOLD_SECONDS",
     "outputs": [
       {
         "internalType": "uint256",
@@ -649,12 +909,103 @@ export const kashYieldABI = [
   },
   {
     "inputs": [],
-    "name": "VERSION",
+    "name": "CORRECT_NAV_MAX_DEVIATION_BPS",
     "outputs": [
       {
-        "internalType": "string",
+        "internalType": "uint256",
         "name": "",
-        "type": "string"
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "NAV_MAX_DEVIATION_BPS",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "ORACLE_MAX_STALENESS",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "PAUSE_TIMELOCK_SECONDS",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "SETTLEMENT_DEVIATION_BPS",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "VIRTUAL_ASSETS",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "VIRTUAL_SHARES",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "aTokenAddress",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
       }
     ],
     "stateMutability": "view",
@@ -681,7 +1032,7 @@ export const kashYieldABI = [
         "type": "uint256"
       }
     ],
-    "name": "activeMintUsers",
+    "name": "activeDepositUsers",
     "outputs": [
       {
         "internalType": "uint256",
@@ -727,6 +1078,54 @@ export const kashYieldABI = [
   {
     "inputs": [
       {
+        "internalType": "address",
+        "name": "owner",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "spender",
+        "type": "address"
+      }
+    ],
+    "name": "allowance",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "spender",
+        "type": "address"
+      },
+      {
+        "internalType": "uint256",
+        "name": "value",
+        "type": "uint256"
+      }
+    ],
+    "name": "approve",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
         "internalType": "uint256",
         "name": "amount",
         "type": "uint256"
@@ -735,6 +1134,90 @@ export const kashYieldABI = [
     "name": "approveExchangeFacadeUsdc",
     "outputs": [],
     "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "asset",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "assetDecimals",
+    "outputs": [
+      {
+        "internalType": "uint8",
+        "name": "",
+        "type": "uint8"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "assetOracle",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "assetToken",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "asterClearingHouse",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "account",
+        "type": "address"
+      }
+    ],
+    "name": "balanceOf",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
     "type": "function"
   },
   {
@@ -747,16 +1230,6 @@ export const kashYieldABI = [
     ],
     "name": "batchClaimInfo",
     "outputs": [
-      {
-        "internalType": "bytes32",
-        "name": "redeemMerkleRoot",
-        "type": "bytes32"
-      },
-      {
-        "internalType": "bytes32",
-        "name": "mintMerkleRoot",
-        "type": "bytes32"
-      },
       {
         "internalType": "uint256",
         "name": "totalNetClaimable",
@@ -802,6 +1275,30 @@ export const kashYieldABI = [
         "internalType": "uint256",
         "name": "",
         "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "name": "batchDepositUsers",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
       }
     ],
     "name": "batchIndicativeNAV",
@@ -823,7 +1320,7 @@ export const kashYieldABI = [
         "type": "uint256"
       }
     ],
-    "name": "batchMintEthDeployedToAave",
+    "name": "batchMintAssetDeployed",
     "outputs": [
       {
         "internalType": "uint256",
@@ -842,31 +1339,7 @@ export const kashYieldABI = [
         "type": "uint256"
       }
     ],
-    "name": "batchMintEthPrice",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      },
-      {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "name": "batchMintKashAllocation",
+    "name": "batchMintAssetPrice",
     "outputs": [
       {
         "internalType": "uint256",
@@ -890,36 +1363,12 @@ export const kashYieldABI = [
         "type": "address"
       }
     ],
-    "name": "batchMintKashReleased",
+    "name": "batchMintSharesReleased",
     "outputs": [
       {
         "internalType": "uint256",
         "name": "",
         "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "name": "batchMintUsers",
-    "outputs": [
-      {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
       }
     ],
     "stateMutability": "view",
@@ -958,30 +1407,6 @@ export const kashYieldABI = [
         "internalType": "bool",
         "name": "",
         "type": "bool"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      },
-      {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "name": "batchRedeemNetAsset",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
       }
     ],
     "stateMutability": "view",
@@ -1043,7 +1468,7 @@ export const kashYieldABI = [
         "type": "uint256"
       }
     ],
-    "name": "batchTotalMintEth",
+    "name": "batchTotalMintAsset",
     "outputs": [
       {
         "internalType": "uint256",
@@ -1081,7 +1506,7 @@ export const kashYieldABI = [
         "type": "uint256"
       }
     ],
-    "name": "batchTotalRedeemKash",
+    "name": "batchTotalRedeemShares",
     "outputs": [
       {
         "internalType": "uint256",
@@ -1115,7 +1540,7 @@ export const kashYieldABI = [
     "inputs": [
       {
         "internalType": "address",
-        "name": "asset",
+        "name": "token",
         "type": "address"
       },
       {
@@ -1146,11 +1571,16 @@ export const kashYieldABI = [
     "inputs": [
       {
         "internalType": "uint256",
-        "name": "batchCycle",
+        "name": "requestId",
         "type": "uint256"
+      },
+      {
+        "internalType": "address",
+        "name": "controller",
+        "type": "address"
       }
     ],
-    "name": "cancelMintRequest",
+    "name": "cancelDepositRequest",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
@@ -1159,8 +1589,13 @@ export const kashYieldABI = [
     "inputs": [
       {
         "internalType": "uint256",
-        "name": "batchCycle",
+        "name": "requestId",
         "type": "uint256"
+      },
+      {
+        "internalType": "address",
+        "name": "controller",
+        "type": "address"
       }
     ],
     "name": "cancelRedeemRequest",
@@ -1171,22 +1606,17 @@ export const kashYieldABI = [
   {
     "inputs": [
       {
-        "internalType": "bytes",
+        "internalType": "uint256",
         "name": "",
-        "type": "bytes"
+        "type": "uint256"
       }
     ],
-    "name": "checkUpkeep",
+    "name": "claimOpenAt",
     "outputs": [
       {
-        "internalType": "bool",
-        "name": "upkeepNeeded",
-        "type": "bool"
-      },
-      {
-        "internalType": "bytes",
-        "name": "performData",
-        "type": "bytes"
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
       }
     ],
     "stateMutability": "view",
@@ -1196,44 +1626,97 @@ export const kashYieldABI = [
     "inputs": [
       {
         "internalType": "uint256",
-        "name": "batchCycle",
+        "name": "requestId",
         "type": "uint256"
       },
       {
-        "internalType": "uint256",
-        "name": "kashAmount",
-        "type": "uint256"
-      },
-      {
-        "internalType": "bytes32[]",
-        "name": "proof",
-        "type": "bytes32[]"
+        "internalType": "address",
+        "name": "controller",
+        "type": "address"
       }
     ],
-    "name": "claimMint",
-    "outputs": [],
-    "stateMutability": "nonpayable",
+    "name": "claimableDepositRequest",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
     "type": "function"
   },
   {
     "inputs": [
       {
         "internalType": "uint256",
-        "name": "batchCycle",
+        "name": "requestId",
         "type": "uint256"
       },
       {
-        "internalType": "uint256",
-        "name": "ethAmount",
-        "type": "uint256"
-      },
-      {
-        "internalType": "bytes32[]",
-        "name": "proof",
-        "type": "bytes32[]"
+        "internalType": "address",
+        "name": "controller",
+        "type": "address"
       }
     ],
-    "name": "claimRedeem",
+    "name": "claimableRedeemRequest",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "shares",
+        "type": "uint256"
+      }
+    ],
+    "name": "convertToAssets",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "assets",
+        "type": "uint256"
+      }
+    ],
+    "name": "convertToShares",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "newNAV",
+        "type": "uint256"
+      }
+    ],
+    "name": "correctNAV",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
@@ -1268,18 +1751,24 @@ export const kashYieldABI = [
     "inputs": [
       {
         "internalType": "uint256",
-        "name": "amount",
+        "name": "",
         "type": "uint256"
       }
     ],
-    "name": "depositToAave",
-    "outputs": [],
-    "stateMutability": "nonpayable",
+    "name": "cycleStartNAV",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
     "type": "function"
   },
   {
     "inputs": [],
-    "name": "ethDecimals",
+    "name": "decimals",
     "outputs": [
       {
         "internalType": "uint8",
@@ -1287,20 +1776,73 @@ export const kashYieldABI = [
         "type": "uint8"
       }
     ],
-    "stateMutability": "view",
+    "stateMutability": "pure",
     "type": "function"
   },
   {
-    "inputs": [],
-    "name": "ethOracle",
-    "outputs": [
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "assets",
+        "type": "uint256"
+      },
       {
         "internalType": "address",
-        "name": "",
+        "name": "receiver",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "controller",
         "type": "address"
       }
     ],
-    "stateMutability": "view",
+    "name": "deposit",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "shares",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "assets",
+        "type": "uint256"
+      },
+      {
+        "internalType": "address",
+        "name": "receiver",
+        "type": "address"
+      }
+    ],
+    "name": "deposit",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "shares",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "amount",
+        "type": "uint256"
+      }
+    ],
+    "name": "depositToAave",
+    "outputs": [],
+    "stateMutability": "nonpayable",
     "type": "function"
   },
   {
@@ -1343,43 +1885,25 @@ export const kashYieldABI = [
     "type": "function"
   },
   {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "batchCycle",
-        "type": "uint256"
-      }
-    ],
-    "name": "getBatchInfo",
+    "inputs": [],
+    "name": "getAssetPrice",
     "outputs": [
       {
         "internalType": "uint256",
-        "name": "totalMintUSD",
+        "name": "",
         "type": "uint256"
-      },
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "getBtcPrice",
+    "outputs": [
       {
         "internalType": "uint256",
-        "name": "totalRedeemUSD",
-        "type": "uint256"
-      },
-      {
-        "internalType": "bool",
-        "name": "processed",
-        "type": "bool"
-      },
-      {
-        "internalType": "uint256",
-        "name": "mintUsersCount",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "redeemUsersCount",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "totalRedeemKash",
+        "name": "",
         "type": "uint256"
       }
     ],
@@ -1389,56 +1913,6 @@ export const kashYieldABI = [
   {
     "inputs": [],
     "name": "getCurrentBatchCycle",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "getEthPrice",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "getExchangeAssetBalance",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "user",
-        "type": "address"
-      },
-      {
-        "internalType": "uint256",
-        "name": "batchCycle",
-        "type": "uint256"
-      }
-    ],
-    "name": "getMintRequestUSD",
     "outputs": [
       {
         "internalType": "uint256",
@@ -1465,140 +1939,6 @@ export const kashYieldABI = [
   {
     "inputs": [
       {
-        "internalType": "address",
-        "name": "user",
-        "type": "address"
-      },
-      {
-        "internalType": "uint256",
-        "name": "batchCycle",
-        "type": "uint256"
-      }
-    ],
-    "name": "getPendingMintRequest",
-    "outputs": [
-      {
-        "components": [
-          {
-            "internalType": "address",
-            "name": "user",
-            "type": "address"
-          },
-          {
-            "internalType": "uint256",
-            "name": "amountIn",
-            "type": "uint256"
-          },
-          {
-            "internalType": "uint256",
-            "name": "batchCycle",
-            "type": "uint256"
-          }
-        ],
-        "internalType": "struct KashYieldETH.MintRequest",
-        "name": "",
-        "type": "tuple"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "user",
-        "type": "address"
-      },
-      {
-        "internalType": "uint256",
-        "name": "batchCycle",
-        "type": "uint256"
-      }
-    ],
-    "name": "getPendingRedeemRequest",
-    "outputs": [
-      {
-        "components": [
-          {
-            "internalType": "address",
-            "name": "user",
-            "type": "address"
-          },
-          {
-            "internalType": "uint256",
-            "name": "kashAmount",
-            "type": "uint256"
-          },
-          {
-            "internalType": "uint256",
-            "name": "batchCycle",
-            "type": "uint256"
-          }
-        ],
-        "internalType": "struct KashYieldETH.RedeemRequest",
-        "name": "",
-        "type": "tuple"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "string",
-        "name": "symbol",
-        "type": "string"
-      }
-    ],
-    "name": "getPerpExchangePosition",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "size",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "collateral",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "entryPrice",
-        "type": "uint256"
-      },
-      {
-        "internalType": "bool",
-        "name": "isLong",
-        "type": "bool"
-      },
-      {
-        "internalType": "bool",
-        "name": "isActive",
-        "type": "bool"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "getPerpExchangeSpotBalance",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
         "internalType": "uint256",
         "name": "",
         "type": "uint256"
@@ -1609,7 +1949,7 @@ export const kashYieldABI = [
         "type": "address"
       }
     ],
-    "name": "isInBatchMint",
+    "name": "isInBatchDeposit",
     "outputs": [
       {
         "internalType": "bool",
@@ -1634,6 +1974,30 @@ export const kashYieldABI = [
       }
     ],
     "name": "isInBatchRedeem",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "controller",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "operator",
+        "type": "address"
+      }
+    ],
+    "name": "isOperator",
     "outputs": [
       {
         "internalType": "bool",
@@ -1672,19 +2036,6 @@ export const kashYieldABI = [
   },
   {
     "inputs": [],
-    "name": "kashTokenEth",
-    "outputs": [
-      {
-        "internalType": "contract KashTokenEth",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
     "name": "keeperRegistry",
     "outputs": [
       {
@@ -1698,7 +2049,26 @@ export const kashYieldABI = [
   },
   {
     "inputs": [],
-    "name": "lockedClaimEth",
+    "name": "lastAssetPrice",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "name": "lastMintCycle",
     "outputs": [
       {
         "internalType": "uint256",
@@ -1711,7 +2081,7 @@ export const kashYieldABI = [
   },
   {
     "inputs": [],
-    "name": "lockedClaimKash",
+    "name": "lockedClaimAsset",
     "outputs": [
       {
         "internalType": "uint256",
@@ -1727,11 +2097,6 @@ export const kashYieldABI = [
       {
         "internalType": "uint256",
         "name": "batchCycle",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "grossRedeemAssetAmount",
         "type": "uint256"
       }
     ],
@@ -1753,14 +2118,71 @@ export const kashYieldABI = [
         "type": "uint256"
       }
     ],
-    "name": "markMintEthDeployed",
+    "name": "markMintAssetDeployed",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
   },
   {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "controller",
+        "type": "address"
+      }
+    ],
+    "name": "maxDeposit",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [],
-    "name": "maxMintUsers",
+    "name": "maxDepositUsers",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "controller",
+        "type": "address"
+      }
+    ],
+    "name": "maxMint",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "controller",
+        "type": "address"
+      }
+    ],
+    "name": "maxRedeem",
     "outputs": [
       {
         "internalType": "uint256",
@@ -1800,22 +2222,177 @@ export const kashYieldABI = [
   {
     "inputs": [
       {
+        "internalType": "address",
+        "name": "controller",
+        "type": "address"
+      }
+    ],
+    "name": "maxWithdraw",
+    "outputs": [
+      {
         "internalType": "uint256",
         "name": "",
         "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "shares",
+        "type": "uint256"
       },
+      {
+        "internalType": "address",
+        "name": "receiver",
+        "type": "address"
+      }
+    ],
+    "name": "mint",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "assets",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "shares",
+        "type": "uint256"
+      },
+      {
+        "internalType": "address",
+        "name": "receiver",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "controller",
+        "type": "address"
+      }
+    ],
+    "name": "mint",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "assets",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "name",
+    "outputs": [
+      {
+        "internalType": "string",
+        "name": "",
+        "type": "string"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "owner",
+    "outputs": [
       {
         "internalType": "address",
         "name": "",
         "type": "address"
       }
     ],
-    "name": "mintClaimed",
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "pause",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "paused",
     "outputs": [
       {
         "internalType": "bool",
         "name": "",
         "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "pausedAt",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "requestId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "address",
+        "name": "controller",
+        "type": "address"
+      }
+    ],
+    "name": "pendingDepositRequest",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "requestId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "address",
+        "name": "controller",
+        "type": "address"
+      }
+    ],
+    "name": "pendingRedeemRequest",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
       }
     ],
     "stateMutability": "view",
@@ -1835,16 +2412,79 @@ export const kashYieldABI = [
     "type": "function"
   },
   {
-    "inputs": [],
-    "name": "perpExchangeAddress",
-    "outputs": [
+    "inputs": [
       {
-        "internalType": "address",
+        "internalType": "uint256",
         "name": "",
-        "type": "address"
+        "type": "uint256"
       }
     ],
-    "stateMutability": "view",
+    "name": "previewDeposit",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "pure",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "name": "previewMint",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "pure",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "name": "previewRedeem",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "pure",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "name": "previewWithdraw",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "pure",
     "type": "function"
   },
   {
@@ -1853,16 +2493,6 @@ export const kashYieldABI = [
         "internalType": "uint256",
         "name": "batchCycle",
         "type": "uint256"
-      },
-      {
-        "internalType": "bytes32",
-        "name": "redeemMerkleRoot",
-        "type": "bytes32"
-      },
-      {
-        "internalType": "bytes32",
-        "name": "mintMerkleRoot",
-        "type": "bytes32"
       }
     ],
     "name": "processBatchPhase2ForCycle",
@@ -1887,24 +2517,53 @@ export const kashYieldABI = [
     "inputs": [
       {
         "internalType": "uint256",
-        "name": "",
+        "name": "shares",
         "type": "uint256"
       },
       {
         "internalType": "address",
-        "name": "",
+        "name": "receiver",
         "type": "address"
       }
     ],
-    "name": "redeemClaimed",
+    "name": "redeem",
     "outputs": [
       {
-        "internalType": "bool",
+        "internalType": "uint256",
         "name": "",
-        "type": "bool"
+        "type": "uint256"
       }
     ],
-    "stateMutability": "view",
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "shares",
+        "type": "uint256"
+      },
+      {
+        "internalType": "address",
+        "name": "receiver",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "controller",
+        "type": "address"
+      }
+    ],
+    "name": "redeem",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "assets",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable",
     "type": "function"
   },
   {
@@ -1936,32 +2595,14 @@ export const kashYieldABI = [
         "internalType": "uint256",
         "name": "amount",
         "type": "uint256"
-      }
-    ],
-    "name": "releaseExpiredMint",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "batchCycle",
-        "type": "uint256"
       },
       {
-        "internalType": "address",
-        "name": "user",
-        "type": "address"
-      },
-      {
-        "internalType": "uint256",
-        "name": "amount",
-        "type": "uint256"
+        "internalType": "bool",
+        "name": "isMint",
+        "type": "bool"
       }
     ],
-    "name": "releaseExpiredRedeem",
+    "name": "releaseExpired",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
@@ -1970,7 +2611,7 @@ export const kashYieldABI = [
     "inputs": [
       {
         "internalType": "address",
-        "name": "asset",
+        "name": "token",
         "type": "address"
       },
       {
@@ -1988,26 +2629,121 @@ export const kashYieldABI = [
     "inputs": [
       {
         "internalType": "uint256",
-        "name": "amount",
+        "name": "assets",
+        "type": "uint256"
+      },
+      {
+        "internalType": "address",
+        "name": "controller",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "owner_",
+        "type": "address"
+      }
+    ],
+    "name": "requestDeposit",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "requestId",
         "type": "uint256"
       }
     ],
-    "name": "requestMint",
-    "outputs": [],
-    "stateMutability": "payable",
+    "stateMutability": "nonpayable",
     "type": "function"
   },
   {
     "inputs": [
       {
         "internalType": "uint256",
-        "name": "kashAmount",
+        "name": "shares",
         "type": "uint256"
+      },
+      {
+        "internalType": "address",
+        "name": "controller",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "owner_",
+        "type": "address"
       }
     ],
     "name": "requestRedeem",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "requestId",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "newBot",
+        "type": "address"
+      }
+    ],
+    "name": "setBotAddress",
     "outputs": [],
     "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "operator",
+        "type": "address"
+      },
+      {
+        "internalType": "bool",
+        "name": "approved",
+        "type": "bool"
+      }
+    ],
+    "name": "setOperator",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "newWatcher",
+        "type": "address"
+      }
+    ],
+    "name": "setWatcherAddress",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "share",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
     "type": "function"
   },
   {
@@ -2026,8 +2762,27 @@ export const kashYieldABI = [
   {
     "inputs": [
       {
+        "internalType": "bytes4",
+        "name": "id",
+        "type": "bytes4"
+      }
+    ],
+    "name": "supportsInterface",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "pure",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
         "internalType": "uint256",
-        "name": "ethAmount",
+        "name": "assetAmount",
         "type": "uint256"
       },
       {
@@ -2065,35 +2820,60 @@ export const kashYieldABI = [
         "internalType": "uint256",
         "name": "batchCycle",
         "type": "uint256"
+      },
+      {
+        "internalType": "bool",
+        "name": "isMint",
+        "type": "bool"
       }
     ],
-    "name": "sweepExpiredClaims",
+    "name": "sweepExpired",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
   },
   {
-    "inputs": [
+    "inputs": [],
+    "name": "symbol",
+    "outputs": [
+      {
+        "internalType": "string",
+        "name": "",
+        "type": "string"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "totalAssets",
+    "outputs": [
       {
         "internalType": "uint256",
-        "name": "batchCycle",
+        "name": "",
         "type": "uint256"
       }
     ],
-    "name": "sweepExpiredMintClaims",
-    "outputs": [],
-    "stateMutability": "nonpayable",
+    "stateMutability": "view",
     "type": "function"
   },
   {
-    "inputs": [
+    "inputs": [],
+    "name": "totalPendingDepositAssets",
+    "outputs": [
       {
-        "internalType": "address",
+        "internalType": "uint256",
         "name": "",
-        "type": "address"
+        "type": "uint256"
       }
     ],
-    "name": "totalDepositedEthByUser",
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "totalSupply",
     "outputs": [
       {
         "internalType": "uint256",
@@ -2108,45 +2888,58 @@ export const kashYieldABI = [
     "inputs": [
       {
         "internalType": "address",
-        "name": "",
+        "name": "to",
         "type": "address"
-      }
-    ],
-    "name": "totalRedeemedEthByUser",
-    "outputs": [
+      },
       {
         "internalType": "uint256",
-        "name": "",
+        "name": "value",
         "type": "uint256"
       }
     ],
-    "stateMutability": "view",
+    "name": "transfer",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "nonpayable",
     "type": "function"
   },
   {
     "inputs": [
       {
-        "internalType": "uint256",
-        "name": "newNAV",
-        "type": "uint256"
+        "internalType": "address",
+        "name": "from",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "to",
+        "type": "address"
       },
       {
         "internalType": "uint256",
-        "name": "usdcBalance",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "assetBalance",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "perpPnL",
+        "name": "value",
         "type": "uint256"
       }
     ],
-    "name": "updateNAV",
+    "name": "transferFrom",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "unpause",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
@@ -2159,74 +2952,6 @@ export const kashYieldABI = [
         "internalType": "address",
         "name": "",
         "type": "address"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
-      },
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "name": "userMintRequests",
-    "outputs": [
-      {
-        "internalType": "address",
-        "name": "user",
-        "type": "address"
-      },
-      {
-        "internalType": "uint256",
-        "name": "amountIn",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "batchCycle",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
-      },
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "name": "userRedeemRequests",
-    "outputs": [
-      {
-        "internalType": "address",
-        "name": "user",
-        "type": "address"
-      },
-      {
-        "internalType": "uint256",
-        "name": "kashAmount",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "batchCycle",
-        "type": "uint256"
       }
     ],
     "stateMutability": "view",
@@ -2247,7 +2972,7 @@ export const kashYieldABI = [
   },
   {
     "inputs": [],
-    "name": "wethAddress",
+    "name": "variableDebtUsdc",
     "outputs": [
       {
         "internalType": "address",
@@ -2256,6 +2981,72 @@ export const kashYieldABI = [
       }
     ],
     "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "watcher",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "assets",
+        "type": "uint256"
+      },
+      {
+        "internalType": "address",
+        "name": "receiver",
+        "type": "address"
+      }
+    ],
+    "name": "withdraw",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "assets",
+        "type": "uint256"
+      },
+      {
+        "internalType": "address",
+        "name": "receiver",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "controller",
+        "type": "address"
+      }
+    ],
+    "name": "withdraw",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "shares",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable",
     "type": "function"
   },
   {
@@ -2269,356 +3060,6 @@ export const kashYieldABI = [
     "name": "withdrawFromAave",
     "outputs": [],
     "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "stateMutability": "payable",
-    "type": "receive"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "_botAddress",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "_wbtc",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "_usdc",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "_exchangeFacade",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "_spotDex",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "_btcOracle",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "_keeperRegistry",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "_feeReceiver",
-        "type": "address"
-      },
-      {
-        "internalType": "uint256",
-        "name": "_cycleDurationSeconds",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "_userWindowEnd",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "_processingWindowStart",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "_maxSwapSlippageBps",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "_feeBps",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "_maxMintUsers",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "_maxRedeemUsers",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "_redeemPayoutBufferBps",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "payable",
-    "type": "constructor"
-  },
-  {
-    "inputs": [],
-    "name": "ExceedsMintWbtcForCycle",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "InsufficientKashBtc",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "InsufficientWbtcForRedeems",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "WBTC_DECIMALS",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "name": "batchMintBtcDeployedToAave",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "name": "batchMintBtcPrice",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "name": "batchTotalMintBtc",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "btcDecimals",
-    "outputs": [
-      {
-        "internalType": "uint8",
-        "name": "",
-        "type": "uint8"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "btcOracle",
-    "outputs": [
-      {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "batchCycle",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "wbtcAmount",
-        "type": "uint256"
-      },
-      {
-        "internalType": "bytes32[]",
-        "name": "proof",
-        "type": "bytes32[]"
-      }
-    ],
-    "name": "claimRedeem",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "getBtcPrice",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "kashTokenBtc",
-    "outputs": [
-      {
-        "internalType": "contract KashTokenBtc",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "lockedClaimWbtc",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "batchCycle",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "amount",
-        "type": "uint256"
-      }
-    ],
-    "name": "markMintBtcDeployed",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "wbtcAmount",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "minOut",
-        "type": "uint256"
-      }
-    ],
-    "name": "swapForUsdc",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "name": "totalDepositedBtcByUser",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "name": "totalRedeemedBtcByUser",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "wbtcAddress",
-    "outputs": [
-      {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
     "type": "function"
   }
 ] as const;

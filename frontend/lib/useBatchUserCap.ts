@@ -1,14 +1,10 @@
 'use client';
 
 import { useReadContract, useReadContracts } from 'wagmi';
-import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
+import { vaultAbi, type VaultProduct } from '@/lib/contracts/vaultAbi';
 import {
   BATCH_USER_CAP,
-  type BatchInfoRow,
-  isBatchProcessed,
   isNewUserBlockedByBatchCap,
-  mintUsersCountFromBatchInfo,
-  redeemUsersCountFromBatchInfo,
 } from '@/lib/batchUserCap';
 
 function readUint(result: unknown): number | null {
@@ -16,10 +12,15 @@ function readUint(result: unknown): number | null {
   return Number(result as bigint);
 }
 
-export function useBatchUserCap(kashYield: `0x${string}` | undefined) {
+export function useBatchUserCap(
+  kashYield: `0x${string}` | undefined,
+  product: VaultProduct = 'eth',
+) {
+  const abi = vaultAbi(product);
+
   const { data: currentBatchCycle } = useReadContract({
     address: kashYield,
-    abi: kashYieldABI,
+    abi,
     functionName: 'getCurrentBatchCycle',
   });
 
@@ -30,24 +31,19 @@ export function useBatchUserCap(kashYield: `0x${string}` | undefined) {
     contracts:
       kashYield && batchCycleArg
         ? [
-            { address: kashYield, abi: kashYieldABI, functionName: 'getBatchInfo', args: batchCycleArg },
-            { address: kashYield, abi: kashYieldABI, functionName: 'activeMintUsers', args: batchCycleArg },
-            { address: kashYield, abi: kashYieldABI, functionName: 'activeRedeemUsers', args: batchCycleArg },
+            { address: kashYield, abi, functionName: 'batchProcessed', args: batchCycleArg },
+            { address: kashYield, abi, functionName: 'activeDepositUsers', args: batchCycleArg },
+            { address: kashYield, abi, functionName: 'activeRedeemUsers', args: batchCycleArg },
           ]
         : [],
     query: { enabled: Boolean(kashYield && batchCycleArg), refetchInterval: 15_000 },
   });
 
-  const batchInfo =
-    reads?.[0]?.status === 'success' ? (reads[0].result as BatchInfoRow) : undefined;
-  const activeMintUsers =
+  const batchProcessed = reads?.[0]?.status === 'success' ? Boolean(reads[0].result) : false;
+  const mintUsersCount =
     reads?.[1]?.status === 'success' ? readUint(reads[1].result) : null;
-  const activeRedeemUsers =
+  const redeemUsersCount =
     reads?.[2]?.status === 'success' ? readUint(reads[2].result) : null;
-
-  const batchProcessed = isBatchProcessed(batchInfo);
-  const mintUsersCount = activeMintUsers ?? mintUsersCountFromBatchInfo(batchInfo);
-  const redeemUsersCount = activeRedeemUsers ?? redeemUsersCountFromBatchInfo(batchInfo);
 
   function mintBlocked(userAlreadyInBatch: boolean): boolean {
     return isNewUserBlockedByBatchCap(mintUsersCount, userAlreadyInBatch, BATCH_USER_CAP) && !batchProcessed;

@@ -2,9 +2,9 @@
 
 import { useMemo } from 'react';
 import { useReadContract, useReadContracts } from 'wagmi';
-import { kashYieldABI } from '@/lib/contracts/kashYieldABI';
+import { vaultAbi, type VaultProduct } from '@/lib/contracts/vaultAbi';
 
-/** Mirrors KashYield CLAIM_EXPIRY_SECONDS (30 days). */
+/** Mirrors KashVault CLAIM_EXPIRY_SECONDS (30 days). */
 export const CLAIM_EXPIRY_SECONDS = 30 * 86400;
 
 /** Fallback when cycleDurationSeconds has not loaded yet (legacy daily batches). */
@@ -19,17 +19,15 @@ export function pendingRequestLookbackCycles(cycleDurationSeconds: number | unde
 export type PendingBatchRequest = {
   batchCycle: bigint;
   amount: bigint;
+  claimableAmount: bigint;
   phase: number;
   processed: boolean;
   canCancel: boolean;
   isStuck: boolean;
+  claimOpenAt: bigint;
 };
 
 type RequestKind = 'mint' | 'redeem';
-
-type BatchInfoResult = readonly [bigint, bigint, boolean, bigint, bigint, bigint];
-type MintPending = { amountIn?: bigint };
-type RedeemPending = { kashAmount?: bigint };
 
 function cyclesForLookback(currentBatchCycle: bigint | undefined, lookback: number): bigint[] {
   if (currentBatchCycle === undefined) return [];
@@ -43,8 +41,13 @@ function cyclesForLookback(currentBatchCycle: bigint | undefined, lookback: numb
   return out;
 }
 
+function asUint(result: unknown): bigint {
+  if (result === undefined || result === null) return 0n;
+  return typeof result === 'bigint' ? result : BigInt(result as string | number);
+}
+
 /**
- * Scans recent batch cycles for an uncleared mint or redeem request.
+ * Scans recent batch cycles for an uncleared deposit or redeem request.
  * Cancel is only allowed when batchPhase === 0 and the batch is not processed.
  */
 export function usePendingBatchRequest(options: {
@@ -52,6 +55,7 @@ export function usePendingBatchRequest(options: {
   userAddress: `0x${string}` | undefined;
   currentBatchCycle: bigint | undefined;
   kind: RequestKind;
+  product: VaultProduct;
   lookback?: number;
   enabled?: boolean;
 }) {
@@ -60,13 +64,16 @@ export function usePendingBatchRequest(options: {
     userAddress,
     currentBatchCycle,
     kind,
+    product,
     lookback: lookbackOverride,
     enabled = true,
   } = options;
 
+  const abi = vaultAbi(product);
+
   const { data: cycleDurationSecondsRaw } = useReadContract({
     address: kashYield,
-    abi: kashYieldABI,
+    abi,
     functionName: 'cycleDurationSeconds',
     query: { enabled: enabled && !!kashYield },
   });
@@ -85,18 +92,26 @@ export function usePendingBatchRequest(options: {
 
   const contracts = useMemo(() => {
     if (!kashYield || !userAddress || cycles.length === 0) return [];
-    const pendingFn = kind === 'mint' ? 'getPendingMintRequest' as const : 'getPendingRedeemRequest' as const;
+    const pendingFn = kind === 'mint' ? 'pendingDepositRequest' as const : 'pendingRedeemRequest' as const;
+    const claimableFn = kind === 'mint' ? 'claimableDepositRequest' as const : 'claimableRedeemRequest' as const;
     return cycles.flatMap((cycle) => [
-      { address: kashYield, abi: kashYieldABI, functionName: 'getBatchInfo' as const, args: [cycle] as const },
-      { address: kashYield, abi: kashYieldABI, functionName: 'batchPhase' as const, args: [cycle] as const },
+      { address: kashYield, abi, functionName: 'batchProcessed' as const, args: [cycle] as const },
+      { address: kashYield, abi, functionName: 'batchPhase' as const, args: [cycle] as const },
       {
         address: kashYield,
-        abi: kashYieldABI,
+        abi,
         functionName: pendingFn,
-        args: [userAddress, cycle] as const,
+        args: [cycle, userAddress] as const,
       },
+      {
+        address: kashYield,
+        abi,
+        functionName: claimableFn,
+        args: [cycle, userAddress] as const,
+      },
+      { address: kashYield, abi, functionName: 'claimOpenAt' as const, args: [cycle] as const },
     ]);
-  }, [kashYield, userAddress, cycles, kind]);
+  }, [kashYield, userAddress, cycles, kind, abi]);
 
   const { data: readResults, refetch, isFetching } = useReadContracts({
     contracts,
@@ -108,42 +123,40 @@ export function usePendingBatchRequest(options: {
 
     const found: PendingBatchRequest[] = [];
     for (let i = 0; i < cycles.length; i++) {
-      const base = i * 3;
-      const batchR = readResults[base];
+      const base = i * 5;
+      const processedR = readResults[base];
       const phaseR = readResults[base + 1];
       const pendingR = readResults[base + 2];
+      const claimableR = readResults[base + 3];
+      const openR = readResults[base + 4];
 
       const processed =
-        batchR?.status === 'success' && batchR.result
-          ? (batchR.result as BatchInfoResult)[2]
-          : false;
+        processedR?.status === 'success' ? Boolean(processedR.result) : false;
       const phase =
         phaseR?.status === 'success' && phaseR.result !== undefined
           ? Number(phaseR.result)
           : 0;
+      const amount = pendingR?.status === 'success' ? asUint(pendingR.result) : 0n;
+      const claimableAmount = claimableR?.status === 'success' ? asUint(claimableR.result) : 0n;
+      const claimOpenAt = openR?.status === 'success' ? asUint(openR.result) : 0n;
 
-      let amount = 0n;
-      if (pendingR?.status === 'success' && pendingR.result) {
-        amount =
-          kind === 'mint'
-            ? (pendingR.result as MintPending).amountIn ?? 0n
-            : (pendingR.result as RedeemPending).kashAmount ?? 0n;
-      }
-      if (amount <= 0n) continue;
+      if (amount <= 0n && claimableAmount <= 0n) continue;
 
-      const canCancel = !processed && phase === 0;
-      const isStuck = !processed && phase > 0;
+      const canCancel = amount > 0n && !processed && phase === 0;
+      const isStuck = amount > 0n && !processed && phase > 0;
       found.push({
         batchCycle: cycles[i],
         amount,
+        claimableAmount,
         phase,
         processed,
         canCancel,
         isStuck,
+        claimOpenAt,
       });
     }
     return found;
-  }, [readResults, cycles, kind]);
+  }, [readResults, cycles]);
 
   const cancellable = requests.find((r) => r.canCancel) ?? null;
   const stuck = requests.find((r) => r.isStuck) ?? null;

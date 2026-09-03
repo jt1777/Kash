@@ -201,6 +201,11 @@ contract AsterAdapter is IPerpExchange {
 
     function cancelOrder(bytes32 /* orderId */) external pure override {}
 
+    /// @notice Aster mark-to-market equity for this adapter (Clearing House view).
+    function getAccountValue() external view returns (int256) {
+        return IAsterClearingHouse(clearingHouse).getAccountValue(address(this));
+    }
+
     function getSpotBalance() external view override returns (uint256) {
         int256 bal = IAsterVault(vault).getBalance(address(this));
         return bal > 0 ? uint256(bal) : 0;
