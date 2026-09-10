@@ -2,9 +2,10 @@
 
 import { useState, useMemo, useEffect } from 'react';
 import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadContract, useEstimateFeesPerGas, usePublicClient } from 'wagmi';
-import { CONTRACTS, ARBITRUM_ONE_BLOCK_EXPLORER, HARDHAT_CHAIN_ID } from '@/lib/contracts/addresses';
+import { CONTRACTS, ARBITRUM_ONE_BLOCK_EXPLORER, HARDHAT_CHAIN_ID, isConfiguredAddress } from '@/lib/contracts/addresses';
 import { ContractVerifiedBadge } from '@/components/ContractVerifiedBadge';
 import { BatchUserCapStatus } from '@/components/BatchUserCapStatus';
+import { kashPipeABI } from '@/lib/contracts/kashPipeABI';
 import { vaultAbi } from '@/lib/contracts/vaultAbi';
 import { usePendingBatchRequest, type PendingBatchRequest } from '@/lib/usePendingBatchRequest';
 import { useBatchUserCap } from '@/lib/useBatchUserCap';
@@ -62,6 +63,10 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
   const kashYield = isBtc ? CONTRACTS.kashYieldBtc! : CONTRACTS.kashYieldEth;
   const kashToken = isBtc ? CONTRACTS.kashTokenBtc! : CONTRACTS.kashTokenEth;
   const redeemSymbol = isBtc ? 'KASH-BTC' : 'KASH-ETH';
+  const pipeAddress = isBtc ? CONTRACTS.kashPipeUsdcBtc : CONTRACTS.kashPipeUsdcEth;
+  const usdcPipeEnabled = isConfiguredAddress(pipeAddress);
+  const [payoutSource, setPayoutSource] = useState<'asset' | 'usdc'>('asset');
+  const usingUsdcPipe = usdcPipeEnabled && payoutSource === 'usdc';
   const [amount, setAmount] = useState('');
   const [showRedeemConfirm, setShowRedeemConfirm] = useState(false);
   const [submittedRedeem, setSubmittedRedeem] = useState<{
@@ -75,9 +80,17 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
   const [pendingClaimCycle, setPendingClaimCycle] = useState<bigint | null>(null);
   const [claimErrors, setClaimErrors] = useState<Record<string, string>>({});
   const [redeemSubmitError, setRedeemSubmitError] = useState<string | null>(null);
-  const claimAssetSymbol = isBtc ? 'wBTC' : 'WETH';
+  const claimAssetSymbol = usingUsdcPipe ? 'USDC' : isBtc ? 'wBTC' : 'WETH';
 
   const vault = vaultAbi(product);
+
+  const { data: isPipeOperator, refetch: refetchPipeOperator } = useReadContract({
+    address: kashYield,
+    abi: vault,
+    functionName: 'isOperator',
+    args: address && usdcPipeEnabled ? [address, pipeAddress] : undefined,
+    query: { enabled: usdcPipeEnabled && !!address },
+  });
 
   const { data: feesPerGas } = useEstimateFeesPerGas();
   const gasOptions = useMemo(() => {
@@ -159,11 +172,21 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
   const { writeContract: cancelRedeem, data: cancelRedeemHash, isPending: isCancelRedeemPending } = useWriteContract();
   const claimWrite = useWriteContract();
   const { writeContract: claimRedeem, data: claimHash, isPending: isClaimPending } = claimWrite;
+  const { writeContract: setPipeOperator, data: operatorHash, isPending: isOperatorPending } = useWriteContract();
 
   const { isLoading: isRedeemConfirming, isSuccess: isRedeemSuccess, isError: isRedeemError } =
     useWaitForTransactionReceipt({ hash: redeemHash });
   const { isLoading: isCancelRedeemConfirming } = useWaitForTransactionReceipt({ hash: cancelRedeemHash });
   const { isLoading: isClaimConfirming, isSuccess: isClaimSuccess } = useWaitForTransactionReceipt({ hash: claimHash });
+  const { isLoading: isOperatorConfirming, isSuccess: isOperatorSuccess } = useWaitForTransactionReceipt({
+    hash: operatorHash,
+  });
+
+  useEffect(() => {
+    if (isOperatorSuccess) {
+      void refetchPipeOperator();
+    }
+  }, [isOperatorSuccess, refetchPipeOperator]);
 
   const handleClaimRedeem = async (batchCycle: bigint) => {
     if (!address) return;
@@ -198,15 +221,61 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
         setClaimingCycle(null);
         return;
       }
-      let simulation;
-      try {
-        simulation = await publicClient.simulateContract({
+      if (usingUsdcPipe && !isPipeOperator) {
+        setPendingClaimCycle(batchCycle);
+        setPipeOperator({
           address: kashYield,
           abi: vault,
-          functionName: 'redeem',
-          args: [shares, address, address],
-          account: address,
+          functionName: 'setOperator',
+          args: [pipeAddress, true],
+          ...gasOptions,
         });
+        setClaimingCycle(null);
+        return;
+      }
+      let simulation;
+      let minStableOut = 0n;
+      try {
+        if (usingUsdcPipe) {
+          const assetsOut = (await publicClient.readContract({
+            address: kashYield,
+            abi: vault,
+            functionName: 'convertToAssets',
+            args: [shares],
+          })) as bigint;
+          const quoted = (await publicClient.readContract({
+            address: pipeAddress,
+            abi: kashPipeABI,
+            functionName: 'quoteStableOut',
+            args: [assetsOut],
+          })) as bigint;
+          const slippage = (await publicClient.readContract({
+            address: pipeAddress,
+            abi: kashPipeABI,
+            functionName: 'maxSlippageBps',
+          })) as bigint;
+          minStableOut = quoted > 0n ? (quoted * (10_000n - slippage)) / 10_000n : 0n;
+          if (minStableOut === 0n) {
+            setClaimErrors((prev) => ({ ...prev, [cycleKey]: 'USDC quote unavailable. Try again in a moment.' }));
+            setClaimingCycle(null);
+            return;
+          }
+          simulation = await publicClient.simulateContract({
+            address: pipeAddress,
+            abi: kashPipeABI,
+            functionName: 'claimRedeemStable',
+            args: [shares, minStableOut, address],
+            account: address,
+          });
+        } else {
+          simulation = await publicClient.simulateContract({
+            address: kashYield,
+            abi: vault,
+            functionName: 'redeem',
+            args: [shares, address, address],
+            account: address,
+          });
+        }
       } catch (simErr) {
         const msg =
           simErr instanceof Error
@@ -219,13 +288,23 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
       const estimatedGas = simulation.request.gas ?? 200_000n;
       const gasLimit = (estimatedGas * 130n) / 100n;
       setPendingClaimCycle(batchCycle);
-      claimRedeem({
-        address: kashYield,
-        abi: vault,
-        functionName: 'redeem',
-        args: [shares, address, address],
-        gas: gasLimit,
-      });
+      if (usingUsdcPipe) {
+        claimRedeem({
+          address: pipeAddress,
+          abi: kashPipeABI,
+          functionName: 'claimRedeemStable',
+          args: [shares, minStableOut, address],
+          gas: gasLimit,
+        });
+      } else {
+        claimRedeem({
+          address: kashYield,
+          abi: vault,
+          functionName: 'redeem',
+          args: [shares, address, address],
+          gas: gasLimit,
+        });
+      }
     } catch (e) {
       setClaimErrors((prev) => ({
         ...prev,
@@ -429,7 +508,9 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
               ) : null}
             </p>
             <p className="text-xs text-gray-500 mt-4 leading-relaxed">
-              Value uses the contract&apos;s current NAV per token; settlement NAV may differ slightly after fees and slippage.
+              {usingUsdcPipe
+                ? `After the batch, claim USDC via the Pipe (it swaps ${isBtc ? 'wBTC' : 'WETH'} in the same claim). Direct ${isBtc ? 'wBTC' : 'WETH'} payout remains available if you switch back.`
+                : "Value uses the contract's current NAV per token; settlement NAV may differ slightly after fees and slippage."}
             </p>
             <div className="flex flex-col sm:flex-row gap-3 mt-6">
               <button
@@ -458,13 +539,45 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
         batchProcessed={batchProcessed}
         userAlreadyInBatch={userInCurrentRedeemBatch}
       />
-      {/* Token (single option per product) */}
+      {/* Token */}
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="text-sm font-medium text-gray-700">
-          Redeem: {redeemSymbol}
-        </div>
+        {usdcPipeEnabled ? (
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setPayoutSource('asset')}
+              className={`px-3 py-1.5 text-sm rounded-lg font-medium cursor-pointer ${
+                payoutSource === 'asset'
+                  ? 'bg-purple-600 text-white'
+                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
+            >
+              {isBtc ? 'wBTC' : 'WETH'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setPayoutSource('usdc')}
+              className={`px-3 py-1.5 text-sm rounded-lg font-medium cursor-pointer ${
+                payoutSource === 'usdc'
+                  ? 'bg-purple-600 text-white'
+                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
+            >
+              USDC
+            </button>
+          </div>
+        ) : (
+          <div className="text-sm font-medium text-gray-700">
+            Redeem: {redeemSymbol}
+          </div>
+        )}
         <ContractVerifiedBadge contractAddress={kashYield} />
       </div>
+      {usingUsdcPipe && (
+        <p className="text-xs text-gray-500">
+          Request is still on the vault. At claim, the Pipe swaps to USDC. First USDC claim asks the vault to allow the Pipe as operator.
+        </p>
+      )}
 
       {/* Amount Input */}
       <div>
@@ -513,8 +626,11 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
               const cycleKey = req.batchCycle.toString();
               const isClaimingThis =
                 claimingCycle === cycleKey ||
-                (pendingClaimCycle === req.batchCycle && (isClaimPending || isClaimConfirming));
+                (pendingClaimCycle === req.batchCycle &&
+                  (isClaimPending || isClaimConfirming || isOperatorPending || isOperatorConfirming));
               const cycleError = claimErrors[cycleKey];
+              const holdOpen = req.claimOpenAt > 0n && BigInt(Math.floor(Date.now() / 1000)) < req.claimOpenAt;
+              const needsOperator = usingUsdcPipe && !isPipeOperator;
               return (
                 <li
                   key={cycleKey}
@@ -532,13 +648,18 @@ export function RedeemForm({ product = 'eth' }: { product?: Product }) {
                   <button
                     type="button"
                     onClick={() => void handleClaimRedeem(req.batchCycle)}
-                    disabled={
-                      isClaimingThis ||
-                      (req.claimOpenAt > 0n && BigInt(Math.floor(Date.now() / 1000)) < req.claimOpenAt)
-                    }
+                    disabled={isClaimingThis || holdOpen}
                     className="w-full px-4 py-2 bg-green-700 text-white rounded-lg text-sm font-medium hover:bg-green-800 disabled:bg-gray-300 disabled:cursor-not-allowed cursor-pointer transition-colors"
                   >
-                    {isClaimingThis ? 'Claiming...' : `Claim ${claimAssetSymbol}`}
+                    {isClaimingThis
+                      ? needsOperator
+                        ? 'Allowing…'
+                        : 'Claiming...'
+                      : holdOpen
+                        ? 'Claim hold'
+                        : needsOperator
+                          ? 'Allow USDC payout'
+                          : `Claim ${claimAssetSymbol}`}
                   </button>
                 </li>
               );

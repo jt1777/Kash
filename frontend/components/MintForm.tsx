@@ -2,10 +2,11 @@
 
 import { useState, useMemo, useEffect } from 'react';
 import { useWriteContract, useWaitForTransactionReceipt, useAccount, useReadContract, useBalance, useEstimateFeesPerGas, usePublicClient } from 'wagmi';
-import { CONTRACTS, ARBITRUM_ONE_BLOCK_EXPLORER, HARDHAT_CHAIN_ID } from '@/lib/contracts/addresses';
+import { CONTRACTS, ARBITRUM_ONE_BLOCK_EXPLORER, HARDHAT_CHAIN_ID, isConfiguredAddress } from '@/lib/contracts/addresses';
 import { ContractVerifiedBadge } from '@/components/ContractVerifiedBadge';
 import { BatchUserCapStatus } from '@/components/BatchUserCapStatus';
 import { kashTokenABI } from '@/lib/contracts/kashTokenABI';
+import { kashPipeABI } from '@/lib/contracts/kashPipeABI';
 import { vaultAbi } from '@/lib/contracts/vaultAbi';
 import { usePendingBatchRequest, type PendingBatchRequest } from '@/lib/usePendingBatchRequest';
 import { useBatchUserCap } from '@/lib/useBatchUserCap';
@@ -48,6 +49,7 @@ function isUserRejectedWalletError(error: Error | null | undefined): boolean {
 
 const MINT_TOKEN_ETH = { symbol: 'ETH', address: zeroAddress, decimals: 18 };
 const MINT_TOKEN_BTC = { symbol: 'wBTC', address: CONTRACTS.mockWbtc, decimals: 8 };
+const MINT_TOKEN_USDC = { symbol: 'USDC', address: CONTRACTS.tokens.usdc, decimals: 6 };
 
 /** Minimum mint notional (18-dec USD) — matches bot NET_MINT_SKIP_OPS_MIN_USDC default. */
 const MIN_MINT_USD_WEI18 = 10n * 10n ** 18n;
@@ -104,7 +106,11 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
 
   const isBtc = product === 'btc' && CONTRACTS.kashYieldBtc && CONTRACTS.mockWbtc;
   const kashYield = isBtc ? CONTRACTS.kashYieldBtc! : CONTRACTS.kashYieldEth;
-  const depositToken = isBtc ? MINT_TOKEN_BTC : MINT_TOKEN_ETH;
+  const pipeAddress = isBtc ? CONTRACTS.kashPipeUsdcBtc : CONTRACTS.kashPipeUsdcEth;
+  const usdcPipeEnabled = isConfiguredAddress(pipeAddress);
+  const [mintSource, setMintSource] = useState<'asset' | 'usdc'>('asset');
+  const usingUsdcPipe = usdcPipeEnabled && mintSource === 'usdc';
+  const depositToken = usingUsdcPipe ? MINT_TOKEN_USDC : isBtc ? MINT_TOKEN_BTC : MINT_TOKEN_ETH;
   const [amount, setAmount] = useState('');
   const [showMintConfirm, setShowMintConfirm] = useState(false);
   const [submittedMint, setSubmittedMint] = useState<{
@@ -142,12 +148,17 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
     address: depositToken.address as `0x${string}`,
     abi: kashTokenABI,
     functionName: 'allowance',
-    args: address && depositToken.symbol !== 'ETH' ? [address, kashYield] : undefined,
+    args: address && depositToken.symbol !== 'ETH' ? [address, usingUsdcPipe ? pipeAddress : kashYield] : undefined,
   });
 
   const { data: wbtcBalance } = useBalance({
     address,
     token: isBtc ? (CONTRACTS.mockWbtc as `0x${string}`) : undefined,
+  });
+
+  const { data: usdcBalance } = useBalance({
+    address,
+    token: usingUsdcPipe ? (CONTRACTS.tokens.usdc as `0x${string}`) : undefined,
   });
 
   const vault = vaultAbi(product);
@@ -179,8 +190,13 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
   });
 
   const kashSymbol = isBtc ? 'KASH-BTC' : 'KASH-ETH';
+  const vaultAssetSymbol = isBtc ? 'wBTC' : 'WETH';
 
-  const spotOracleAddress = isBtc ? CONTRACTS.oracles.btcUsd : CONTRACTS.oracles.ethUsd;
+  const spotOracleAddress = usingUsdcPipe
+    ? CONTRACTS.oracles.usdcUsd
+    : isBtc
+      ? CONTRACTS.oracles.btcUsd
+      : CONTRACTS.oracles.ethUsd;
 
   const { data: oracleRound, isFetched: oracleRoundFetched } = useReadContract({
     address: spotOracleAddress,
@@ -352,6 +368,30 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
     (depositToken.symbol === 'ETH' ? parseEther(amount) : parseUnits(amount, depositToken.decimals))
     : BigInt(0);
 
+  const { data: quotedAssetOut } = useReadContract({
+    address: pipeAddress,
+    abi: kashPipeABI,
+    functionName: 'quoteAssetOut',
+    args: usingUsdcPipe && parsedAmount > 0n ? [parsedAmount] : undefined,
+    query: { enabled: usingUsdcPipe && parsedAmount > 0n },
+  });
+
+  const { data: pipeMaxSlippageBps } = useReadContract({
+    address: pipeAddress,
+    abi: kashPipeABI,
+    functionName: 'maxSlippageBps',
+    query: { enabled: usdcPipeEnabled },
+  });
+
+  const minAssetOut =
+    usingUsdcPipe &&
+    quotedAssetOut != null &&
+    quotedAssetOut > 0n &&
+    pipeMaxSlippageBps != null
+      ? (quotedAssetOut * (10_000n - BigInt(pipeMaxSlippageBps))) / 10_000n
+      : 0n;
+  const pipeQuoteReady = !usingUsdcPipe || parsedAmount === 0n || minAssetOut > 0n;
+
   const mintApproxUsdWei18 = useMemo(() => {
     try {
       return usdWei18FromDepositAndOracle(
@@ -383,7 +423,8 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
 
   // For ETH mint: require balance >= amount + gas reserve so wallet never fails with "Insufficient funds"
   const exceedsBalance = depositToken.symbol === 'ETH' && parsedAmount > 0n && parsedAmount > maxMintEth;
-  const exceedsWbtcBalance = isBtc && wbtcBalance && parsedAmount > 0n && parsedAmount > wbtcBalance.value;
+  const exceedsWbtcBalance = isBtc && !usingUsdcPipe && wbtcBalance && parsedAmount > 0n && parsedAmount > wbtcBalance.value;
+  const exceedsUsdcBalance = usingUsdcPipe && usdcBalance && parsedAmount > 0n && parsedAmount > usdcBalance.value;
 
   const needsApproval = (depositToken.symbol !== 'ETH' || isBtc) && 
     allowance !== undefined && 
@@ -397,17 +438,26 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
       address: depositToken.address as `0x${string}`,
       abi: kashTokenABI,
       functionName: 'approve',
-      args: [kashYield, parsedAmount],
+      args: [usingUsdcPipe ? pipeAddress : kashYield, parsedAmount],
       ...gasOptions,
     });
   };
 
   const handleMint = async () => {
-    if (!parsedAmount || !address || exceedsBalance || exceedsWbtcBalance || mintBelowMinUsd || mintUsdUnavailable) return;
+    if (!parsedAmount || !address || exceedsBalance || exceedsWbtcBalance || exceedsUsdcBalance || mintBelowMinUsd || mintUsdUnavailable) return;
+    if (usingUsdcPipe && minAssetOut === 0n) return;
     setShowMintConfirm(false);
 
     try {
-      if (depositToken.symbol === 'ETH' && !isBtc) {
+      if (usingUsdcPipe) {
+        mint({
+          address: pipeAddress,
+          abi: kashPipeABI,
+          functionName: 'requestDepositStable',
+          args: [parsedAmount, minAssetOut, address],
+          ...gasOptions,
+        });
+      } else if (depositToken.symbol === 'ETH' && !isBtc) {
         mint({
           address: kashYield,
           abi: vault,
@@ -533,8 +583,12 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
               ) : null}
             </p>
             <p className="text-xs text-gray-500 mt-4 leading-relaxed">
-              and will receive KASH tokens at an NAV determined at the end of the next batch cycle.
-              After the batch settles, use the <span className="font-medium">Claim {kashSymbol}</span> button on this form to receive your shares.
+              {usingUsdcPipe
+                ? `USDC is swapped to ${vaultAssetSymbol} in this transaction (min out ${
+                    isBtc ? Number(formatUnits(minAssetOut, 8)).toFixed(8) : formatEtherDisplayDecimals(minAssetOut, 6)
+                  } ${vaultAssetSymbol}, slippage ceiling ${pipeMaxSlippageBps?.toString() ?? '—'} bps). After the batch settles, claim ${kashSymbol} on the vault — the pipe cannot claim.`
+                : `and will receive KASH tokens at an NAV determined at the end of the next batch cycle.
+              After the batch settles, use the Claim ${kashSymbol} button on this form to receive your shares.`}
             </p>
             <div className="flex flex-col sm:flex-row gap-3 mt-6">
               <button
@@ -547,7 +601,7 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
               <button
                 type="button"
                 onClick={() => void handleMint()}
-                disabled={isMintPending || isMintConfirming || mintBelowMinUsd || mintUsdUnavailable || mintBatchCapBlocked}
+                disabled={isMintPending || isMintConfirming || mintBelowMinUsd || mintUsdUnavailable || mintBatchCapBlocked || exceedsUsdcBalance || !pipeQuoteReady}
                 className="flex-1 px-6 py-3 rounded-lg bg-linear-to-r from-indigo-600 to-purple-600 text-white font-medium hover:from-indigo-700 hover:to-purple-700 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed cursor-pointer transition-all shadow-lg disabled:shadow-none border-2 border-transparent"
               >
                 Confirm
@@ -563,13 +617,51 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
         batchProcessed={batchProcessed}
         userAlreadyInBatch={userInCurrentMintBatch}
       />
-      {/* Token (single option per product) */}
+      {/* Token */}
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="text-sm font-medium text-gray-700">
-          Deposit: {depositToken.symbol}
-        </div>
+        {usdcPipeEnabled ? (
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => {
+                setMintSource('asset');
+                setAmount('');
+              }}
+              className={`px-3 py-1.5 text-sm rounded-lg font-medium cursor-pointer ${
+                mintSource === 'asset'
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
+            >
+              {isBtc ? 'wBTC' : 'ETH'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setMintSource('usdc');
+                setAmount('');
+              }}
+              className={`px-3 py-1.5 text-sm rounded-lg font-medium cursor-pointer ${
+                mintSource === 'usdc'
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
+            >
+              USDC
+            </button>
+          </div>
+        ) : (
+          <div className="text-sm font-medium text-gray-700">
+            Deposit: {depositToken.symbol}
+          </div>
+        )}
         <ContractVerifiedBadge contractAddress={kashYield} />
       </div>
+      {usingUsdcPipe && (
+        <p className="text-xs text-gray-500">
+          USDC is converted to {vaultAssetSymbol} on-chain, then deposited. You claim {kashSymbol} from the vault after the batch.
+        </p>
+      )}
 
       {/* Amount Input */}
       <div>
@@ -598,7 +690,21 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
               )}
             </span>
           )}
-          {isBtc && address && wbtcBalance && (
+          {usingUsdcPipe && address && usdcBalance && (
+            <span className="text-xs text-gray-500">
+              Balance: {Number(formatUnits(usdcBalance.value, 6)).toFixed(2)} USDC
+              {usdcBalance.value > 0n && (
+                <button
+                  type="button"
+                  onClick={() => setAmount(formatUnits(usdcBalance.value, 6))}
+                  className="ml-1.5 text-indigo-600 hover:text-indigo-700 font-medium cursor-pointer"
+                >
+                  Max
+                </button>
+              )}
+            </span>
+          )}
+          {isBtc && !usingUsdcPipe && address && wbtcBalance && (
             <span className="text-xs text-gray-500">
               Balance: {Number(formatUnits(wbtcBalance.value, 8)).toFixed(8)} wBTC
               {wbtcBalance.value > 0n && (
@@ -634,6 +740,14 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
         <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
           <p className="text-sm text-amber-800">
             Amount exceeds your wBTC balance. Use <strong>Max</strong> or reduce the amount.
+          </p>
+        </div>
+      )}
+
+      {exceedsUsdcBalance && (
+        <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+          <p className="text-sm text-amber-800">
+            Amount exceeds your USDC balance. Use <strong>Max</strong> or reduce the amount.
           </p>
         </div>
       )}
@@ -751,9 +865,11 @@ export function MintForm({ product = 'eth' }: { product?: Product }) {
             needsClaim ||
             exceedsBalance ||
             !!exceedsWbtcBalance ||
+            !!exceedsUsdcBalance ||
             mintBelowMinUsd ||
             mintUsdUnavailable ||
-            mintBatchCapBlocked
+            mintBatchCapBlocked ||
+            !pipeQuoteReady
           }
           className="w-full px-6 py-3 bg-linear-to-r from-indigo-600 to-purple-600 text-white rounded-lg font-medium hover:from-indigo-700 hover:to-purple-700 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed cursor-pointer transition-all shadow-lg"
         >

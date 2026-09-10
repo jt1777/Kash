@@ -40,6 +40,22 @@ export const CONTRACTS = {
     process.env.MOCK_WBTC,
     '0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f',
   ),
+  kashPipeUsdcEth: pickAddr(
+    process.env.NEXT_PUBLIC_KASH_PIPE_USDC_ETH,
+    process.env.KASH_PIPE_USDC_ETH,
+  ),
+  kashPipeUsdcBtc: pickAddr(
+    process.env.NEXT_PUBLIC_KASH_PIPE_USDC_BTC,
+    process.env.KASH_PIPE_USDC_BTC,
+  ),
+  kashPipeUsdtEth: pickAddr(
+    process.env.NEXT_PUBLIC_KASH_PIPE_USDT_ETH,
+    process.env.KASH_PIPE_USDT_ETH,
+  ),
+  kashPipeUsdtBtc: pickAddr(
+    process.env.NEXT_PUBLIC_KASH_PIPE_USDT_BTC,
+    process.env.KASH_PIPE_USDT_BTC,
+  ),
   tokens: {
     weth: '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1' as `0x${string}`,
     wbtc: '0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f' as `0x${string}`,

@@ -48,8 +48,8 @@ export default function Home() {
     explorerBase: ARBITRUM_ONE_BLOCK_EXPLORER,
     appUrl,
     depositAssets: {
-      kashEth: 'Native ETH or WETH on Arbitrum One only — not USDC or other ERC-20',
-      kashBtc: 'wBTC on Arbitrum One only (8 decimals) — not USDC or other assets',
+      kashEth: 'Native ETH or WETH on Arbitrum One. Optional USDC via KashPipe (convenience converter — not a second vault asset).',
+      kashBtc: 'wBTC on Arbitrum One only (8 decimals). Optional USDC via KashPipe (convenience converter — not a second vault asset).',
     },
     minimums: {
       mintUsd:
@@ -65,9 +65,11 @@ export default function Home() {
         asset: 'WETH 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1',
         mintNativeEth:
           'requestDepositETH(controller) with tx.value = depositWei (or WETH: approve + requestDeposit(assets, controller, owner))',
+        optionalUsdcPipe:
+          'KashPipe USDC: approve USDC to NEXT_PUBLIC_KASH_PIPE_USDC_ETH, then requestDepositStable(amount, minAssetOut, controller). owner_=pipe, controller=user. Claim on the vault with deposit/mint — the pipe cannot claim.',
         claimDeposit: 'deposit(assets, receiver[, controller]) — no Merkle; pays locked shares',
         redeem:
-          'requestRedeem(shares, controller, owner) — vault pulls shares; claim with redeem(shares, receiver[, controller]) paying WETH',
+          'requestRedeem(shares, controller, owner) — vault pulls shares; claim with redeem(shares, receiver[, controller]) paying WETH, or pipe.claimRedeemStable for USDC',
       },
       kashBtc: {
         vault: CONTRACTS.kashYieldBtc,
@@ -75,15 +77,33 @@ export default function Home() {
         asset: 'wBTC 0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f',
         mint:
           'approve wBTC, then requestDeposit(assets, controller, owner)',
+        optionalUsdcPipe:
+          'KashPipe USDC: approve USDC to NEXT_PUBLIC_KASH_PIPE_USDC_BTC, then requestDepositStable(amount, minAssetOut, controller). Claim on the vault.',
         claimDeposit: 'deposit(assets, receiver[, controller])',
         redeem:
-          'requestRedeem(shares, controller, owner); claim with redeem(shares, receiver[, controller]) paying wBTC',
+          'requestRedeem(shares, controller, owner); claim with redeem(shares, receiver[, controller]) paying wBTC, or pipe.claimRedeemStable for USDC',
       },
+    },
+    pipes: {
+      role: 'Optional ERC-7575 converter. Deposit: USDC/USDT → vault asset → requestDeposit (controller=user, owner_=pipe; no setOperator). Redeem: requestRedeem on the vault (or requestRedeemStable after setOperator so N+1 keys off the user); claimRedeemStable swaps the paid asset to the stable. Not a second vault asset. Pipe holds nothing after each call. Deposit claims stay on the vault.',
+      usdc: {
+        asset: 'USDC 0xaf88d065e77c8cC2239327C5EDb3A432268e5831 (6 decimals)',
+        eth: CONTRACTS.kashPipeUsdcEth,
+        btc: CONTRACTS.kashPipeUsdcBtc,
+      },
+      usdt: {
+        asset: 'USDT 0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9 (6 decimals, forceApprove)',
+        eth: CONTRACTS.kashPipeUsdtEth,
+        btc: CONTRACTS.kashPipeUsdtBtc,
+      },
+      entry: 'approve stable to the Pipe, then requestDepositStable(amount, minAssetOut, controller) with minAssetOut != 0. Redeem: setOperator(pipe) once, then requestRedeemStable and/or claimRedeemStable(shares, minStableOut, receiver)',
+      handoff: 'Deposit: controller=user, owner_=pipe. Redeem: owner_=user (N+1); Pipe must be 7540 operator to request/claim.',
+      abi: 'kashPipeABI.ts (same ABI for USDC and USDT wrappers)',
     },
     scheduleHint:
       'Requests accepted until batch cutoff (~23:40 UTC). isUserWindow() and isProcessingWindow() are not mutually exclusive — read both. After settlement and the claim hold, call deposit/redeem. preview* reverts. maxDeposit/maxMint/maxWithdraw/maxRedeem are claimable amounts, not how much you can put in.',
     abiNote:
-      'One ABI per vault: kashVaultEthABI.ts and kashVaultBtcABI.ts. Do not merge ETH+BTC ABIs.',
+      'One ABI per vault: kashVaultEthABI.ts and kashVaultBtcABI.ts. Do not merge ETH+BTC ABIs. Pipe ABI: kashPipeABI.ts (same for USDC/USDT).',
     navVerificationDocs: GITBOOK_VERIFY_NAV,
     perpStack: 'Aster on Arbitrum (exchangeFacade → AsterAdapter); NAV is computed on-chain from Aster + Aave + Chainlink — see Verify NAV',
     reads: [
@@ -749,7 +769,7 @@ export default function Home() {
             <p className="section-caption ai-section-divider" role="note">Everything below this is for AI Agents</p>
             <h2 className="section-title">Built for AI agents</h2>
             <p className="section-caption">
-              Machine-readable integration brief. Deposits require native ETH, WETH, or wBTC on Arbitrum One (minimum $10 notional). Confirm addresses before mainnet execution.
+              Machine-readable integration brief. Deposits require native ETH, WETH, or wBTC on Arbitrum One (minimum $10 notional). Optional USDC Pipes convert to the vault asset in one tx — they are not a second vault asset. Confirm addresses before mainnet execution.
             </p>
             <p className="agent-json-caption">Copy as JSON for tools / planners</p>
             <div className="code-block" style={{ marginBottom: 48 }}>
@@ -759,7 +779,7 @@ export default function Home() {
               <pre>{JSON.stringify(agentBrief, null, 2)}</pre>
             </div>
             <ul className="ai-list">
-              <li><strong>Deposit assets</strong> — KASH-ETH accepts native ETH or WETH; KASH-BTC accepts wBTC. USDC and other tokens are not supported — swap first if needed.</li>
+              <li><strong>Deposit assets</strong> — KASH-ETH accepts native ETH or WETH; KASH-BTC accepts wBTC. Optional <code style={{ color: '#00FFFF' }}>KashPipe</code> contracts convert USDC (or USDT) to the vault asset on the way in and back to the stable on redeem claim. The vault book stays WETH/wBTC.</li>
               <li><strong>Minimums</strong> — ~$10 mint notional is enforced by the frontend and batch ops skip threshold only; a raw <code style={{ color: '#00FFFF' }}>requestDeposit</code> can still land on-chain below that. Redeems have no minimum.</li>
               <li><strong>Contract-first</strong> — The vault <em>is</em> the ERC-20 share token; optional UI is unrelated to execution.</li>
               <li><strong>Deterministic scheduling</strong> — Poll <code style={{ color: '#00FFFF' }}>isUserWindow()</code> and <code style={{ color: '#00FFFF' }}>isProcessingWindow()</code> (not mutually exclusive); submit before batch cutoff; await <code style={{ color: '#00FFFF' }}>BatchProcessed</code>.</li>
@@ -918,7 +938,8 @@ export default function Home() {
                 <h3>1. Load facts</h3>
                 <p>
                   Chain ID <strong>{ARBITRUM_ONE_CHAIN_ID}</strong>, RPC <code style={{ color: '#00FFFF' }}>https://arb1.arbitrum.io/rpc</code>. Use one ABI per vault:{' '}
-                  <code style={{ color: '#00FFFF' }}>kashVaultEthABI.ts</code> / <code style={{ color: '#00FFFF' }}>kashVaultBtcABI.ts</code>. The vault address is the share token.
+                  <code style={{ color: '#00FFFF' }}>kashVaultEthABI.ts</code> / <code style={{ color: '#00FFFF' }}>kashVaultBtcABI.ts</code>. Optional Pipe ABI:{' '}
+                  <code style={{ color: '#00FFFF' }}>kashPipeABI.ts</code>. The vault address is the share token.
                 </p>
               </div>
               <div className="proof-card">
@@ -936,6 +957,7 @@ export default function Home() {
                   Hold the correct asset on Arbitrum One: native ETH or WETH (KASH-ETH), or wBTC (KASH-BTC). ETH: call{' '}
                   <code style={{ color: '#00FFFF' }}>requestDepositETH(controller)</code> with <code style={{ color: '#00FFFF' }}>msg.value</code>.
                   WETH/wBTC: approve the vault, then <code style={{ color: '#00FFFF' }}>requestDeposit(assets, controller, owner)</code>.
+                  Optional USDC: approve the Pipe, then <code style={{ color: '#00FFFF' }}>requestDepositStable(amount, minAssetOut, controller)</code> — <code style={{ color: '#00FFFF' }}>minAssetOut</code> must be non-zero. Claim on the vault.
                 </p>
               </div>
               <div className="proof-card">

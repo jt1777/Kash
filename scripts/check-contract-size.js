@@ -7,7 +7,15 @@ const fs = require("fs");
 const path = require("path");
 
 const EIP170_LIMIT = 24_576;
-const CONTRACTS = ["KashYieldBtc", "KashYieldETH", "KashVaultEth", "KashVaultBtc"];
+const CONTRACTS = [
+  "KashYieldBtc",
+  "KashYieldETH",
+  "KashVaultEth",
+  "KashVaultBtc",
+  "KashPipe",
+  "KashPipeUsdc",
+  "KashPipeUsdt",
+];
 
 let failed = false;
 

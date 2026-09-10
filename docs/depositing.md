@@ -7,7 +7,7 @@ Depositing into KASH mints KASH tokens that accrue yield over time.
 ## Before depositing
 
 - Ensure the wallet is connected to the app on **Arbitrum One** (chain ID 42161)
-- The wallet must hold ETH (for KASH-ETH) or wBTC (for KASH-BTC)
+- The wallet must hold ETH (for KASH-ETH), wBTC (for KASH-BTC), or USDC if using the optional Pipe
 - A small amount of ETH is required for gas fees
 
 ---
@@ -76,6 +76,29 @@ If demand grows, a **new vault deployment** with different timing would be requi
 6. After settlement, click **Claim KASH-BTC** in the Deposit form to receive your tokens
 7. Click the "Add to wallet" link in the "Your KASH Balance" box to display KASH-BTC tokens in the wallet
 8. A mint request may be cancelled at any time prior to the batch process run time; deposited wBTC will be returned to the wallet
+
+---
+
+## Optional: deposit USDC
+
+USDC is **not** a second vault asset. An optional **Pipe** contract swaps USDC to WETH or wBTC and submits a vault deposit in the same transaction.
+
+1. Select **USDC** on the deposit form (only shown when a Pipe is configured)
+2. **Approve** the Pipe to spend USDC
+3. Confirm the mint — the UI sends a non-zero `minAssetOut` using the Pipe quote and slippage ceiling
+4. After the batch, **claim KASH on the vault** (same Claim button). The Pipe cannot claim.
+
+USDT Pipes use the same on-chain interface; the app currently exposes USDC only.
+
+Stablecoin accidentally sent to a Pipe with no call is unrecoverable — the Pipe has no sweep.
+
+---
+
+## Optional: redeem to USDC
+
+The redeem **request** still happens on the vault (KASH is locked; N+1 still applies). After the batch, you can claim **WETH/wBTC** on the vault, or **USDC** via the Pipe (it swaps the vault asset in the claim transaction).
+
+The first USDC claim asks the vault to allow the Pipe as a 7540 operator (`setOperator`). Cancel still returns KASH on the vault.
 
 ---
 

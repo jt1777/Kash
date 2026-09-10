@@ -10,15 +10,23 @@ Vault = ERC-20 share token. No separate KASH token. No Merkle proofs.
 - BTC vault / share: NEXT_PUBLIC_KASH_YIELD_BTC_ADDRESS (also KASH_TOKEN_BTC)
 - asset ETH: WETH 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1
 - asset BTC: wBTC 0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f
+- optional USDC pipe ETH: NEXT_PUBLIC_KASH_PIPE_USDC_ETH
+- optional USDC pipe BTC: NEXT_PUBLIC_KASH_PIPE_USDC_BTC
+- optional USDT pipe ETH: NEXT_PUBLIC_KASH_PIPE_USDT_ETH
+- optional USDT pipe BTC: NEXT_PUBLIC_KASH_PIPE_USDT_BTC
+- USDC: 0xaf88d065e77c8cC2239327C5EDb3A432268e5831 (6 dec)
+- USDT: 0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9 (6 dec)
 
 ## ABI
 
 One per vault: frontend/lib/contracts/kashVaultEthABI.ts and kashVaultBtcABI.ts. Do not merge.
+Pipe (USDC/USDT): frontend/lib/contracts/kashPipeABI.ts
 
 ## Deposit
 
 ETH: requestDepositETH(controller) payable, or approve WETH then requestDeposit(assets, controller, owner)
 BTC: approve wBTC then requestDeposit(assets, controller, owner)
+Optional USDC/USDT Pipe: approve the Pipe, then requestDepositStable(amount, minAssetOut, controller). minAssetOut must be non-zero. Pipe swaps stable→asset and calls requestDeposit(assetOut, user, pipe). Claim shares on the vault — the Pipe cannot claim deposits. Not a second vault asset.
 requestId = getCurrentBatchCycle()
 Watch DepositRequest. No shares yet.
 
@@ -30,7 +38,8 @@ FIFO oldest cycle. preview* reverts. maxDeposit is claimable, not a deposit cap.
 ## Redeem
 
 requestRedeem(shares, controller, owner) — vault locks shares; N+1 hold (lastMintCycle)
-Claim: redeem(shares, receiver[, controller]) pays WETH/wBTC
+Claim asset: redeem(shares, receiver[, controller]) pays WETH/wBTC
+Claim stable: vault.setOperator(pipe, true) once, then pipe.claimRedeemStable(shares, minStableOut, receiver). minStableOut must be non-zero (quoteStableOut). requestRedeemStable(shares, controller) is equivalent to requestRedeem with the Pipe as operator.
 
 ## Reads
 

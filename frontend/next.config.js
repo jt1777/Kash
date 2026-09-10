@@ -13,6 +13,10 @@ const nextConfig = {
     KASH_YIELD_ETH_ADDRESS:
       process.env.NEXT_PUBLIC_KASH_YIELD_ETH_ADDRESS || process.env.KASH_YIELD_ETH_ADDRESS,
     KASH_TOKEN_ETH: process.env.NEXT_PUBLIC_KASH_TOKEN_ETH || process.env.KASH_TOKEN_ETH,
+    KASH_PIPE_USDC_ETH: process.env.NEXT_PUBLIC_KASH_PIPE_USDC_ETH || process.env.KASH_PIPE_USDC_ETH,
+    KASH_PIPE_USDC_BTC: process.env.NEXT_PUBLIC_KASH_PIPE_USDC_BTC || process.env.KASH_PIPE_USDC_BTC,
+    KASH_PIPE_USDT_ETH: process.env.NEXT_PUBLIC_KASH_PIPE_USDT_ETH || process.env.KASH_PIPE_USDT_ETH,
+    KASH_PIPE_USDT_BTC: process.env.NEXT_PUBLIC_KASH_PIPE_USDT_BTC || process.env.KASH_PIPE_USDT_BTC,
   },
   webpack: (config) => {
     // Ignore optional deps used by connectors in Node/SSR

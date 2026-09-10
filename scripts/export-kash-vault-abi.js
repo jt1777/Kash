@@ -1,5 +1,5 @@
 /**
- * Write one ABI per vault into frontend/lib/contracts (no ETH+BTC merge).
+ * Write vault + Pipe ABIs into frontend/lib/contracts (no ETH+BTC merge).
  * Run after compile: node scripts/export-kash-vault-abi.js
  */
 const fs = require("fs");
@@ -31,3 +31,4 @@ function exportAbi(solName, exportName) {
 
 exportAbi("KashVaultEth", "kashVaultEthABI");
 exportAbi("KashVaultBtc", "kashVaultBtcABI");
+exportAbi("KashPipe", "kashPipeABI");

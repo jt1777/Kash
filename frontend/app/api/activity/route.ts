@@ -13,6 +13,13 @@ const KASH_YIELD_ADDRESSES = new Set([
   ...(CONTRACTS.kashYieldBtc ? [(CONTRACTS.kashYieldBtc as string).toLowerCase()] : []),
 ]);
 
+const PIPE_TO_VAULT: Record<string, string> = {
+  [CONTRACTS.kashPipeUsdcEth.toLowerCase()]: CONTRACTS.kashYieldEth,
+  [CONTRACTS.kashPipeUsdcBtc.toLowerCase()]: CONTRACTS.kashYieldBtc,
+  [CONTRACTS.kashPipeUsdtEth.toLowerCase()]: CONTRACTS.kashYieldEth,
+  [CONTRACTS.kashPipeUsdtBtc.toLowerCase()]: CONTRACTS.kashYieldBtc,
+};
+
 function getEtherscanApiKey(): string {
   const key =
     process.env.ETHERSCAN_API_KEY ||
@@ -40,7 +47,9 @@ function getEtherscanApiKey(): string {
 // Function selectors (first 4 bytes of calldata) for our contract
 const SELECTOR_REQUEST_DEPOSIT = '0x85b77f45';
 const SELECTOR_REQUEST_DEPOSIT_ETH = '0xd9e71686';
+const SELECTOR_REQUEST_DEPOSIT_STABLE = '0x6b75f857';
 const SELECTOR_REQUEST_REDEEM = '0x7d41c86e';
+const SELECTOR_REQUEST_REDEEM_STABLE = '0x9e81d0cf';
 
 export type ActivityItem = {
   type: 'mint' | 'redeem';
@@ -98,7 +107,8 @@ export async function GET(request: NextRequest) {
 
     for (const tx of txs) {
       const to = (tx.to || '').toLowerCase();
-      if (!KASH_YIELD_ADDRESSES.has(to)) continue;
+      const vaultForTx = PIPE_TO_VAULT[to] || (KASH_YIELD_ADDRESSES.has(to) ? tx.to : '');
+      if (!vaultForTx) continue;
 
       const input = (tx.input || '').toLowerCase();
       const selector = input.slice(0, 10);
@@ -106,12 +116,14 @@ export async function GET(request: NextRequest) {
       if (
         selector !== SELECTOR_REQUEST_DEPOSIT &&
         selector !== SELECTOR_REQUEST_DEPOSIT_ETH &&
-        selector !== SELECTOR_REQUEST_REDEEM
+        selector !== SELECTOR_REQUEST_DEPOSIT_STABLE &&
+        selector !== SELECTOR_REQUEST_REDEEM &&
+        selector !== SELECTOR_REQUEST_REDEEM_STABLE
       ) continue;
 
       const ts = parseInt(tx.timeStamp, 10);
       const batchCycle = Math.floor(ts / cycleDuration);
-      const contractAddress = tx.to || '';
+      const contractAddress = vaultForTx;
 
       if (matchIndex < skip) {
         matchIndex++;
@@ -123,7 +135,7 @@ export async function GET(request: NextRequest) {
       }
 
       activities.push({
-        type: selector === SELECTOR_REQUEST_REDEEM ? 'redeem' : 'mint',
+        type: selector === SELECTOR_REQUEST_REDEEM || selector === SELECTOR_REQUEST_REDEEM_STABLE ? 'redeem' : 'mint',
         hash: tx.hash,
         timestamp: ts,
         blockNumber: tx.blockNumber,
