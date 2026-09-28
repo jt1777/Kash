@@ -26,9 +26,9 @@ export function SiteFooter({ className, contractAddress, showAgentLinks }: SiteF
             GitHub
           </a>
           <a href="https://kash-2.gitbook.io/kash-enhanced-yield-protocol" target="_blank" rel="noopener noreferrer">Documentation</a>
-          <a href="https://discord.gg/FxtyWx6Zw5" target="_blank" rel="noopener noreferrer">
+          {/* <a href="https://discord.gg/FxtyWx6Zw5" target="_blank" rel="noopener noreferrer">
             Discord
-          </a>
+          </a> */}
           <a href="https://x.com/KASH_TOKEN_0X0" target="_blank" rel="noopener noreferrer">
             X
           </a>
