@@ -14,7 +14,7 @@ export const ARBITRUM_ONE_RPC =
   'https://arb1.arbitrum.io/rpc';
 
 /** Strategy leverage multipliers derived from LTV + short leverage (Aave loop book). */
-export function strategyMultipliers(ltvPct = 70, shortLeverage = 1.7) {
+export function strategyMultipliers(ltvPct = 70, shortLeverage = 1.6) {
   const ltv = ltvPct / 100;
   const collateralMult = 1 + ltv;
   const debtMult = collateralMult * ltv;
@@ -32,11 +32,11 @@ export function strategyMultipliers(ltvPct = 70, shortLeverage = 1.7) {
 
 export function readStrategyEnvMultipliers() {
   const ltvRaw = process.env.NEXT_PUBLIC_BORROW_LTV_PCT ?? process.env.BORROW_LTV_PCT ?? '70';
-  const levRaw = process.env.NEXT_PUBLIC_SHORT_LEVERAGE ?? process.env.SHORT_LEVERAGE ?? '1.7';
+  const levRaw = process.env.NEXT_PUBLIC_SHORT_LEVERAGE ?? process.env.SHORT_LEVERAGE ?? '1.6';
   const ltvPct = Number(ltvRaw);
   const shortLeverage = Number(levRaw);
   return strategyMultipliers(
     Number.isFinite(ltvPct) ? ltvPct : 70,
-    Number.isFinite(shortLeverage) ? shortLeverage : 1.7,
+    Number.isFinite(shortLeverage) ? shortLeverage : 1.6,
   );
 }

@@ -4,7 +4,7 @@ import { CONTRACTS } from '@/lib/contracts/addresses';
 import {
   computePaYield,
   fetchAaveReserveApyPct,
-  fetchHlFundingApyPct,
+  fetchHlFundingAprPct,
   formatApyPct,
   readStrategyEnvMultipliers,
   type StrategyYieldProduct,
@@ -32,14 +32,14 @@ export async function GET(request: NextRequest) {
   const hlSymbol = product === 'btc' ? 'BTC' : 'ETH';
 
   try {
-    const [hlFundingApyPct, collateralRates, usdcRates] = await Promise.all([
-      fetchHlFundingApyPct(hlSymbol),
+    const [hlFundingAprPct, collateralRates, usdcRates] = await Promise.all([
+      fetchHlFundingAprPct(hlSymbol),
       fetchAaveReserveApyPct(collateralAsset),
       fetchAaveReserveApyPct(usdcAsset),
     ]);
 
     const breakdown = computePaYield({
-      hlFundingApyPct,
+      hlFundingApyPct: hlFundingAprPct,
       aaveSupplyApyPct: collateralRates.supplyApyPct,
       aaveBorrowApyPct: usdcRates.borrowApyPct,
       multipliers,
@@ -49,7 +49,7 @@ export async function GET(request: NextRequest) {
       product,
       paYieldPct: breakdown.paYieldPct,
       paYieldDisplay: formatApyPct(breakdown.paYieldPct),
-      hlFundingApyPct,
+      hlFundingApyPct: hlFundingAprPct,
       aaveSupplyApyPct: collateralRates.supplyApyPct,
       aaveBorrowApyPct: usdcRates.borrowApyPct,
       breakdown: {

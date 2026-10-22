@@ -6,7 +6,7 @@ import { CONTRACTS } from '@/lib/contracts/addresses';
 import {
   computePaYield,
   fetchAaveReserveApyPct,
-  fetchHlFundingApyPct,
+  fetchHlFundingAprPct,
   formatApyPct,
   readStrategyEnvMultipliers,
   type StrategyYieldProduct,
@@ -19,14 +19,14 @@ async function loadStrategyYield(product: StrategyYieldProduct): Promise<Strateg
   const usdcAsset = CONTRACTS.tokens.usdc as Address;
   const hlSymbol = product === 'btc' ? 'BTC' : 'ETH';
 
-  const [hlFundingApyPct, collateralRates, usdcRates] = await Promise.all([
-    fetchHlFundingApyPct(hlSymbol),
+  const [hlFundingAprPct, collateralRates, usdcRates] = await Promise.all([
+    fetchHlFundingAprPct(hlSymbol),
     fetchAaveReserveApyPct(collateralAsset),
     fetchAaveReserveApyPct(usdcAsset),
   ]);
 
   const breakdown = computePaYield({
-    hlFundingApyPct,
+    hlFundingApyPct: hlFundingAprPct,
     aaveSupplyApyPct: collateralRates.supplyApyPct,
     aaveBorrowApyPct: usdcRates.borrowApyPct,
     multipliers,
@@ -36,7 +36,7 @@ async function loadStrategyYield(product: StrategyYieldProduct): Promise<Strateg
     product,
     paYieldPct: breakdown.paYieldPct,
     paYieldDisplay: formatApyPct(breakdown.paYieldPct),
-    hlFundingApyPct,
+    hlFundingApyPct: hlFundingAprPct,
     aaveSupplyApyPct: collateralRates.supplyApyPct,
     aaveBorrowApyPct: usdcRates.borrowApyPct,
     breakdown: {

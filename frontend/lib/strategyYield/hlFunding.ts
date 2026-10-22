@@ -2,10 +2,10 @@ import { HL_INFO_API } from './constants';
 
 const HOURS_PER_YEAR = 8760;
 
-/** Compound hourly HL funding rate to annualized APY (%). Positive = longs pay shorts. */
-export function hourlyFundingToApyPct(hourlyRate: number): number {
+/** Annualize the hourly HL funding rate linearly (APR, not APY). Positive = longs pay shorts. */
+export function hourlyFundingToAprPct(hourlyRate: number): number {
   if (!Number.isFinite(hourlyRate)) return 0;
-  return (Math.pow(1 + hourlyRate, HOURS_PER_YEAR) - 1) * 100;
+  return hourlyRate * HOURS_PER_YEAR * 100;
 }
 
 type HlMetaUniverse = { name: string };
@@ -13,9 +13,9 @@ type HlAssetCtx = { funding?: string };
 
 /**
  * Current hourly funding rate for a perp symbol (e.g. BTC, ETH) from HL info API.
- * Returns annualized APY % (short receives when funding is positive).
+ * Returns the rate annualised linearly (APR %). Short receives when funding is positive.
  */
-export async function fetchHlFundingApyPct(
+export async function fetchHlFundingAprPct(
   symbol: 'BTC' | 'ETH',
   apiUrl = HL_INFO_API,
 ): Promise<number> {
@@ -45,5 +45,5 @@ export async function fetchHlFundingApyPct(
     throw new Error(`Invalid Hyperliquid funding for ${symbol}`);
   }
 
-  return hourlyFundingToApyPct(hourly);
+  return hourlyFundingToAprPct(hourly);
 }
