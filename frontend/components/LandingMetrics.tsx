@@ -33,20 +33,16 @@ export function LandingMetrics() {
         </p>
         <div className="metrics-grid">
           {products.map((product) => {
-            const yieldData = product.yield.data;
-            const apyDisplay = yieldData?.paYieldDisplay ?? '—';
-            const apyClass =
-              yieldData && yieldData.paYieldPct >= 0 ? 'metric-positive' : 'metric-negative';
-
             return (
               <div key={product.product} className="metric-card">
-                <div className="metric-product">{product.productName}</div>
+                <div className="metric-product">
+                  {product.productName}{' '}
+                  <span className="metric-product-note">(All positions have been unwound)</span>
+                </div>
                 <div className="metric-rows">
                   <div className="metric-block">
                     <div className="metric-label">P.A. Yield</div>
-                    <div className={`metric-value ${apyClass}`}>
-                      {product.yield.isFetching && !yieldData ? '…' : apyDisplay}
-                    </div>
+                    <div className="metric-value metric-positive">0%</div>
                   </div>
                   <div className="metric-block">
                     <div className="metric-label">Per-Token NAV</div>
@@ -61,9 +57,6 @@ export function LandingMetrics() {
                     </div>
                   </div>
                 </div>
-                {product.yield.isError && (
-                  <div className="metric-error">Could not load market rates — refresh to retry.</div>
-                )}
               </div>
             );
           })}

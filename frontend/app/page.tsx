@@ -263,6 +263,12 @@ export default function Home() {
           text-shadow: 0 0 10px rgba(0, 255, 255, 0.4);
           font-weight: 600;
         }
+        .landing .metric-product-note {
+          font-size: 0.85rem;
+          font-weight: 500;
+          color: rgba(255, 255, 255, 0.75);
+          text-shadow: none;
+        }
         .landing .metric-rows {
           display: grid;
           grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
